@@ -92,8 +92,13 @@ async function readErrorMessage(response) {
   return `Request failed with status ${response.status}.`;
 }
 
-async function generateImages({ baseUrl, apiKey, prompt, model, size, n, fetchImpl = fetch }) {
-  const response = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/v1/images/generations`, {
+async function generateImages({ baseUrl, apiKey, prompt, model, size, n, fetchImpl }) {
+  const requestImpl = fetchImpl || globalThis.fetch;
+  if (typeof requestImpl !== 'function') {
+    throw new Error('No fetch implementation available.');
+  }
+
+  const response = await requestImpl(`${normalizeBaseUrl(baseUrl)}/v1/images/generations`, {
     method: 'POST',
     headers: buildHeaders(apiKey),
     body: JSON.stringify(createGenerationPayload({ prompt, model, size, n })),

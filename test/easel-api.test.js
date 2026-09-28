@@ -152,6 +152,23 @@ test('generateImages surfaces API errors', async () => {
   );
 });
 
+test('generateImages fails cleanly when no fetch implementation is available', async () => {
+  const originalFetch = globalThis.fetch;
+
+  try {
+    globalThis.fetch = undefined;
+    await assert.rejects(
+      generateImages({
+        baseUrl: 'http://localhost:9000',
+        prompt: 'Generate mountains',
+      }),
+      /No fetch implementation available/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('resultSummary handles singular and plural image counts', () => {
   assert.equal(resultSummary(1), 'Generated 1 image.');
   assert.equal(resultSummary(2), 'Generated 2 images.');

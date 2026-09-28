@@ -14,9 +14,9 @@ function generateImages(options = {}) {
   return requestImages(payload);
 }
 
-contextBridge.exposeInMainWorld('easelClient', {
-  defaults: {
+contextBridge.exposeInMainWorld('easelClient', Object.freeze({
+  defaults: Object.freeze({
     baseUrl: DEFAULT_API_URL,
-  },
+  }),
   generateImages,
-});
+}));

@@ -1,6 +1,8 @@
 function setStatus(statusElement, message, isError = false) {
   statusElement.textContent = message;
   statusElement.classList.toggle('error', isError);
+  statusElement.setAttribute('role', isError ? 'alert' : 'status');
+  statusElement.setAttribute('aria-live', isError ? 'assertive' : 'polite');
 }
 
 function resultSummary(count) {
