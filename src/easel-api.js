@@ -60,6 +60,19 @@ function createGenerationPayload({ prompt, model, size, n }) {
   return payload;
 }
 
+function normalizeRemoteImageUrl(value) {
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      return null;
+    }
+
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 function extractImageSources(payload) {
   if (!payload || !Array.isArray(payload.data)) {
     return [];
@@ -71,7 +84,8 @@ function extractImageSources(payload) {
     }
 
     if (typeof item?.url === 'string' && item.url) {
-      return [item.url];
+      const safeUrl = normalizeRemoteImageUrl(item.url);
+      return safeUrl ? [safeUrl] : [];
     }
 
     return [];
@@ -123,5 +137,6 @@ module.exports = {
   createGenerationPayload,
   extractImageSources,
   generateImages,
+  normalizeRemoteImageUrl,
   normalizeBaseUrl,
 };

@@ -9,27 +9,57 @@ function resultSummary(count) {
   return `Generated ${count} image${count === 1 ? '' : 's'}.`;
 }
 
+function normalizeResultSource(source) {
+  if (typeof source !== 'string' || !source) {
+    return null;
+  }
+
+  if (source.startsWith('data:image/')) {
+    return source;
+  }
+
+  try {
+    const url = new URL(source);
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      return null;
+    }
+
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 function renderResults({ document, resultsElement, prompt, images }) {
   resultsElement.replaceChildren();
+  let renderedCount = 0;
 
   images.forEach((source, index) => {
+    const safeSource = normalizeResultSource(source);
+    if (!safeSource) {
+      return;
+    }
+
     const card = document.createElement('article');
     card.className = 'result-card';
     card.setAttribute('role', 'listitem');
 
     const image = document.createElement('img');
-    image.src = source;
+    image.src = safeSource;
     image.alt = `${prompt.trim() || 'Generated image'} ${index + 1}`;
 
     const link = document.createElement('a');
-    link.href = source;
+    link.href = safeSource;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
     link.textContent = `Open image ${index + 1}`;
 
     card.append(image, link);
     resultsElement.append(card);
+    renderedCount += 1;
   });
+
+  return renderedCount;
 }
 
 async function handleGenerationSubmit({
@@ -57,8 +87,17 @@ async function handleGenerationSubmit({
       prompt: promptInput.value,
     });
 
-    renderResults({ document, resultsElement, prompt: promptInput.value, images });
-    setStatus(statusElement, resultSummary(images.length));
+    const renderedCount = renderResults({
+      document,
+      resultsElement,
+      prompt: promptInput.value,
+      images,
+    });
+    if (renderedCount === 0) {
+      throw new Error('Easel returned no safe image results.');
+    }
+
+    setStatus(statusElement, resultSummary(renderedCount));
   } catch (error) {
     setStatus(statusElement, error instanceof Error ? error.message : 'Unable to generate images.', true);
   } finally {
@@ -102,6 +141,7 @@ if (typeof module !== 'undefined') {
     renderResults,
     resultSummary,
     setStatus,
+    normalizeResultSource,
     wireRenderer,
   };
 }

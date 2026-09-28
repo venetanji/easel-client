@@ -7,8 +7,9 @@ const {
   extractImageSources,
   generateImages,
   normalizeBaseUrl,
+  normalizeRemoteImageUrl,
 } = require('../src/easel-api');
-const { handleGenerationSubmit, resultSummary } = require('../src/renderer');
+const { handleGenerationSubmit, normalizeResultSource, resultSummary } = require('../src/renderer');
 
 function createMockClassList() {
   const classes = new Set();
@@ -101,6 +102,7 @@ test('extractImageSources supports both base64 and URL responses', () => {
       data: [
         { b64_json: 'abc123' },
         { url: 'http://localhost/image.png' },
+        { url: 'javascript:alert(1)' },
       ],
     }),
     [
@@ -108,6 +110,14 @@ test('extractImageSources supports both base64 and URL responses', () => {
       'http://localhost/image.png',
     ],
   );
+});
+
+test('normalizeRemoteImageUrl and normalizeResultSource reject unsafe schemes', () => {
+  assert.equal(normalizeRemoteImageUrl('https://example.com/image.png'), 'https://example.com/image.png');
+  assert.equal(normalizeRemoteImageUrl('javascript:alert(1)'), null);
+  assert.equal(normalizeResultSource('data:image/png;base64,abc123'), 'data:image/png;base64,abc123');
+  assert.equal(normalizeResultSource('https://example.com/image.png'), 'https://example.com/image.png');
+  assert.equal(normalizeResultSource('javascript:alert(1)'), null);
 });
 
 test('generateImages posts to Easel and returns image sources', async () => {
