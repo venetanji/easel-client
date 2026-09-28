@@ -8,6 +8,56 @@ const {
   generateImages,
   normalizeBaseUrl,
 } = require('../src/easel-api');
+const { handleGenerationSubmit, resultSummary } = require('../src/renderer');
+
+function createMockClassList() {
+  const classes = new Set();
+
+  return {
+    toggle(name, force) {
+      if (force) {
+        classes.add(name);
+        return true;
+      }
+
+      classes.delete(name);
+      return false;
+    },
+    contains(name) {
+      return classes.has(name);
+    },
+  };
+}
+
+function createMockElement(tagName = 'div') {
+  return {
+    tagName,
+    attributes: {},
+    children: [],
+    className: '',
+    classList: createMockClassList(),
+    disabled: false,
+    textContent: '',
+    value: '',
+    append(...children) {
+      this.children.push(...children);
+    },
+    replaceChildren(...children) {
+      this.children = [...children];
+    },
+    setAttribute(name, value) {
+      this.attributes[name] = value;
+    },
+  };
+}
+
+function createMockDocument() {
+  return {
+    createElement(tagName) {
+      return createMockElement(tagName);
+    },
+  };
+}
 
 test('normalizeBaseUrl trims whitespace, removes trailing slashes, and applies the default', () => {
   assert.equal(normalizeBaseUrl(' http://localhost:8000/// '), 'http://localhost:8000');
@@ -100,4 +150,42 @@ test('generateImages surfaces API errors', async () => {
     }),
     /invalid or missing API key/,
   );
+});
+
+test('resultSummary handles singular and plural image counts', () => {
+  assert.equal(resultSummary(1), 'Generated 1 image.');
+  assert.equal(resultSummary(2), 'Generated 2 images.');
+});
+
+test('handleGenerationSubmit updates status and renders generated images', async () => {
+  const document = createMockDocument();
+  const resultsElement = createMockElement();
+  const statusElement = createMockElement();
+  const submitButton = createMockElement('button');
+
+  const promptInput = createMockElement('textarea');
+  promptInput.value = 'Golden hour city skyline';
+
+  await handleGenerationSubmit({
+    client: {
+      async generateImages() {
+        return ['data:image/png;base64,abc123'];
+      },
+    },
+    document,
+    baseUrlInput: createMockElement('input'),
+    apiKeyInput: createMockElement('input'),
+    modelInput: createMockElement('input'),
+    sizeInput: createMockElement('input'),
+    promptInput,
+    submitButton,
+    statusElement,
+    resultsElement,
+  });
+
+  assert.equal(statusElement.textContent, 'Generated 1 image.');
+  assert.equal(submitButton.disabled, false);
+  assert.equal(resultsElement.children.length, 1);
+  assert.equal(resultsElement.children[0].attributes.role, 'listitem');
+  assert.equal(resultsElement.children[0].children[0].alt, 'Golden hour city skyline 1');
 });

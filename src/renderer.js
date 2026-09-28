@@ -1,30 +1,23 @@
-const form = document.getElementById('generation-form');
-const baseUrlInput = document.getElementById('base-url');
-const apiKeyInput = document.getElementById('api-key');
-const modelInput = document.getElementById('model');
-const sizeInput = document.getElementById('size');
-const promptInput = document.getElementById('prompt');
-const submitButton = document.getElementById('submit');
-const status = document.getElementById('status');
-const results = document.getElementById('results');
-
-baseUrlInput.value = window.easelClient.defaults.baseUrl;
-
-function setStatus(message, isError = false) {
-  status.textContent = message;
-  status.classList.toggle('error', isError);
+function setStatus(statusElement, message, isError = false) {
+  statusElement.textContent = message;
+  statusElement.classList.toggle('error', isError);
 }
 
-function renderResults(images) {
-  results.replaceChildren();
+function resultSummary(count) {
+  return `Generated ${count} image${count === 1 ? '' : 's'}.`;
+}
+
+function renderResults({ document, resultsElement, prompt, images }) {
+  resultsElement.replaceChildren();
 
   images.forEach((source, index) => {
     const card = document.createElement('article');
     card.className = 'result-card';
+    card.setAttribute('role', 'listitem');
 
     const image = document.createElement('img');
     image.src = source;
-    image.alt = `${promptInput.value.trim() || 'Generated image'} ${index + 1}`;
+    image.alt = `${prompt.trim() || 'Generated image'} ${index + 1}`;
 
     const link = document.createElement('a');
     link.href = source;
@@ -33,18 +26,28 @@ function renderResults(images) {
     link.textContent = `Open image ${index + 1}`;
 
     card.append(image, link);
-    results.append(card);
+    resultsElement.append(card);
   });
 }
 
-form.addEventListener('submit', async (event) => {
-  event.preventDefault();
+async function handleGenerationSubmit({
+  client,
+  document,
+  baseUrlInput,
+  apiKeyInput,
+  modelInput,
+  sizeInput,
+  promptInput,
+  submitButton,
+  statusElement,
+  resultsElement,
+}) {
   submitButton.disabled = true;
-  results.replaceChildren();
-  setStatus('Generating image…');
+  resultsElement.replaceChildren();
+  setStatus(statusElement, 'Generating image…');
 
   try {
-    const images = await window.easelClient.generateImages({
+    const images = await client.generateImages({
       baseUrl: baseUrlInput.value,
       apiKey: apiKeyInput.value,
       model: modelInput.value,
@@ -52,11 +55,55 @@ form.addEventListener('submit', async (event) => {
       prompt: promptInput.value,
     });
 
-    renderResults(images);
-    setStatus(`Generated ${images.length} image${images.length === 1 ? '' : 's'}.`);
+    renderResults({ document, resultsElement, prompt: promptInput.value, images });
+    setStatus(statusElement, resultSummary(images.length));
   } catch (error) {
-    setStatus(error.message, true);
+    setStatus(statusElement, error instanceof Error ? error.message : 'Unable to generate images.', true);
   } finally {
     submitButton.disabled = false;
   }
-});
+}
+
+function wireRenderer({ document, client }) {
+  const form = document.getElementById('generation-form');
+  const baseUrlInput = document.getElementById('base-url');
+  const apiKeyInput = document.getElementById('api-key');
+  const modelInput = document.getElementById('model');
+  const sizeInput = document.getElementById('size');
+  const promptInput = document.getElementById('prompt');
+  const submitButton = document.getElementById('submit');
+  const statusElement = document.getElementById('status');
+  const resultsElement = document.getElementById('results');
+
+  baseUrlInput.value = client.defaults.baseUrl;
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await handleGenerationSubmit({
+      client,
+      document,
+      baseUrlInput,
+      apiKeyInput,
+      modelInput,
+      sizeInput,
+      promptInput,
+      submitButton,
+      statusElement,
+      resultsElement,
+    });
+  });
+}
+
+if (typeof module !== 'undefined') {
+  module.exports = {
+    handleGenerationSubmit,
+    renderResults,
+    resultSummary,
+    setStatus,
+    wireRenderer,
+  };
+}
+
+if (typeof window !== 'undefined' && window.document && window.easelClient) {
+  wireRenderer({ document: window.document, client: window.easelClient });
+}
