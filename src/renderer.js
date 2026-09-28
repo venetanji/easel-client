@@ -24,7 +24,7 @@ function renderResults({ document, resultsElement, prompt, images }) {
     const link = document.createElement('a');
     link.href = source;
     link.target = '_blank';
-    link.rel = 'noreferrer';
+    link.rel = 'noopener noreferrer';
     link.textContent = `Open image ${index + 1}`;
 
     card.append(image, link);
