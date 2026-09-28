@@ -1,2 +1,12 @@
 # easel-client
-An electron client for easel
+
+Electron client for [venetanji/easel](http://localhost:26831/venetanji/easel).
+
+## Getting started
+
+```bash
+npm install
+npm start
+```
+
+The app connects to `http://127.0.0.1:8000` by default and provides a small desktop UI for calling Easel's `/v1/images/generations` endpoint.

@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Easel Client</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, system-ui, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: #111827;
+        color: #f9fafb;
+      }
+
+      main {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 24px;
+        display: grid;
+        gap: 24px;
+      }
+
+      .panel {
+        background: #1f2937;
+        border: 1px solid #374151;
+        border-radius: 16px;
+        padding: 20px;
+      }
+
+      h1,
+      h2,
+      p {
+        margin-top: 0;
+      }
+
+      form {
+        display: grid;
+        gap: 16px;
+      }
+
+      .grid {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+
+      label {
+        display: grid;
+        gap: 8px;
+        font-weight: 600;
+      }
+
+      input,
+      textarea,
+      button {
+        font: inherit;
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid #4b5563;
+        background: #111827;
+        color: inherit;
+      }
+
+      textarea {
+        min-height: 140px;
+        resize: vertical;
+      }
+
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 18px;
+        font-weight: 700;
+        cursor: pointer;
+        background: #60a5fa;
+        color: #111827;
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.75;
+      }
+
+      #status {
+        min-height: 24px;
+        color: #bfdbfe;
+      }
+
+      #status.error {
+        color: #fca5a5;
+      }
+
+      #results {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      }
+
+      .result-card {
+        background: #111827;
+        border: 1px solid #374151;
+        border-radius: 16px;
+        overflow: hidden;
+      }
+
+      .result-card img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        object-fit: cover;
+        background: #030712;
+      }
+
+      .result-card a {
+        display: block;
+        padding: 12px;
+        color: #93c5fd;
+        text-decoration: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="panel">
+        <h1>Easel Client</h1>
+        <p>Generate images from a local or remote <code>venetanji/easel</code> server.</p>
+        <form id="generation-form">
+          <div class="grid">
+            <label>
+              Easel URL
+              <input id="base-url" name="baseUrl" type="url" />
+            </label>
+            <label>
+              API key
+              <input id="api-key" name="apiKey" type="password" autocomplete="off" />
+            </label>
+            <label>
+              Model (optional)
+              <input id="model" name="model" type="text" placeholder="flux2-9b" />
+            </label>
+            <label>
+              Size (optional)
+              <input id="size" name="size" type="text" placeholder="1024x1024" />
+            </label>
+          </div>
+          <label>
+            Prompt
+            <textarea id="prompt" name="prompt" placeholder="Describe the image you want Easel to create." required></textarea>
+          </label>
+          <div>
+            <button id="submit" type="submit">Generate image</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Results</h2>
+        <p id="status" role="status"></p>
+        <div id="results"></div>
+      </section>
+    </main>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

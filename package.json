@@ -1,0 +1,23 @@
+{
+  "name": "easel-client",
+  "version": "1.0.0",
+  "description": "Electron client for venetanji/easel",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://localhost:26831/venetanji/easel-client"
+  },
+  "keywords": [
+    "electron",
+    "easel"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^44.4.5"
+  }
+}
