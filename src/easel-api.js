@@ -1,7 +1,25 @@
 const DEFAULT_API_URL = 'http://127.0.0.1:8000';
 
 function normalizeBaseUrl(value = '') {
-  return (value.trim() || DEFAULT_API_URL).replace(/\/+$/, '');
+  const candidate = value.trim() || DEFAULT_API_URL;
+  const url = new URL(candidate);
+
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new Error('Easel URL must use http or https.');
+  }
+
+  if (url.username || url.password) {
+    throw new Error('Easel URL must not include credentials.');
+  }
+
+  url.search = '';
+  url.hash = '';
+
+  const pathname = url.pathname.replace(/\/+$/, '');
+  const normalizedPath = pathname.endsWith('/v1') ? pathname.slice(0, -3) : pathname;
+
+  url.pathname = normalizedPath || '/';
+  return `${url.origin}${url.pathname === '/' ? '' : url.pathname}`;
 }
 
 function buildHeaders(apiKey = '') {

@@ -12,6 +12,9 @@ const {
 test('normalizeBaseUrl trims whitespace, removes trailing slashes, and applies the default', () => {
   assert.equal(normalizeBaseUrl(' http://localhost:8000/// '), 'http://localhost:8000');
   assert.equal(normalizeBaseUrl('   '), 'http://127.0.0.1:8000');
+  assert.equal(normalizeBaseUrl('https://example.com/v1/'), 'https://example.com');
+  assert.equal(normalizeBaseUrl('https://example.com/easel/v1'), 'https://example.com/easel');
+  assert.throws(() => normalizeBaseUrl('file:///tmp/easel'), /must use http or https/);
 });
 
 test('buildHeaders only sets Authorization when an API key is present', () => {

@@ -1,6 +1,6 @@
 # easel-client
 
-Electron client for [venetanji/easel](http://localhost:26831/venetanji/easel).
+Electron client for [venetanji/easel](https://github.com/venetanji/easel).
 
 ## Getting started
 
