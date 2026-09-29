@@ -33,3 +33,21 @@ test('checks release tags against the package version', () => {
   assert.notEqual(invalid.status, 0);
   assert.match(invalid.stderr, /does not match package version/);
 });
+
+test('accepts prerelease tags based on the committed package version', () => {
+  const script = path.join(root, 'scripts/check-release-version.js');
+  const valid = spawnSync(process.execPath, [script], {
+    cwd: root,
+    env: { ...process.env, RELEASE_TAG: 'v0.0.1-rc.1' },
+    encoding: 'utf8',
+  });
+  assert.equal(valid.status, 0, valid.stderr);
+
+  const invalid = spawnSync(process.execPath, [script], {
+    cwd: root,
+    env: { ...process.env, RELEASE_TAG: 'v0.0.2-rc.1' },
+    encoding: 'utf8',
+  });
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /does not match package version/);
+});

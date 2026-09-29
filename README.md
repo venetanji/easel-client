@@ -47,4 +47,4 @@ npm run dist:mac
 npm run dist:linux
 ```
 
-The test workflow installs Chromium and verifies a real offline screenshot. Desktop PR checks build unsigned Windows, macOS, and Linux artifacts and upload them for review; they do not sign, notarize, merge, or publish a release. The first planned post-merge tag is `v0.0.1`; `RELEASE_TAG` must match `package.json`.
+The test workflow installs Chromium and verifies a real offline screenshot. Desktop PR checks build unsigned Windows, macOS, and Linux packages and upload only the package files (not unpacked app trees) as Actions artifacts for review. Pushing a `v*` tag publishes the desktop packages as separate GitHub Release assets after all three builds pass; prerelease suffixes such as `-rc.1` create a prerelease. Tag builds must use the current `package.json` version, optionally followed by a prerelease suffix. The workflow does not sign or notarize builds.
