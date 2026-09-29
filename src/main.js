@@ -29,6 +29,8 @@ const { createCanvasView } = require('./canvas-view');
 const { createCanvasHistory } = require('./canvas-history');
 const { createChatService } = require('./chat-service');
 const { createLiteLLMModelService } = require('./litellm-models');
+const { readInstalledSkills } = require('./skill-catalog');
+const { loadCanvasKitBundles } = require('./canvas-kits');
 
 const SETTINGS = createSettingsStore({
   userDataPath: app.getPath('userData'),
@@ -50,6 +52,7 @@ const ASSETS = createAssetStore({
   },
 });
 const CANVASES = createCanvasStore({ userDataPath: app.getPath('userData') });
+const CANVAS_KIT_BUNDLES = loadCanvasKitBundles(path.join(app.getAppPath(), 'canvas-kits'));
 const CANVAS_HISTORY = createCanvasHistory();
 let mainWindow;
 let canvasView;
@@ -94,12 +97,13 @@ const CHAT = createChatService({
     return controller.present(artifact);
   },
   canvasController: {
-    createEmpty: async (title) => {
+    createEmpty: async (title, kits) => {
       const controller = requireCanvasView();
       await saveCanvasBeforeSwitch(controller);
-      return controller.createEmpty(title);
+      return controller.createEmpty(title, kits);
     },
     inspect: () => requireCanvasView().inspect(),
+    isEmpty: () => requireCanvasView().isEmpty(),
     execute: async (code) => {
       const controller = requireCanvasView();
       await checkpointCanvasForUndo(controller);
@@ -137,13 +141,20 @@ function registerIpcHandlers() {
     assertTrustedSender(event, mainWindow);
     return LITELLM_MODELS.testImage(validateLiteLLMModelInput(model));
   });
+  ipcMain.handle(IPC_CHANNELS.LIST_INSTALLED_SKILLS, (event) => {
+    assertTrustedSender(event, mainWindow);
+    return readInstalledSkills(path.join(app.getAppPath(), '.agents', 'skills'));
+  });
   ipcMain.handle(IPC_CHANNELS.SAVE_SETTINGS, (event, input) => {
     assertTrustedSender(event, mainWindow);
     return SETTINGS.save(validateSettingsInput(input));
   });
   ipcMain.handle(IPC_CHANNELS.SEND_MESSAGE, async (event, input, options) => {
     assertTrustedSender(event, mainWindow);
-    return CHAT.sendMessage(validateChatMessage(input), validateChatOptions(options));
+    const chatOptions = validateChatOptions(options);
+    const message = typeof input === 'string' && input.trim() ? validateChatMessage(input) : '';
+    if (!message && !chatOptions.attachments?.length) throw new Error('Message or attachment is required.');
+    return CHAT.sendMessage(message, chatOptions);
   });
   ipcMain.handle(IPC_CHANNELS.CLEAR_CHAT, (event) => {
     assertTrustedSender(event, mainWindow);
@@ -196,13 +207,27 @@ function registerIpcHandlers() {
     fs.writeFileSync(result.filePath, canvas.html, 'utf8');
     return { canceled: false, fileName: path.basename(result.filePath) };
   });
-  ipcMain.handle(IPC_CHANNELS.ADD_ASSET_TO_CANVAS, async (event, id) => {
+  ipcMain.handle(IPC_CHANNELS.ADD_ASSET_TO_CANVAS, async (event, id, options = {}) => {
     assertTrustedSender(event, mainWindow);
+    if (!options || typeof options !== 'object' || Array.isArray(options)
+      || Object.keys(options).some((key) => !['onlyIfEmpty', 'createIfMissing'].includes(key))
+      || Object.values(options).some((value) => typeof value !== 'boolean')) {
+      throw new Error('Canvas image options are invalid.');
+    }
     const controller = requireCanvasView();
+    let createdCanvas = null;
+    if (!controller.getCurrentCanvasId()) {
+      if (options.createIfMissing !== true) throw new Error('Open or create a canvas before adding an image.');
+      createdCanvas = await controller.createEmpty('Generated image');
+      emitCanvasSaved(createdCanvas);
+    }
+    if (options.onlyIfEmpty === true && !(await controller.isEmpty())) {
+      return { added: false, reason: 'canvas-not-empty', canvasId: controller.getCurrentCanvasId() };
+    }
     await checkpointCanvasForUndo(controller);
     const result = await controller.addImage({ assetId: validateOpaqueId(id, 'Asset ID') });
     emitCanvasSaved(await controller.saveCurrent());
-    return result;
+    return { ...result, added: true, createdCanvas: Boolean(createdCanvas) };
   });
   ipcMain.handle(IPC_CHANNELS.UNDO_CANVAS, async (event, id) => {
     assertTrustedSender(event, mainWindow);
@@ -265,6 +290,7 @@ async function createWindow() {
     sessionFactory: async (partition) => ({ partition, session: session.fromPartition(partition, { cache: false }) }),
     assetStore: ASSETS,
     canvasStore: CANVASES,
+    kitBundles: CANVAS_KIT_BUNDLES,
   });
   mainWindow.contentView.addChildView(canvasView.view);
 

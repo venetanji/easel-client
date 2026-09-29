@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="data:," />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; img-src 'self' data: blob:; media-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'" />
     <title>Easel Studio</title>
     <style>
       :root {
@@ -35,8 +35,8 @@
       * { scrollbar-color: #aab8ac transparent; scrollbar-width: thin; }
       *::-webkit-scrollbar { width: 9px; height: 9px; }
       *::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 8px; background: #aab8ac; background-clip: padding-box; }
-      .studio { width: 100%; height: 100%; min-width: 0; min-height: 0; padding: 14px; display: grid; grid-template-columns: minmax(340px, 390px) minmax(0, 1fr); grid-template-rows: 52px minmax(0, 1fr); gap: 12px; }
-      .topbar { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 4px 10px; border-bottom: 1px solid #bdc8be; }
+      .studio { --left-column-width: 360px; width: 100%; height: 100%; min-width: 0; min-height: 0; padding: 14px; display: grid; grid-template-columns: 42px minmax(280px, var(--left-column-width)) 12px minmax(300px, 1fr); grid-template-rows: 52px minmax(0, 1fr); gap: 12px; }
+      .topbar { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 4px 10px; border-bottom: 1px solid #bdc8be; }
       .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
       .brand-mark { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px 10px 10px 3px; background: var(--green); color: var(--paper); font: 600 20px/1 var(--display); }
       .brand h1 { margin: 0; font: 600 19px/1.05 var(--display); letter-spacing: -.025em; }
@@ -56,7 +56,17 @@
       .connection-dot.ready, .state-dot.ready { background: #3d7a54; }
       .connection-dot.needs-setup { background: var(--gold); }
       .active-count { min-width: 19px; min-height: 19px; display: inline-grid; place-items: center; border-radius: 6px; padding: 0 5px; color: var(--green-deep); background: var(--green-wash); font-size: 11px; font-variant-numeric: tabular-nums; }
-      .left-column { --library-ratio: 31fr; --chat-ratio: 69fr; min-height: 0; display: grid; grid-template-rows: minmax(150px, var(--library-ratio)) 12px minmax(250px, var(--chat-ratio)); gap: 0; }
+      .activity-bar { grid-column: 1; grid-row: 2; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; border: 1px solid #274637; border-radius: 11px; padding: 8px 4px; background: #193a2f; }
+      .activity-spacer { flex: 1; }
+      .activity-button { position: relative; width: 34px; height: 38px; display: grid; place-items: center; border: 0; border-radius: 7px; color: #d0dbd1; background: transparent; }
+      .activity-button:hover, .activity-button:focus-visible { color: white; background: #315440; }
+      .activity-button[aria-pressed="true"] { color: white; background: #315440; box-shadow: inset 0 0 0 1px #64806d; }
+      .activity-button[aria-pressed="true"]::after { position: absolute; right: -5px; width: 3px; height: 21px; border-radius: 2px; background: #d98961; content: ""; }
+      .activity-button svg { width: 19px; height: 19px; }
+      .left-column { grid-column: 2; grid-row: 2; --library-ratio: 31fr; --chat-ratio: 69fr; min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(150px, var(--library-ratio)) 12px minmax(250px, var(--chat-ratio)); gap: 0; }
+      .workbench-splitter { position: relative; z-index: 1; grid-column: 3; grid-row: 2; min-width: 12px; cursor: col-resize; touch-action: none; }
+      .workbench-splitter::before { position: absolute; top: calc(50% - 22px); left: 4px; width: 4px; height: 44px; border-radius: 4px; background: #aab9ab; content: ""; transition: background-color 120ms ease, transform 120ms ease; }
+      .workbench-splitter:hover::before, .workbench-splitter:focus-visible::before, .workbench-splitter.is-dragging::before { background: var(--coral); transform: scaleY(1.12); }
       .left-column.is-library-collapsed { grid-template-rows: 48px 0 minmax(0, 1fr); }
       .left-column.is-chat-collapsed { grid-template-rows: minmax(0, 1fr) 0 48px; }
       .left-column.is-library-collapsed.is-chat-collapsed { grid-template-rows: 48px 0 48px; }
@@ -103,6 +113,13 @@
       .runtime-badge { align-self: start; border-radius: 99px; padding: 4px 6px; color: #7e6338; background: #f6efdf; font-size: 11px; font-weight: 700; white-space: nowrap; }
       .runtime-badge.active { color: #28543a; background: #e6efe6; }
       .runtime-footnote { margin: 10px 2px 2px; color: #65736b; font-size: 12px; line-height: 1.45; }
+      .kit-list { display: grid; gap: 0; padding: 14px 19px 4px; }
+      .kit-option { min-height: 62px; display: grid; grid-template-columns: 17px minmax(0, 1fr) auto; align-items: center; gap: 11px; border-bottom: 1px solid #e3e7df; padding: 9px 2px; cursor: pointer; }
+      .kit-option input { width: 15px; height: 15px; margin: 0; accent-color: var(--green); }
+      .kit-option strong, .kit-option small { display: block; }
+      .kit-option strong { color: #2e4438; font-size: 12px; }
+      .kit-option small { margin-top: 4px; color: #5e6c63; font-size: 12px; line-height: 1.4; }
+      .kit-status { min-height: 18px; margin: 10px 19px 16px; color: var(--muted); font-size: 12px; }
       .conversation { display: flex; flex-direction: column; overflow: hidden; }
       .conversation-head { min-height: 49px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px 0 14px; border-bottom: 1px solid #e5e7df; }
       .conversation.is-collapsed .conversation-content { display: none; }
@@ -122,6 +139,14 @@
       .message-asset-preview { width: min(100%, 320px); margin: 0; overflow: hidden; border: 1px solid #d8ded5; border-radius: 9px; background: white; }
       .message-asset-preview img { display: block; width: 100%; height: 240px; object-fit: contain; background: var(--paper-deep); }
       .message-asset-preview figcaption { border-top: 1px solid #e4e8e1; padding: 7px 9px; color: #405249; font-size: 12px; line-height: 1.35; }
+      .message-asset-add { align-self: flex-start; min-height: 28px; border: 1px solid #d6ded6; border-radius: 6px; padding: 4px 9px; color: var(--green); background: #f4f5ef; font-size: 11px; font-weight: 600; }
+      .message-asset-add:hover:not(:disabled) { border-color: #a8bbab; background: var(--green-wash); }
+      .message-asset-add:disabled { cursor: wait; opacity: .65; }
+      .message-attachments { display: grid; gap: 7px; margin-top: 8px; }
+      .message-attachment { max-width: min(320px, 100%); margin: 0; overflow: hidden; border: 1px solid #77917e; border-radius: 8px; background: #204b38; }
+      .message-attachment img, .message-attachment video { display: block; max-width: 100%; max-height: 210px; object-fit: contain; background: #173b2d; }
+      .message-attachment audio { display: block; width: min(290px, 100%); height: 38px; }
+      .message-attachment figcaption { overflow: hidden; border-top: 1px solid #77917e; padding: 5px 7px; color: #e5eee6; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
       .message-actions { align-self: flex-start; margin-top: -14px; margin-bottom: -8px; }
       .message-actions button { min-height: 26px; border: 0; border-radius: 5px; padding: 3px 6px; color: #58675f; background: transparent; font-size: 11px; font-weight: 600; }
       .message-actions button:hover { color: var(--green); background: var(--green-wash); }
@@ -137,12 +162,14 @@
       @keyframes activity-pulse { 50% { opacity: .42; transform: scale(.78); } }
       #status { min-height: 0; margin: 0; padding: 0 13px; color: var(--muted); font-size: 12px; }
       #status:not(:empty) { padding-top: 4px; padding-bottom: 5px; }
-      #status.error, #settings-status.error, #skill-status.error { color: #9d3727; }
+      #status.error, #settings-status.error, #skill-status.error, #kit-status.error { color: #9d3727; }
       #chat-form { display: grid; gap: 7px; border-top: 1px solid #e5e7df; padding: 9px; }
       .composer { overflow: hidden; border: 1px solid #c9d1c9; border-radius: 9px; background: white; transition: border-color 150ms ease, box-shadow 150ms ease; }
       .composer:focus-within { border-color: #73947b; box-shadow: 0 0 0 2px #789a7e2b; }
       .composer-topline { min-height: 39px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; border-bottom: 1px solid #eceee9; }
       .composer-options { display: flex; align-items: center; gap: 7px; min-width: 0; }
+      #attach-media { flex: 0 0 auto; }
+      #attach-media svg { width: 15px; height: 15px; }
       #composer-skills { flex: 0 0 auto; white-space: nowrap; }
       .mode-button { min-height: 29px; padding: 4px 8px; }
       .mode-button:disabled { opacity: .52; }
@@ -150,12 +177,20 @@
       #image-size { width: auto; min-height: 29px; border: 1px solid transparent; border-radius: 6px; padding: 3px 20px 3px 6px; color: #46574e; background: transparent; font-size: 11px; }
       #message { display: block; width: 100%; min-height: 64px; max-height: 140px; resize: vertical; border: 0; border-radius: 0; padding: 10px 11px 5px; color: var(--ink); background: transparent; line-height: 1.45; font-size: 12px; }
       #message:focus { outline: none; }
+      .attachment-strip { display: flex; flex-wrap: wrap; gap: 7px; padding: 8px 9px; border-bottom: 1px solid #eceee9; }
+      .attachment-strip[hidden] { display: none; }
+      .attachment-chip { position: relative; width: 76px; height: 66px; display: grid; place-items: center; overflow: hidden; border: 1px solid #d8ded5; border-radius: 7px; background: #f1f2ec; }
+      .attachment-chip img, .attachment-chip video { width: 100%; height: 100%; object-fit: cover; }
+      .attachment-kind { color: #385446; font-size: 10px; font-weight: 750; letter-spacing: .05em; }
+      .attachment-chip-name { position: absolute; right: 0; bottom: 0; left: 0; overflow: hidden; padding: 3px 5px; color: white; background: #183c2fd9; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+      .attachment-remove { position: absolute; top: 2px; right: 2px; min-width: 22px; min-height: 22px; border: 0; border-radius: 5px; color: white; background: #183c2fd9; font-size: 10px; font-weight: 700; }
+      .attachment-remove:hover { background: #913e2e; }
       #message::placeholder, input::placeholder, textarea::placeholder { color: #65736b; opacity: 1; }
       .composer-footer { min-height: 37px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 7px 7px 10px; }
       .composer-help { min-width: 0; color: #68766e; font-size: 12px; line-height: 1.3; }
       #send { min-width: 70px; min-height: 31px; }
       #send svg { width: 13px; height: 13px; }
-      .canvas-panel { display: flex; flex-direction: column; overflow: hidden; background: #f8f8f3; }
+      .canvas-panel { grid-column: 4; grid-row: 2; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: #f8f8f3; }
       .canvas-toolbar { min-height: 53px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 15px; border-bottom: 1px solid #dce1d9; }
       .canvas-heading { display: flex; align-items: center; gap: 9px; min-width: 0; }
       .canvas-heading h2 { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
@@ -178,10 +213,20 @@
       .canvas-empty .button { pointer-events: auto; margin-top: 3px; }
       dialog { width: min(520px, calc(100% - 28px)); max-height: calc(100% - 28px); overflow: auto; border: 0; border-radius: 13px; padding: 0; color: var(--ink); background: var(--paper); box-shadow: 0 18px 60px #17251f38; }
       dialog::backdrop { background: #17251f75; }
-      dialog.skills-dialog { width: min(860px, calc(100% - 28px)); }
+      dialog.settings-dialog { width: min(980px, calc(100% - 28px)); max-height: min(760px, calc(100% - 28px)); }
       .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 17px; border-bottom: 1px solid #e0e5dd; }
       .dialog-head h2 { font: 600 20px/1.1 var(--display); letter-spacing: -.02em; }
       .dialog-description { max-width: 58ch; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .settings-shell { min-height: 470px; display: grid; grid-template-columns: 164px minmax(0, 1fr); }
+      .settings-nav { display: grid; align-content: start; gap: 4px; border-right: 1px solid #e0e5dd; padding: 12px 8px; background: #f3f3ed; }
+      .settings-tab { min-height: 36px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 7px; padding: 6px 9px; color: #526258; background: transparent; text-align: left; font-size: 12px; font-weight: 650; }
+      .settings-tab:hover { color: var(--green-deep); background: #e8eee6; }
+      .settings-tab[aria-selected="true"] { color: var(--green-deep); background: white; box-shadow: 0 1px 2px #20382918; }
+      .settings-tab svg { width: 16px; height: 16px; flex: 0 0 auto; }
+      .settings-section { min-width: 0; max-height: min(680px, calc(100vh - 100px)); overflow: auto; }
+      .settings-section-head { padding: 18px 19px 0; }
+      .settings-section-head h3 { margin: 0 0 5px; color: #2d4136; font: 600 18px/1.12 var(--display); }
+      .settings-section-head p { max-width: 62ch; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
       .settings-form { display: grid; gap: 13px; padding: 16px 17px 18px; }
       label.field { display: grid; gap: 6px; color: #405249; font-size: 12px; font-weight: 700; }
       input[type=text], input[type=url], input[type=password], .field textarea { width: 100%; min-height: 36px; border: 1px solid #cbd3cb; border-radius: 7px; padding: 8px 10px; color: var(--ink); background: white; font-size: 12px; }
@@ -200,6 +245,13 @@
       .skill-row-name { overflow: hidden; color: #2f4338; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
       .skill-enabled { display: flex; align-items: center; }
       .skills-empty { margin: 10px 0; color: #58675f; font-size: 12px; line-height: 1.5; }
+      .installed-skill-catalog { margin: 12px 17px 0; border: 1px solid #e0e5dd; border-radius: 8px; background: #f8f8f3; }
+      .installed-skill-catalog summary { min-height: 37px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; color: #405249; cursor: pointer; font-size: 12px; font-weight: 650; }
+      .installed-skill-catalog summary small { color: var(--muted); font-size: 11px; font-weight: 500; }
+      .installed-skills-list { max-height: 190px; overflow: auto; border-top: 1px solid #e0e5dd; padding: 2px 10px; }
+      .installed-skill-row { min-height: 36px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; border-bottom: 1px solid #e7eae4; }
+      .installed-skill-row:last-child { border-bottom: 0; }
+      .installed-skill-name { overflow: hidden; color: #34483c; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
       .skill-editor { display: grid; align-content: start; gap: 10px; padding: 15px 17px; }
       .skill-editor h3 { margin: 0; font: 600 17px/1.1 var(--display); }
       .skill-editor textarea { min-height: 175px; resize: vertical; font-family: "Segoe UI", sans-serif; line-height: 1.45; }
@@ -207,18 +259,24 @@
       .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
       @media (max-width: 850px) {
         html, body { height: auto; min-height: 100%; overflow: auto; }
-        .studio { height: auto; min-height: 100vh; grid-template-columns: minmax(0, 1fr); grid-template-rows: 52px auto minmax(62vh, 1fr); overflow: visible; }
+        .studio { height: auto; min-height: 100vh; grid-template-columns: minmax(0, 1fr); grid-template-rows: 52px 42px auto minmax(62vh, 1fr); overflow: visible; }
         .topbar { grid-column: 1; }
-        .left-column { grid-template-rows: 210px 12px minmax(480px, 64vh); }
+        .activity-bar { grid-column: 1; grid-row: 2; flex-direction: row; justify-content: flex-start; gap: 5px; padding: 2px 6px; }
+        .activity-spacer { display: none; }
+        .activity-button { width: 36px; height: 34px; }
+        .activity-button[aria-pressed="true"]::after { right: auto; bottom: -5px; left: calc(50% - 10px); width: 20px; height: 3px; }
+        .left-column { grid-column: 1; grid-row: 3; grid-template-rows: 210px 12px minmax(480px, 64vh); }
+        .workbench-splitter { display: none; }
+        .canvas-panel { grid-column: 1; grid-row: 4; }
         .canvas-panel { min-height: 470px; }
+        .settings-shell { grid-template-columns: 140px minmax(0, 1fr); }
       }
       @media (max-width: 620px) {
-        .studio { padding: 8px; gap: 8px; grid-template-rows: 48px auto minmax(58vh, 1fr); }
+        .studio { padding: 8px; gap: 8px; grid-template-rows: 48px 40px auto minmax(58vh, 1fr); }
         .brand { gap: 8px; }
         .brand-mark { width: 30px; height: 30px; }
         .brand h1 { font-size: 17px; }
         .topbar-actions { gap: 4px; }
-        .topbar-actions .button { min-height: 32px; padding: 5px 7px; font-size: 11px; }
         .left-column { grid-template-rows: 185px 12px minmax(470px, 68vh); gap: 0; }
         .canvas-tabs { min-height: 36px; }
         .canvas-panel { min-height: 390px; }
@@ -227,6 +285,10 @@
         .canvas-toolbar-actions .button { min-height: 31px; padding: 5px 7px; font-size: 11px; }
         .canvas-heading { gap: 5px; }
         .canvas-state { font-size: 11px; }
+        .settings-shell { grid-template-columns: 1fr; }
+        .settings-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid #e0e5dd; padding: 7px; }
+        .settings-tab { justify-content: center; gap: 5px; padding-inline: 4px; font-size: 11px; }
+        .settings-section { max-height: calc(100vh - 210px); }
         .skills-layout { grid-template-columns: 1fr; }
         .skills-inventory { border-right: 0; border-bottom: 1px solid #e0e5dd; }
         .skill-editor { padding-top: 13px; }
@@ -245,32 +307,30 @@
       <header class="topbar">
         <div class="brand"><div class="brand-mark" aria-hidden="true">E</div><h1>Easel Studio</h1></div>
         <div class="topbar-actions">
-          <button id="skills-open" class="button outline" type="button">Skills <span id="skill-count" class="active-count" aria-label="0 active skills">0</span></button>
-          <button id="settings-open" class="button connection-button" type="button"><span id="connection-dot" class="connection-dot needs-setup" aria-hidden="true"></span>Connections</button>
+          <button id="connections-open" class="button connection-button" type="button"><span id="connection-dot" class="connection-dot needs-setup" aria-hidden="true"></span>Connections</button>
         </div>
       </header>
-      <section class="left-column" aria-label="Media and chat">
-        <section class="panel library" aria-label="Media library">
-          <div class="section-head"><h2>Library</h2><div class="library-tabs" role="group" aria-label="Library type"><button id="show-media" class="library-tab" type="button" aria-pressed="true">Media</button><button id="show-canvases" class="library-tab" type="button" aria-pressed="false">Canvases</button><button id="show-runtimes" class="library-tab" type="button" aria-pressed="false">Kits</button></div><button id="library-collapse" class="fold-button" type="button" aria-label="Collapse library" aria-expanded="true" aria-controls="library-panel-content" title="Collapse library"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+      <nav class="activity-bar" aria-label="Activity bar">
+        <button id="nav-explorer" class="activity-button" type="button" aria-label="Explorer" title="Explorer" aria-pressed="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10.8a1.2 1.2 0 0 1-1.2 1.2H4.7a1.2 1.2 0 0 1-1.2-1.2V6.5Z"/><path d="M3.5 10.5h17"/></svg>
+        </button>
+        <button id="nav-media" class="activity-button" type="button" aria-label="Media" title="Media" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg>
+        </button>
+        <span class="activity-spacer"></span>
+        <button id="settings-open" class="activity-button" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19.3 13.5 1.1.9-1.8 3.1-1.4-.5a8 8 0 0 1-1.8 1l-.3 1.5h-3.6l-.3-1.5a8 8 0 0 1-1.8-1l-1.4.5-1.8-3.1 1.1-.9a7 7 0 0 1 0-2.1l-1.1-.9 1.8-3.1 1.4.5a8 8 0 0 1 1.8-1l.3-1.5h3.6l.3 1.5a8 8 0 0 1 1.8 1l1.4-.5 1.8 3.1-1.1.9a7 7 0 0 1 0 2.1Z"/></svg>
+        </button>
+      </nav>
+      <section class="left-column" aria-label="Explorer and chat">
+        <section class="panel library" aria-label="Project explorer">
+          <div class="section-head"><h2 id="library-title">Explorer</h2><button id="library-collapse" class="fold-button" type="button" aria-label="Collapse explorer" aria-expanded="true" aria-controls="library-panel-content" title="Collapse explorer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
           <div id="library-panel-content" class="library-panel-content">
-            <div class="library-content" id="media-content"><div id="media-list" class="media-grid" aria-label="Saved media"></div><p id="media-empty" class="empty-library">Generated images will appear here.</p></div>
-            <div class="library-content" id="canvases-content" hidden><div id="canvases-list" class="canvas-list" aria-label="Saved HTML canvases"></div><p id="canvases-empty" class="empty-library">Canvases created in chat are saved as HTML.</p></div>
-            <div class="library-content" id="runtimes-content" hidden>
-              <div class="runtime-intro"><h3>Runtime kits</h3><p>Keep the canvas light. Add pinned toolkits only when a project needs them.</p></div>
-              <div class="runtime-list" aria-label="Canvas runtime catalog">
-                <article class="runtime-card"><div><h3>HTML + Canvas 2D</h3><p>Interactive sketches, animation, and small games.</p></div><span class="runtime-badge active">Built in</span></article>
-                <article class="runtime-card"><div><h3>DeckGen.js</h3><p>Slide decks and presentation layouts.</p></div><span class="runtime-badge">Opt in · planned</span></article>
-                <article class="runtime-card"><div><h3>Three.js</h3><p>3D scenes with local image and model assets.</p></div><span class="runtime-badge">Opt in · planned</span></article>
-                <article class="runtime-card"><div><h3>Phaser.js</h3><p>Structured 2D game scenes and input.</p></div><span class="runtime-badge">Opt in · planned</span></article>
-                <article class="runtime-card"><div><h3>Matter.js</h3><p>Physics for interactive 2D prototypes.</p></div><span class="runtime-badge">Opt in · planned</span></article>
-                <article class="runtime-card"><div><h3>Tone.js</h3><p>Sequencing, synthesis, and sound design.</p></div><span class="runtime-badge">Opt in · planned</span></article>
-                <article class="runtime-card"><div><h3>Video tools</h3><p>Local trim, cut, join, and format conversion.</p></div><span class="runtime-badge">Opt in · planned</span></article>
-              </div>
-              <p class="runtime-footnote">Runtime packs will be pinned, downloaded on demand, and kept offline inside each canvas.</p>
-            </div>
+            <div class="library-content" id="canvases-content"><div id="canvases-list" class="canvas-list" aria-label="Saved canvases"></div><p id="canvases-empty" class="empty-library">Your canvases will appear here as local project files.</p></div>
+            <div class="library-content" id="media-content" hidden><div id="media-list" class="media-grid" aria-label="Saved media"></div><p id="media-empty" class="empty-library">Generated images will appear here.</p></div>
           </div>
         </section>
-        <div id="panel-splitter" class="panel-splitter" role="separator" aria-label="Resize library and chat panels" aria-orientation="horizontal" aria-valuemin="20" aria-valuemax="75" aria-valuenow="31" tabindex="0"></div>
+        <div id="panel-splitter" class="panel-splitter" role="separator" aria-label="Resize sidebar and chat panels" aria-orientation="horizontal" aria-valuemin="20" aria-valuemax="75" aria-valuenow="31" tabindex="0"></div>
         <section class="panel conversation" aria-label="Conversation">
           <div class="conversation-head">
             <div class="conversation-title"><h2>Studio chat</h2><small id="model-label">Ready to create</small></div>
@@ -306,9 +366,12 @@
                     </select>
                   </label>
                 </div>
+                <button id="attach-media" class="button quiet small" type="button" aria-label="Attach image, audio, or video" title="Attach image, audio, or video"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 8.5 4.1-4.1a2.1 2.1 0 0 1 3 3l-5.4 5.4a3.2 3.2 0 0 1-4.5-4.5l5.4-5.4"/></svg>Attach</button>
+                <input id="media-files" class="sr-only" type="file" multiple accept="image/png,image/jpeg,image/webp,audio/mpeg,audio/wav,video/mp4,video/webm" />
                 <button id="composer-skills" class="button quiet small" type="button" aria-haspopup="dialog">Use skills</button>
               </div>
-              <textarea id="message" name="message" placeholder="Describe the image you want to create…" required aria-label="Message to Easel"></textarea>
+              <div id="attachment-strip" class="attachment-strip" aria-label="Pending attachments" hidden></div>
+              <textarea id="message" name="message" placeholder="Describe the image you want to create…" aria-label="Message to Easel"></textarea>
               <div class="composer-footer">
                 <span id="composer-help" class="composer-help">Enter to send · Ctrl+Enter for a new line</span>
                 <span id="video-help" class="sr-only">Video generation is unavailable until a video tool is connected.</span>
@@ -319,6 +382,7 @@
           </div>
         </section>
       </section>
+      <div id="workbench-splitter" class="workbench-splitter" role="separator" aria-label="Resize sidebar and canvas panels" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="55" aria-valuenow="36" tabindex="0"></div>
       <section class="panel canvas-panel" aria-label="HTML canvas workspace">
         <div class="canvas-toolbar">
           <div class="canvas-heading"><h2 id="canvas-title">Canvas</h2><span class="canvas-state"><span id="canvas-state-dot" class="state-dot" aria-hidden="true"></span><span id="canvas-state">Ready</span></span></div>
@@ -335,24 +399,68 @@
         </div>
       </section>
     </main>
-    <dialog id="settings-dialog" aria-labelledby="settings-title">
-      <div class="dialog-head"><div><h2 id="settings-title">Connections</h2><p class="dialog-description">Keep your Easel media server and language model credentials on this device. Save the LiteLLM endpoint and key before refreshing or testing models; save the selected model to use it in chat. Test image sends a real generation request.</p></div><button id="settings-close" class="button outline small" type="button">Done</button></div>
-      <form id="settings-form" class="settings-form">
-        <label class="field" for="easel-url">Easel endpoint<input id="easel-url" name="easelBaseUrl" type="url" /></label>
-        <label class="field" for="easel-key">Easel API key<input id="easel-key" name="easelApiKey" type="password" autocomplete="new-password" placeholder="Optional" /></label>
-        <label class="check"><input id="clear-easel-key" type="checkbox" /> Clear saved Easel key</label>
-        <label class="field" for="litellm-url">LiteLLM endpoint<input id="litellm-url" name="litellmBaseUrl" type="url" /></label>
-        <label class="field" for="litellm-key">LiteLLM API key<input id="litellm-key" name="litellmApiKey" type="password" autocomplete="new-password" placeholder="Optional" /></label>
-        <label class="check"><input id="clear-litellm-key" type="checkbox" /> Clear saved LiteLLM key</label>
-        <label class="field" for="litellm-model">LiteLLM model<select id="litellm-model" name="litellmModel" aria-describedby="settings-status"></select></label>
-        <div class="button-row" aria-label="LiteLLM connection tests">
-          <button id="litellm-refresh-models" class="button outline small" type="button">Refresh models</button>
-          <button id="litellm-test-chat" class="button outline small" type="button">Test text</button>
-          <button id="litellm-test-image" class="button outline small" type="button">Test image</button>
-        </div>
-        <button class="button primary settings-submit" type="submit">Save connections</button>
-        <p id="settings-status" role="status" aria-live="polite"></p>
-      </form>
+    <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+      <div class="dialog-head"><div><h2 id="settings-title">Settings</h2><p class="dialog-description">Manage connections, creative skills, and offline canvas kits in one place.</p></div><button id="settings-close" class="button outline small" type="button">Done</button></div>
+      <div class="settings-shell">
+        <nav class="settings-nav" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
+          <button id="settings-tab-connections" class="settings-tab" type="button" role="tab" aria-selected="true" aria-controls="settings-connections"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="3"/><path d="M16.4 11.7 17.5 12.6l-1.7 2.9-1.4-.5a6.8 6.8 0 0 1-1.5.8l-.3 1.4h-3.3L9 15.8a6.8 6.8 0 0 1-1.5-.8l-1.4.5-1.7-2.9 1.1-.9a5.7 5.7 0 0 1 0-1.5l-1.1-.9 1.7-2.9 1.4.5A6.8 6.8 0 0 1 9 6.1l.3-1.4h3.3l.3 1.4a6.8 6.8 0 0 1 1.5.8l1.4-.5 1.7 2.9-1.1.9a5.7 5.7 0 0 1 0 1.5Z"/></svg>Connections</button>
+          <button id="settings-tab-skills" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-skills"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 2.8 12 7l4.6.7-3.3 3.2.8 4.6-4.1-2.2-4.1 2.2.8-4.6-3.3-3.2L8 7l2-4.2Z"/></svg>Skills <span id="skill-count" class="active-count" aria-label="0 active skills">0</span></button>
+          <button id="settings-tab-kits" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-kits"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 5-4 5 4 5M13 5l4 5-4 5M11.5 3l-3 14"/></svg>Kits</button>
+        </nav>
+        <section id="settings-connections" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-connections">
+          <div class="settings-section-head"><h3>Connections</h3><p>Save your endpoints and select a LiteLLM model. API keys stay encrypted on this device.</p></div>
+          <form id="settings-form" class="settings-form">
+            <label class="field" for="easel-url">Easel endpoint<input id="easel-url" name="easelBaseUrl" type="url" /></label>
+            <label class="field" for="easel-key">Easel API key<input id="easel-key" name="easelApiKey" type="password" autocomplete="new-password" placeholder="Optional" /></label>
+            <label class="check"><input id="clear-easel-key" type="checkbox" /> Clear saved Easel key</label>
+            <label class="field" for="litellm-url">LiteLLM endpoint<input id="litellm-url" name="litellmBaseUrl" type="url" /></label>
+            <label class="field" for="litellm-key">LiteLLM API key<input id="litellm-key" name="litellmApiKey" type="password" autocomplete="new-password" placeholder="Optional" /></label>
+            <label class="check"><input id="clear-litellm-key" type="checkbox" /> Clear saved LiteLLM key</label>
+            <label class="field" for="litellm-model">LiteLLM model<select id="litellm-model" name="litellmModel" aria-describedby="settings-status"></select></label>
+            <div class="button-row" aria-label="LiteLLM connection tests">
+              <button id="litellm-refresh-models" class="button outline small" type="button">Refresh models</button>
+              <button id="litellm-test-chat" class="button outline small" type="button">Test text</button>
+              <button id="litellm-test-image" class="button outline small" type="button">Test image</button>
+            </div>
+            <button class="button primary settings-submit" type="submit">Save connections</button>
+            <p id="settings-status" role="status" aria-live="polite"></p>
+          </form>
+        </section>
+        <section id="settings-skills" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-skills" hidden>
+          <div class="settings-section-head"><h3>Creative skills</h3><p>Reusable instructions stay on this device. Enabled skills accompany your next request.</p></div>
+          <details class="installed-skill-catalog">
+            <summary><span>Installed skill packs</span><small id="installed-skill-count">Loading…</small></summary>
+            <div id="installed-skills-list" class="installed-skills-list"><p class="skills-empty">Reading skills installed with this client.</p></div>
+          </details>
+          <div class="skills-layout">
+            <section class="skills-inventory" aria-label="Saved skills">
+              <div class="skills-inventory-head"><strong>Your skills</strong><div class="button-row"><button id="skill-import-open" class="button outline small" type="button">Import .md</button><button id="skill-new" class="button primary small" type="button">New skill</button></div></div>
+              <input id="skill-import" class="sr-only" type="file" accept=".md,.txt,text/markdown,text/plain" />
+              <div id="skills-list"></div>
+              <p id="skills-empty" class="skills-empty">No skills yet. Import a Codex SKILL.md or write a small creative recipe.</p>
+            </section>
+            <form id="skill-form" class="skill-editor">
+              <h3 id="skill-editor-title">Add a skill</h3>
+              <label class="field" for="skill-name">Name<input id="skill-name" type="text" maxlength="80" autocomplete="off" placeholder="Image art direction" required /></label>
+            <label class="field" for="skill-instructions">Instructions<textarea id="skill-instructions" maxlength="32000" placeholder="Describe the reusable approach Easel should follow…" required></textarea></label>
+              <p id="skill-status" role="status" aria-live="polite"></p>
+              <div class="skill-editor-footer"><button id="skill-cancel" class="button quiet small" type="button">Clear</button><button id="skill-save" class="button primary" type="submit">Save skill</button></div>
+            </form>
+          </div>
+        </section>
+        <section id="settings-kits" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-kits" hidden>
+          <div class="settings-section-head"><h3>Canvas kits</h3><p>Choose the offline frameworks available to new canvases. Selected libraries are embedded in saved HTML and work without network access.</p></div>
+          <div class="kit-list">
+            <label class="kit-option"><input type="checkbox" data-kit="canvas-2d" checked disabled /><span><strong>HTML + Canvas 2D</strong><small>Responsive layouts, drawing, and animation using browser APIs.</small></span><span class="runtime-badge active">Always on</span></label>
+            <label class="kit-option"><input type="checkbox" data-kit="html-deck" /><span><strong>HTML presentations</strong><small>Slide decks with keyboard navigation, transitions, and exportable HTML.</small></span><span class="runtime-badge active">Built in</span></label>
+            <label class="kit-option"><input type="checkbox" data-kit="three" /><span><strong>Three.js</strong><small>Offline 3D scenes, materials, cameras, and animation.</small></span><span class="runtime-badge active">Bundled</span></label>
+            <label class="kit-option"><input type="checkbox" data-kit="phaser" /><span><strong>Phaser</strong><small>2D game scenes, input, sprites, and physics.</small></span><span class="runtime-badge active">Bundled</span></label>
+            <label class="kit-option"><input type="checkbox" data-kit="matter" /><span><strong>Matter.js</strong><small>Rigid-body physics for interactive 2D prototypes.</small></span><span class="runtime-badge active">Bundled</span></label>
+            <label class="kit-option"><input type="checkbox" data-kit="tone" /><span><strong>Tone.js</strong><small>Audio synthesis and sequencing after a user gesture.</small></span><span class="runtime-badge active">Bundled</span></label>
+          </div>
+          <p id="kit-status" class="kit-status" role="status" aria-live="polite">Selected kits are included in each new canvas and in its exported HTML.</p>
+        </section>
+      </div>
     </dialog>
     <dialog id="new-canvas-dialog" aria-labelledby="new-canvas-title">
       <div class="dialog-head"><h2 id="new-canvas-title">Create canvas</h2><button id="new-canvas-close" class="button outline small" type="button">Cancel</button></div>
@@ -360,24 +468,6 @@
         <label class="field" for="new-canvas-name">Canvas name<input id="new-canvas-name" name="title" type="text" maxlength="120" autocomplete="off" placeholder="e.g. Spring campaign board" required /></label>
         <div class="new-canvas-actions"><button id="new-canvas-submit" class="button primary" type="submit">Create empty canvas</button></div>
       </form>
-    </dialog>
-    <dialog id="skills-dialog" class="skills-dialog" aria-labelledby="skills-title">
-      <div class="dialog-head"><div><h2 id="skills-title">Creative skills</h2><p class="dialog-description">Add reusable instructions for Easel. Imported skills stay on this device; selected skills are included with your next request.</p></div><button id="skills-close" class="button outline small" type="button">Done</button></div>
-      <div class="skills-layout">
-        <section class="skills-inventory" aria-label="Saved skills">
-          <div class="skills-inventory-head"><strong>Your skills</strong><div class="button-row"><button id="skill-import-open" class="button outline small" type="button">Import .md</button><button id="skill-new" class="button primary small" type="button">New skill</button></div></div>
-          <input id="skill-import" class="sr-only" type="file" accept=".md,.txt,text/markdown,text/plain" />
-          <div id="skills-list"></div>
-          <p id="skills-empty" class="skills-empty">No skills yet. Import a Codex SKILL.md or write a small creative recipe.</p>
-        </section>
-        <form id="skill-form" class="skill-editor">
-          <h3 id="skill-editor-title">Add a skill</h3>
-          <label class="field" for="skill-name">Name<input id="skill-name" type="text" maxlength="80" autocomplete="off" placeholder="Image art direction" required /></label>
-          <label class="field" for="skill-instructions">Instructions<textarea id="skill-instructions" maxlength="12000" placeholder="Describe the reusable approach Easel should follow…" required></textarea></label>
-          <p id="skill-status" role="status" aria-live="polite"></p>
-          <div class="skill-editor-footer"><button id="skill-cancel" class="button quiet small" type="button">Clear</button><button id="skill-save" class="button primary" type="submit">Save skill</button></div>
-        </form>
-      </div>
     </dialog>
     <script src="./renderer.js"></script>
   </body>

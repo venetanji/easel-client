@@ -77,8 +77,8 @@ function createCanvasStore({ userDataPath, fileSystem = fs, idFactory = () => cr
     return { id, title, updatedAt: writeHtml(id, html) };
   }
 
-  function createEmpty(title = 'Untitled Canvas') {
-    return save({ title, html: EMPTY_CANVAS_HTML });
+  function createEmpty(title = 'Untitled Canvas', options = {}) {
+    return save({ ...options, title, html: EMPTY_CANVAS_HTML });
   }
 
   function update(id, snapshotHtml) {

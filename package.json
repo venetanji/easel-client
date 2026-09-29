@@ -10,8 +10,9 @@
     "start": "electron .",
     "test": "node --test test/*.test.js && npm run test --workspace=@easel/media-mcp",
     "build:media-mcp": "npm run build --workspace=@easel/media-mcp",
+    "build:canvas-kits": "node scripts/build-canvas-kits.js",
     "check:release-version": "node scripts/check-release-version.js",
-    "build": "npm run check:release-version && npm run build:media-mcp",
+    "build": "npm run check:release-version && npm run build:media-mcp && npm run build:canvas-kits",
     "dist:dir": "npm run build && electron-builder --dir",
     "dist:win": "npm run build && electron-builder --win nsis zip",
     "dist:mac": "npm run build && electron-builder --mac dmg zip",
@@ -37,6 +38,11 @@
   "license": "ISC",
   "devDependencies": {
     "electron": "^44.4.5",
-    "electron-builder": "^26.0.12"
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.28.2",
+    "matter-js": "^0.20.0",
+    "phaser": "^4.2.1",
+    "three": "^0.186.1",
+    "tone": "^15.1.22"
   }
 }

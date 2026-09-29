@@ -16,6 +16,7 @@ const IPC_CHANNELS = Object.freeze({
   LIST_LITELLM_MODELS: 'litellm:models:list',
   TEST_LITELLM_CHAT: 'litellm:probe:chat',
   TEST_LITELLM_IMAGE: 'litellm:probe:image',
+  LIST_INSTALLED_SKILLS: 'skills:list-installed',
 });
 
 const SETTING_KEYS = new Set([
@@ -26,9 +27,17 @@ const KNOWN_CHANNELS = new Set(Object.values(IPC_CHANNELS));
 const MAX_MESSAGE_LENGTH = 20_000;
 const MAX_SKILLS_PER_MESSAGE = 8;
 const MAX_SKILL_NAME_LENGTH = 80;
-const MAX_SKILL_INSTRUCTIONS_LENGTH = 12_000;
-const MAX_TOTAL_SKILL_INSTRUCTIONS_LENGTH = 24_000;
+const MAX_SKILL_INSTRUCTIONS_LENGTH = 32_000;
+const MAX_TOTAL_SKILL_INSTRUCTIONS_LENGTH = 48_000;
 const MAX_CANVAS_BOUNDS = 10_000;
+const ALLOWED_RUNTIME_KITS = new Set(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone']);
+const MAX_CHAT_ATTACHMENTS = 6;
+const MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_BYTES = 64 * 1024 * 1024;
+const MAX_VIDEO_FRAMES = 6;
+const IMAGE_ATTACHMENT_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const AUDIO_ATTACHMENT_TYPES = new Set(['audio/mpeg', 'audio/wav']);
+const VIDEO_ATTACHMENT_TYPES = new Set(['video/mp4', 'video/webm']);
 
 function assertKnownChannel(channel) {
   if (!KNOWN_CHANNELS.has(channel)) throw new Error('Unsupported IPC channel.');
@@ -87,7 +96,7 @@ function validateChatOptions(value) {
   if (value === undefined) return { mode: 'chat', size: '1024x1024', skills: [] };
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Chat options must be an object.');
   for (const key of Object.keys(value)) {
-    if (!['mode', 'size', 'skills'].includes(key)) throw new Error(`Unsupported chat option: ${key}`);
+    if (!['mode', 'size', 'skills', 'kits', 'attachments'].includes(key)) throw new Error(`Unsupported chat option: ${key}`);
   }
   const mode = value.mode ?? 'chat';
   if (!['chat', 'image'].includes(mode)) throw new Error('Chat mode is invalid.');
@@ -107,11 +116,83 @@ function validateChatOptions(value) {
     if (!instructions || instructions.length > MAX_SKILL_INSTRUCTIONS_LENGTH) throw new Error('Skill instructions are invalid or too long.');
     totalInstructionsLength += instructions.length;
     if (totalInstructionsLength > MAX_TOTAL_SKILL_INSTRUCTIONS_LENGTH) {
-      throw new Error('Combined skill instructions must be 24000 characters or fewer.');
+      throw new Error(`Combined skill instructions must be ${MAX_TOTAL_SKILL_INSTRUCTIONS_LENGTH} characters or fewer.`);
     }
     return { name, instructions };
   });
-  return { mode, size, skills: cleanSkills };
+  const kits = value.kits ?? [];
+  if (!Array.isArray(kits) || kits.length > ALLOWED_RUNTIME_KITS.size) throw new Error('Canvas kit preferences are invalid.');
+  const cleanKits = [...new Set(kits.map((kit) => {
+    if (typeof kit !== 'string' || !ALLOWED_RUNTIME_KITS.has(kit)) throw new Error('Canvas kit preference is invalid.');
+    return kit;
+  }))];
+  const attachments = value.attachments ?? [];
+  if (!Array.isArray(attachments) || attachments.length > MAX_CHAT_ATTACHMENTS) {
+    throw new Error(`Attach up to ${MAX_CHAT_ATTACHMENTS} files per message.`);
+  }
+  let totalAttachmentBytes = 0;
+  const cleanAttachments = attachments.map((attachment) => {
+    if (!attachment || typeof attachment !== 'object' || Array.isArray(attachment)) throw new Error('Media attachment is invalid.');
+    const type = attachment.type;
+    const mimeType = attachment.mimeType;
+    const name = typeof attachment.name === 'string'
+      ? attachment.name.trim().replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 160)
+      : '';
+    if (!name) throw new Error('Media attachment name is invalid.');
+
+    function readBase64(data, label, maxBytes = MAX_ATTACHMENT_BYTES) {
+      if (typeof data !== 'string' || !data || data.length > Math.ceil(maxBytes / 3) * 4) {
+        throw new Error(`${label} exceeds the media size limit.`);
+      }
+      if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) {
+        throw new Error(`${label} must be base64 encoded.`);
+      }
+      const bytes = Buffer.from(data, 'base64').length;
+      if (!bytes || bytes > maxBytes) throw new Error(`${label} exceeds the media size limit.`);
+      totalAttachmentBytes += bytes;
+      return data;
+    }
+
+    if (type === 'image' || type === 'audio') {
+      const supported = type === 'image' ? IMAGE_ATTACHMENT_TYPES : AUDIO_ATTACHMENT_TYPES;
+      if (!supported.has(mimeType)) throw new Error(`Unsupported ${type} media format.`);
+      if (Object.keys(attachment).some((key) => !['type', 'name', 'mimeType', 'data'].includes(key))) {
+        throw new Error('Media attachment contains unsupported fields.');
+      }
+      return { type, name, mimeType, data: readBase64(attachment.data, 'Media attachment') };
+    }
+
+    if (type === 'video') {
+      if (!VIDEO_ATTACHMENT_TYPES.has(mimeType)) throw new Error('Unsupported video format.');
+      if (Object.keys(attachment).some((key) => !['type', 'name', 'mimeType', 'frames'].includes(key))) {
+        throw new Error('Video attachment contains unsupported fields.');
+      }
+      if (!Array.isArray(attachment.frames) || attachment.frames.length === 0 || attachment.frames.length > MAX_VIDEO_FRAMES) {
+        throw new Error(`Video must include up to ${MAX_VIDEO_FRAMES} sampled frames.`);
+      }
+      const frames = attachment.frames.map((frame) => {
+        if (!frame || typeof frame !== 'object' || Array.isArray(frame)
+          || Object.keys(frame).some((key) => !['timestamp', 'data'].includes(key))) {
+          throw new Error('Video frame is invalid.');
+        }
+        if (typeof frame.timestamp !== 'number' || !Number.isFinite(frame.timestamp) || frame.timestamp < 0 || frame.timestamp > 3_600) {
+          throw new Error('Video frame timestamp is invalid.');
+        }
+        return { timestamp: frame.timestamp, data: readBase64(frame.data, 'Video frame', 2 * 1024 * 1024) };
+      });
+      return { type, name, mimeType, frames };
+    }
+
+    throw new Error('Media attachment type is unsupported.');
+  });
+  if (totalAttachmentBytes > MAX_TOTAL_ATTACHMENT_BYTES) throw new Error('Attachments exceed 64 MiB in total.');
+  return {
+    mode,
+    size,
+    skills: cleanSkills,
+    ...(Object.hasOwn(value, 'kits') ? { kits: cleanKits } : {}),
+    ...(Object.hasOwn(value, 'attachments') ? { attachments: cleanAttachments } : {}),
+  };
 }
 
 function validateOpaqueId(value, label = 'ID') {

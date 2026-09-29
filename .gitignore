@@ -1,3 +1,4 @@
 node_modules
 release/
 packages/media-mcp/dist/
+canvas-kits/

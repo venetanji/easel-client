@@ -4,7 +4,7 @@ const { MAX_SNAPSHOT_BYTES } = require('./canvas-policy');
 const MAX_SCRIPT_BYTES = 16_384;
 const MAX_RESULT_BYTES = 12_000;
 
-async function createCanvasView({ WebContentsView, sessionFactory, assetStore, canvasStore }) {
+async function createCanvasView({ WebContentsView, sessionFactory, assetStore, canvasStore, kitBundles = {} }) {
   if (typeof WebContentsView !== 'function' || typeof sessionFactory !== 'function') {
     throw new Error('Canvas view dependencies are required.');
   }
@@ -92,15 +92,15 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, c
 
   async function present(artifact) {
     if (!canvasStore) throw new Error('Canvas storage is unavailable.');
-    const saved = canvasStore.save(artifact);
+    const saved = canvasStore.save({ ...artifact, kitBundles });
     const document = canvasStore.get(saved.id);
     await loadHtml(document.html, saved.id);
     return saved;
   }
 
-  async function createEmpty(title = 'Untitled Canvas') {
+  async function createEmpty(title = 'Untitled Canvas', kits = []) {
     if (!canvasStore) throw new Error('Canvas storage is unavailable.');
-    const saved = canvasStore.createEmpty(title);
+    const saved = canvasStore.createEmpty(title, { kits, kitBundles });
     const document = canvasStore.get(saved.id);
     await loadHtml(document.html, saved.id);
     return saved;
@@ -163,6 +163,10 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, c
     const snapshot = JSON.parse(await evaluate(`(() => JSON.stringify({
       title: document.title,
       text: (document.body?.innerText || '').slice(0, 4000),
+      runtime: {
+        toneAvailable: typeof window.Tone === 'object',
+        webAudioAvailable: typeof window.AudioContext === 'function' || typeof window.webkitAudioContext === 'function',
+      },
       images: Array.from(document.images).slice(0, 32).map((image) => ({
         alt: image.alt,
         loaded: image.complete && image.naturalWidth > 0,
@@ -181,6 +185,15 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, c
     }))()`));
     snapshot.consoleErrors = [...recentConsoleErrors];
     return JSON.stringify(snapshot);
+  }
+
+  async function isEmpty() {
+    const snapshot = JSON.parse(await evaluate(`(() => JSON.stringify({
+      text: (document.body?.innerText || '').trim(),
+      images: document.images.length,
+      media: document.querySelectorAll('audio, video, canvas, svg, iframe, object').length,
+    }))()`));
+    return !snapshot.text && snapshot.images === 0 && snapshot.media === 0;
   }
 
   async function execute(script) {
@@ -238,6 +251,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, c
     getCurrentCanvasId: () => currentCanvasId,
     hide,
     inspect,
+    isEmpty,
     openSaved,
     present,
     saveCurrent,

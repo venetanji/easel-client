@@ -1,8 +1,11 @@
 const MAX_HTML_BYTES = 1_048_576;
+const MAX_CANVAS_DOCUMENT_BYTES = 8 * 1_048_576;
 const MAX_ASSETS = 8;
 const MAX_ASSET_BYTES = 32 * 1024 * 1024;
 const MAX_BASE64_LENGTH = Math.ceil(MAX_ASSET_BYTES / 3) * 4;
-const MAX_SNAPSHOT_BYTES = MAX_HTML_BYTES + MAX_BASE64_LENGTH + 65_536;
+const MAX_SNAPSHOT_BYTES = MAX_CANVAS_DOCUMENT_BYTES + MAX_BASE64_LENGTH + 65_536;
+const ALLOWED_CANVAS_KITS = new Set(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone']);
+const BUNDLED_CANVAS_KITS = new Set(['three', 'phaser', 'matter', 'tone']);
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const CSP = [
   "default-src 'none'",
@@ -70,10 +73,20 @@ function addRuntimeDiagnostics(html) {
   return clean.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${RUNTIME_DIAGNOSTICS_SCRIPT}`);
 }
 
-function buildCanvasDocument({ html, assets = [] } = {}) {
+function insertKitScripts(html, scripts) {
+  if (!scripts) return html;
+  if (/<head(?:\s[^>]*)?>/i.test(html)) return html.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${scripts}`);
+  if (/<html(?:\s[^>]*)?>/i.test(html)) {
+    return html.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${scripts}</head>`);
+  }
+  return `<!doctype html><html><head>${scripts}</head><body>${html}</body></html>`;
+}
+
+function buildCanvasDocument({ html, assets = [], kits = [], kitBundles = {} } = {}) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('Canvas HTML is required.');
   if (Buffer.byteLength(html, 'utf8') > MAX_HTML_BYTES) throw new Error('Canvas HTML exceeds 1 MiB.');
   if (!Array.isArray(assets) || assets.length > MAX_ASSETS) throw new Error(`Canvas supports at most ${MAX_ASSETS} image assets.`);
+  if (!Array.isArray(kits) || kits.length > ALLOWED_CANVAS_KITS.size) throw new Error('Canvas kits are invalid.');
   if (/\b(?:src|href|poster|action)\s*=\s*["']?\s*(?:https?:|file:|\/\/)/i.test(html)) {
     throw new Error('Canvas cannot reference external URLs.');
   }
@@ -97,6 +110,22 @@ function buildCanvasDocument({ html, assets = [] } = {}) {
   }
   if (totalBytes > MAX_ASSET_BYTES) throw new Error('Canvas assets exceed 32 MiB total.');
   if (/\{\{asset:[^}]+\}\}/.test(output)) throw new Error('Canvas references an unknown local asset.');
+
+  let totalKitBytes = 0;
+  const kitScripts = [...new Set(kits)].map((kit) => {
+    if (typeof kit !== 'string' || !ALLOWED_CANVAS_KITS.has(kit)) throw new Error('Canvas kit is unsupported.');
+    if (!BUNDLED_CANVAS_KITS.has(kit)) return '';
+    const source = kitBundles[kit];
+    if (typeof source !== 'string' || !source) throw new Error(`The ${kit} canvas kit is unavailable. Rebuild the client and try again.`);
+    const safeSource = source.replace(/<\/script/gi, '<\\/script');
+    totalKitBytes += Buffer.byteLength(safeSource, 'utf8');
+    if (totalKitBytes > MAX_CANVAS_DOCUMENT_BYTES) throw new Error('Selected canvas kits exceed the offline bundle size limit.');
+    return `<script data-easel-canvas-kit="${kit}">${safeSource}</script>`;
+  }).join('');
+  output = insertKitScripts(output, kitScripts);
+  if (Buffer.byteLength(output, 'utf8') > MAX_CANVAS_DOCUMENT_BYTES) {
+    throw new Error('Canvas document exceeds the offline canvas size limit.');
+  }
 
   const policy = `<meta http-equiv="Content-Security-Policy" content="${CSP}">`;
   if (/<head(?:\s[^>]*)?>/i.test(output)) {
@@ -126,4 +155,10 @@ function buildCanvasSnapshotDocument(html) {
   return addRuntimeDiagnostics(`<!doctype html><html><head><meta charset="utf-8">${policy}</head><body>${output}</body></html>`);
 }
 
-module.exports = { buildCanvasDocument, buildCanvasSnapshotDocument, CSP, MAX_SNAPSHOT_BYTES };
+module.exports = {
+  buildCanvasDocument,
+  buildCanvasSnapshotDocument,
+  CSP,
+  MAX_CANVAS_DOCUMENT_BYTES,
+  MAX_SNAPSHOT_BYTES,
+};

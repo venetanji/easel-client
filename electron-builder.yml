@@ -3,8 +3,10 @@ directories:
   output: release
 files:
   - src/**/*
+  - canvas-kits/*.js
   - packages/media-mcp/dist/**/*
   - packages/media-mcp/package.json
+  - .agents/skills/**/*
   - package.json
 asar: true
 asarUnpack:

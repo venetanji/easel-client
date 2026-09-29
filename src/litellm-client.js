@@ -34,6 +34,21 @@ function toResponsesInput(messages) {
           role: message.role,
           content: [{ type: message.role === 'user' ? 'input_text' : 'output_text', text: message.content }],
         });
+      } else if (message.role === 'user' && Array.isArray(message.content)) {
+        const content = message.content.map((part) => {
+          if (part?.type === 'text' && typeof part.text === 'string') return { type: 'input_text', text: part.text };
+          if (part?.type === 'image' && typeof part.data === 'string' && ['image/png', 'image/jpeg', 'image/webp'].includes(part.mimeType)) {
+            return { type: 'input_image', image_url: `data:${part.mimeType};base64,${part.data}` };
+          }
+          if (part?.type === 'audio' && typeof part.data === 'string' && ['audio/mpeg', 'audio/wav'].includes(part.mimeType)) {
+            return {
+              type: 'input_audio',
+              input_audio: { data: part.data, format: part.mimeType === 'audio/mpeg' ? 'mp3' : 'wav' },
+            };
+          }
+          throw new Error('Unsupported LiteLLM media content.');
+        });
+        input.push({ role: message.role, content });
       }
       if (message.role === 'assistant') {
         for (const call of message.tool_calls || []) {

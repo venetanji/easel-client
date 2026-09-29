@@ -40,8 +40,9 @@ function createChatService({
   const history = [];
   let busy = false;
 
-  async function sendMessage(input, { mode = 'chat', size = '1024x1024', skills = [] } = {}) {
-    const userMessage = validateChatMessage(input);
+  async function sendMessage(input, { mode = 'chat', size = '1024x1024', skills = [], kits = [], attachments = [] } = {}) {
+    const userMessage = typeof input === 'string' && input.trim() ? validateChatMessage(input) : '';
+    if (!userMessage && (!Array.isArray(attachments) || attachments.length === 0)) throw new Error('Message or attachment is required.');
     if (busy) throw new Error('A chat turn is already running.');
     busy = true;
     try {
@@ -61,6 +62,8 @@ function createChatService({
           mode,
           size,
           skills,
+          kits,
+          attachments,
           history,
           llm,
           mcp,

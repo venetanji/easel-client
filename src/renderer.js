@@ -84,10 +84,43 @@ function resultSummary(count) {
 }
 
 const SKILL_STORAGE_KEY = 'easel-studio.skills.v1';
+const KIT_STORAGE_KEY = 'easel-studio.canvas-kits.v1';
 const OPEN_CANVAS_STORAGE_KEY = 'easel-studio.open-canvases.v1';
 const PANEL_RATIO_STORAGE_KEY = 'easel-studio.panel-ratio.v1';
-const MAX_LOCAL_SKILLS = 12;
-const MAX_SKILL_INSTRUCTIONS = 12_000;
+const WORKBENCH_WIDTH_STORAGE_KEY = 'easel-studio.workbench-width.v1';
+const MAX_LOCAL_SKILLS = 64;
+const MAX_SKILL_INSTRUCTIONS = 32_000;
+const MAX_ACTIVE_SKILL_INSTRUCTIONS = 48_000;
+const LOCAL_RUNTIME_KITS = Object.freeze(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone']);
+const MAX_PENDING_ATTACHMENTS = 6;
+const MAX_MEDIA_FILE_BYTES = 32 * 1024 * 1024;
+const MEDIA_MIME_TYPES = Object.freeze({
+  'image/png': 'image',
+  'image/jpeg': 'image',
+  'image/webp': 'image',
+  'audio/mpeg': 'audio',
+  'audio/wav': 'audio',
+  'audio/x-wav': 'audio',
+  'video/mp4': 'video',
+  'video/webm': 'video',
+});
+
+function readLocalKits(storage = typeof localStorage === 'undefined' ? null : localStorage) {
+  if (!storage) return ['canvas-2d'];
+  try {
+    const saved = JSON.parse(storage.getItem(KIT_STORAGE_KEY) || '["canvas-2d"]');
+    return [...new Set(['canvas-2d', ...(Array.isArray(saved) ? saved.filter((kit) => LOCAL_RUNTIME_KITS.includes(kit)) : [])])];
+  } catch {
+    return ['canvas-2d'];
+  }
+}
+
+function writeLocalKits(kits, storage = typeof localStorage === 'undefined' ? null : localStorage) {
+  if (!storage) throw new Error('Local kit preferences are unavailable.');
+  const selected = [...new Set(['canvas-2d', ...(Array.isArray(kits) ? kits.filter((kit) => LOCAL_RUNTIME_KITS.includes(kit)) : [])])];
+  storage.setItem(KIT_STORAGE_KEY, JSON.stringify(selected));
+  return selected;
+}
 
 function readOpenCanvasIds(storage) {
   if (!storage) return [];
@@ -249,7 +282,7 @@ function renderAssistantAssetLinks(document, content, text, assetPreviews, pendi
   return { resolvedAssetIds, hasText: content.textContent.trim().length > 0 };
 }
 
-function appendImagePreviewMessage(document, messagesElement, event) {
+function appendImagePreviewMessage(document, messagesElement, event, onAddToCanvas) {
   const shouldFollow = messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight < 56;
   const message = document.createElement('article');
   message.className = 'message assistant message-media';
@@ -262,10 +295,12 @@ function appendImagePreviewMessage(document, messagesElement, event) {
   const caption = document.createElement('figcaption');
   caption.textContent = 'Generated image';
   figure.append(image, caption);
-  message.append(figure);
+  const add = createButton(document, 'Add to canvas', 'message-asset-add', () => onAddToCanvas?.(event.assetId, add));
+  add.setAttribute('aria-label', 'Add generated image to canvas');
+  message.append(figure, add);
   messagesElement.append(message);
   if (shouldFollow) messagesElement.scrollTop = messagesElement.scrollHeight;
-  return { image, caption, message };
+  return { image, caption, message, addButton: add };
 }
 
 function appendTextMessage(document, messagesElement, role, text, options = {}) {
@@ -290,6 +325,31 @@ function appendTextMessage(document, messagesElement, role, text, options = {}) 
       return null;
     }
     message.append(content);
+  } else if (role === 'user' && Array.isArray(options.attachments) && options.attachments.length > 0) {
+    const content = document.createElement('div');
+    content.className = 'message-content';
+    content.textContent = text;
+    message.append(content);
+    const attachmentList = document.createElement('div');
+    attachmentList.className = 'message-attachments';
+    for (const attachment of options.attachments) {
+      if (typeof attachment?.previewUrl !== 'string' || !attachment.previewUrl.startsWith('blob:')) continue;
+      const figure = document.createElement('figure');
+      figure.className = 'message-attachment';
+      const tag = attachment.type === 'image' ? 'img' : attachment.type === 'audio' ? 'audio' : 'video';
+      const preview = document.createElement(tag);
+      preview.src = attachment.previewUrl;
+      if (attachment.type === 'image') preview.alt = attachment.name;
+      else {
+        preview.controls = true;
+        preview.preload = 'metadata';
+      }
+      const caption = document.createElement('figcaption');
+      caption.textContent = attachment.name;
+      figure.append(preview, caption);
+      attachmentList.append(figure);
+    }
+    if (attachmentList.children.length) message.append(attachmentList);
   } else {
     message.textContent = text;
   }
@@ -406,11 +466,14 @@ function renderCanvasLibrary({ document, listElement, emptyElement, canvases, on
   emptyElement.hidden = rows.length > 0;
 }
 
-async function addAssetToCanvas({ client, assetId, statusElement }) {
+async function addAssetToCanvas({ client, assetId, statusElement, options }) {
   setStatus(statusElement, 'Adding image to canvas…');
   try {
-    await client.addAssetToCanvas(assetId);
-    setStatus(statusElement, 'Image added to canvas.');
+    const result = await client.addAssetToCanvas(assetId, options);
+    setStatus(statusElement, result?.added === false
+      ? 'The canvas already has content, so the image was not added automatically.'
+      : 'Image added to canvas.');
+    return result;
   } catch (error) {
     setStatus(statusElement, error instanceof Error ? error.message : 'Could not add image to canvas.', true);
     throw error;
@@ -463,7 +526,7 @@ async function undoCanvas({ client, canvasId, statusElement, onCanvasChange }) {
   }
 }
 
-function renderAgentEvent({ document, messagesElement, imagesElement, event, statusElement, activityElement, activityLabel, copyText, assetPreviews, pendingAssetCaptions, onLibraryRefresh, onCanvasChange, onCapabilities }) {
+function renderAgentEvent({ document, messagesElement, imagesElement, event, statusElement, activityElement, activityLabel, copyText, assetPreviews, pendingAssetCaptions, onLibraryRefresh, onCanvasChange, onCapabilities, onAddToCanvas, onImageReady }) {
   if (!event || typeof event.type !== 'string') return;
   if (event.type === 'capabilities') {
     onCapabilities?.(Array.isArray(event.tools) ? event.tools : []);
@@ -490,7 +553,7 @@ function renderAgentEvent({ document, messagesElement, imagesElement, event, sta
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(event.mimeType)) return;
     if (messagesElement && assetPreviews instanceof Map && /^[a-f0-9]{32}$/i.test(event.assetId || '')) {
       const assetId = event.assetId.toLowerCase();
-      const preview = appendImagePreviewMessage(document, messagesElement, event);
+      const preview = appendImagePreviewMessage(document, messagesElement, event, onAddToCanvas);
       const caption = pendingAssetCaptions?.get(assetId);
       if (caption) {
         preview.image.alt = caption;
@@ -498,6 +561,7 @@ function renderAgentEvent({ document, messagesElement, imagesElement, event, sta
         pendingAssetCaptions.delete(assetId);
       }
       assetPreviews.set(assetId, preview);
+      onImageReady?.({ assetId, preview });
     } else if (imagesElement) {
       const card = document.createElement('figure');
       card.className = 'image-result';
@@ -547,30 +611,119 @@ async function handleSettingsSubmit({ client, fields, statusElement }) {
   }
 }
 
-async function handleChatSubmit({ client, document, input, button, statusElement, messagesElement, mode = 'chat', size = '1024x1024', skills = [], activityElement, activityLabel, newChatButton, modeButtons, copyText }) {
+async function handleChatSubmit({ client, document, input, button, statusElement, messagesElement, mode = 'chat', size = '1024x1024', skills = [], kits = ['canvas-2d'], attachments = [], activityElement, activityLabel, newChatButton, modeButtons, copyText }) {
   const text = input.value.trim();
-  if (!text) return;
+  if (!text && attachments.length === 0) return;
+  const inputWasDisabled = input.disabled;
   button.disabled = true;
+  input.disabled = true;
   if (newChatButton) newChatButton.disabled = true;
   for (const modeButton of modeButtons || []) modeButton.disabled = true;
-  appendTextMessage(document, messagesElement, 'user', text, { mode });
+  const userMessage = appendTextMessage(document, messagesElement, 'user', text || 'Review the attached media.', { mode, attachments });
   if (activityLabel) activityLabel.textContent = mode === 'image' ? 'Preparing your image…' : 'Thinking through the next step…';
   if (activityElement) activityElement.hidden = false;
   setStatus(statusElement, '');
+  input.value = '';
   try {
-    const result = await client.sendMessage(text, { mode, size, skills });
-    input.value = '';
+    const message = text || 'Review the attached media and respond with what you find.';
+    const result = await client.sendMessage(message, {
+      mode,
+      size,
+      skills,
+      kits,
+      attachments: attachments.map(({ type, name, mimeType, data, frames }) => ({ type, name, mimeType, data, frames })),
+    });
     setStatus(statusElement, '');
     return result;
   } catch (error) {
+    if (!input.value.trim()) input.value = text;
+    userMessage?.remove?.();
     if (activityElement) activityElement.hidden = true;
-    setStatus(statusElement, error instanceof Error ? error.message : 'The message could not be sent.', true);
+    const detail = error instanceof Error ? error.message : 'The message could not be sent.';
+    const audioHint = attachments.some((attachment) => attachment.type === 'audio')
+      ? 'The selected model may not support audio input. '
+      : '';
+    setStatus(statusElement, `${audioHint}${detail}`, true);
     throw error;
   } finally {
     button.disabled = false;
+    input.disabled = inputWasDisabled;
     if (newChatButton) newChatButton.disabled = false;
     for (const modeButton of modeButtons || []) modeButton.disabled = modeButton.dataset.mode === 'video';
     if (activityElement) activityElement.hidden = true;
+  }
+}
+
+function resolveMediaType(file) {
+  const mimeType = file?.type?.toLowerCase() || '';
+  if (MEDIA_MIME_TYPES[mimeType]) return { mimeType: mimeType === 'audio/x-wav' ? 'audio/wav' : mimeType, type: MEDIA_MIME_TYPES[mimeType] };
+  const extension = String(file?.name || '').split('.').at(-1).toLowerCase();
+  const byExtension = {
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+    mp3: 'audio/mpeg', wav: 'audio/wav', mp4: 'video/mp4', webm: 'video/webm',
+  }[extension];
+  return byExtension ? { mimeType: byExtension, type: MEDIA_MIME_TYPES[byExtension] } : null;
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const comma = result.indexOf(',');
+      if (comma < 0) reject(new Error('The selected media could not be read.'));
+      else resolve(result.slice(comma + 1));
+    }, { once: true });
+    reader.addEventListener('error', () => reject(new Error('The selected media could not be read.')), { once: true });
+    reader.readAsDataURL(file);
+  });
+}
+
+async function sampleVideoFrames(document, file, previewUrl) {
+  const video = document.createElement('video');
+  video.muted = true;
+  video.preload = 'metadata';
+  video.src = previewUrl;
+  const waitForVideoEvent = (eventName, timeoutMessage, timeoutMs) => new Promise((resolve, reject) => {
+    let timer;
+    const cleanup = () => {
+      clearTimeout(timer);
+      video.removeEventListener(eventName, onReady);
+      video.removeEventListener('error', onError);
+    };
+    const onReady = () => { cleanup(); resolve(); };
+    const onError = () => { cleanup(); reject(new Error('This video could not be decoded.')); };
+    timer = setTimeout(() => { cleanup(); reject(new Error(timeoutMessage)); }, timeoutMs);
+    video.addEventListener(eventName, onReady, { once: true });
+    video.addEventListener('error', onError, { once: true });
+  });
+  try {
+    await waitForVideoEvent('loadedmetadata', 'Video metadata took too long to load.', 15_000);
+    if (!Number.isFinite(video.duration) || !video.videoWidth || !video.videoHeight) throw new Error('Video metadata is incomplete.');
+    if (video.duration > 3_600) throw new Error('Video files must be 60 minutes or shorter.');
+    const frameCount = Math.min(6, Math.max(1, Math.ceil(video.duration / 4)));
+    const canvas = document.createElement('canvas');
+    const scale = Math.min(1, 640 / video.videoWidth);
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Video frames could not be prepared.');
+    const frames = [];
+    for (let index = 0; index < frameCount; index += 1) {
+      const timestamp = video.duration * (index + 0.5) / frameCount;
+      if (Math.abs(video.currentTime - timestamp) > 0.01) {
+        const seeked = waitForVideoEvent('seeked', 'Video frame extraction timed out.', 10_000);
+        video.currentTime = timestamp;
+        await seeked;
+      }
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      frames.push({ timestamp: Number(timestamp.toFixed(2)), data: canvas.toDataURL('image/jpeg', 0.72).split(',')[1] });
+    }
+    return frames;
+  } finally {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
   }
 }
 
@@ -594,8 +747,12 @@ function wireRenderer({ document, client }) {
   const settingsForm = document.getElementById('settings-form');
   const settingsStatus = document.getElementById('settings-status');
   const settingsDialog = document.getElementById('settings-dialog');
+  const settingsSections = [
+    { id: 'connections', tab: document.getElementById('settings-tab-connections'), section: document.getElementById('settings-connections') },
+    { id: 'skills', tab: document.getElementById('settings-tab-skills'), section: document.getElementById('settings-skills') },
+    { id: 'kits', tab: document.getElementById('settings-tab-kits'), section: document.getElementById('settings-kits') },
+  ];
   const newCanvasDialog = document.getElementById('new-canvas-dialog');
-  const skillsDialog = document.getElementById('skills-dialog');
   const skillForm = document.getElementById('skill-form');
   const skillNameInput = document.getElementById('skill-name');
   const skillInstructionsInput = document.getElementById('skill-instructions');
@@ -606,6 +763,8 @@ function wireRenderer({ document, client }) {
   const skillEmpty = document.getElementById('skills-empty');
   const skillCount = document.getElementById('skill-count');
   const skillFileInput = document.getElementById('skill-import');
+  const installedSkillList = document.getElementById('installed-skills-list');
+  const installedSkillCount = document.getElementById('installed-skill-count');
   const newCanvasForm = document.getElementById('new-canvas-form');
   const newCanvasName = document.getElementById('new-canvas-name');
   const newCanvasSubmit = document.getElementById('new-canvas-submit');
@@ -613,6 +772,10 @@ function wireRenderer({ document, client }) {
   const messageInput = document.getElementById('message');
   const sendButton = document.getElementById('send');
   const sendLabel = document.getElementById('send-label');
+  const mediaFileInput = document.getElementById('media-files');
+  const attachMediaButton = document.getElementById('attach-media');
+  const attachmentStrip = document.getElementById('attachment-strip');
+  const composer = chatForm.querySelector('.composer');
   const statusElement = document.getElementById('status');
   const activityElement = document.getElementById('agent-activity');
   const activityLabel = document.getElementById('agent-activity-label');
@@ -623,11 +786,17 @@ function wireRenderer({ document, client }) {
   const canvasesEmpty = document.getElementById('canvases-empty');
   const mediaContent = document.getElementById('media-content');
   const canvasesContent = document.getElementById('canvases-content');
-  const runtimesContent = document.getElementById('runtimes-content');
+  const libraryTitle = document.getElementById('library-title');
+  const navExplorer = document.getElementById('nav-explorer');
+  const navMedia = document.getElementById('nav-media');
+  const activitySettings = document.getElementById('settings-open');
+  const kitOptions = [...document.querySelectorAll('[data-kit]')];
   const leftColumn = document.querySelector('.left-column');
+  const studio = document.querySelector('.studio');
   const libraryPanel = document.querySelector('.library');
   const conversationPanel = document.querySelector('.conversation');
   const splitter = document.getElementById('panel-splitter');
+  const workbenchSplitter = document.getElementById('workbench-splitter');
   const openCanvasTabsElement = document.getElementById('open-canvas-tabs');
   const canvasHost = document.getElementById('canvas-host');
   const canvasEmpty = document.getElementById('canvas-empty');
@@ -654,7 +823,11 @@ function wireRenderer({ document, client }) {
   let chatBusy = false;
   const assetPreviews = new Map();
   const pendingAssetCaptions = new Map();
+  let pendingAttachments = [];
+  const messageObjectUrls = new Set();
   let localSkills = readLocalSkills(storage);
+  let localKits = readLocalKits(storage);
+  let installedSkills = [];
   let modelProbeState = { model: '', chat: false, image: false };
   let editingSkillId = '';
 
@@ -676,10 +849,52 @@ function wireRenderer({ document, client }) {
     } catch {}
   }
 
+  function workbenchWidthLimits() {
+    const available = studio.getBoundingClientRect().width - 42 - 12 - 36 - 28 - 300;
+    return { min: 280, max: Math.max(280, Math.min(580, Math.floor(available))) };
+  }
+
+  function applyWorkbenchWidth(value) {
+    const limits = workbenchWidthLimits();
+    const width = Math.max(limits.min, Math.min(limits.max, Number(value) || 360));
+    studio.style.setProperty('--left-column-width', `${width}px`);
+    workbenchSplitter.setAttribute('aria-valuemin', String(limits.min));
+    workbenchSplitter.setAttribute('aria-valuemax', String(limits.max));
+    workbenchSplitter.setAttribute('aria-valuenow', String(Math.round(width)));
+    try {
+      storage?.setItem(WORKBENCH_WIDTH_STORAGE_KEY, String(width));
+    } catch {}
+  }
+
+  function selectLibraryView(view) {
+    const showMedia = view === 'media';
+    mediaContent.hidden = !showMedia;
+    canvasesContent.hidden = showMedia;
+    navExplorer.setAttribute('aria-pressed', String(!showMedia));
+    navMedia.setAttribute('aria-pressed', String(showMedia));
+    libraryTitle.textContent = showMedia ? 'Media' : 'Explorer';
+    libraryPanel.setAttribute('aria-label', showMedia ? 'Media library' : 'Project explorer');
+  }
+
+  function selectSettingsSection(id) {
+    for (const item of settingsSections) {
+      const active = item.id === id;
+      item.tab.setAttribute('aria-selected', String(active));
+      item.section.hidden = !active;
+    }
+  }
+
+  function openSettings(id = 'connections', focusTarget = null) {
+    selectSettingsSection(id);
+    activitySettings.setAttribute('aria-pressed', 'true');
+    if (!settingsDialog.open) openDialog(settingsDialog, focusTarget);
+    else focusTarget?.focus();
+  }
+
   function setPanelCollapsed(panelName, collapsed) {
     const panel = panelName === 'library' ? libraryPanel : conversationPanel;
     const button = document.getElementById(panelName === 'library' ? 'library-collapse' : 'chat-collapse');
-    const label = panelName === 'library' ? 'library' : 'chat';
+    const label = panelName === 'library' ? (navMedia.getAttribute('aria-pressed') === 'true' ? 'media' : 'explorer') : 'chat';
     panel.classList.toggle('is-collapsed', collapsed);
     leftColumn.classList.toggle(`is-${panelName}-collapsed`, collapsed);
     button.setAttribute('aria-expanded', String(!collapsed));
@@ -693,7 +908,7 @@ function wireRenderer({ document, client }) {
 
   function updateCanvasBounds() {
     if (!canvasHost || typeof client.setCanvasBounds !== 'function') return;
-    if ([settingsDialog, newCanvasDialog, skillsDialog].some((dialog) => dialog.open)) {
+    if ([settingsDialog, newCanvasDialog].some((dialog) => dialog.open)) {
       client.setCanvasBounds({ x: 0, y: 0, width: 0, height: 0 });
       return;
     }
@@ -717,9 +932,97 @@ function wireRenderer({ document, client }) {
   }
 
   function updateSendState() {
-    sendButton.disabled = chatBusy || !messageInput.value.trim();
+    sendButton.disabled = chatBusy || (!messageInput.value.trim() && pendingAttachments.length === 0);
+    messageInput.disabled = chatBusy;
+    attachMediaButton.disabled = chatBusy;
+    mediaFileInput.disabled = chatBusy;
+    attachmentStrip.querySelectorAll('button').forEach((button) => { button.disabled = chatBusy; });
     newChatButton.disabled = chatBusy;
     for (const button of modeButtons) button.disabled = chatBusy || button.dataset.mode === 'video';
+  }
+
+  function renderPendingAttachments() {
+    const chips = pendingAttachments.map((attachment) => {
+      const chip = document.createElement('div');
+      chip.className = 'attachment-chip';
+      if (attachment.type === 'image') {
+        const image = document.createElement('img');
+        image.src = attachment.previewUrl;
+        image.alt = '';
+        chip.append(image);
+      } else {
+        const kind = document.createElement('span');
+        kind.className = 'attachment-kind';
+        kind.textContent = attachment.type.toUpperCase();
+        chip.append(kind);
+      }
+      const name = document.createElement('span');
+      name.className = 'attachment-chip-name';
+      name.textContent = attachment.name;
+      const remove = document.createElement('button');
+      remove.className = 'attachment-remove';
+      remove.type = 'button';
+      remove.textContent = 'x';
+      remove.setAttribute('aria-label', `Remove ${attachment.name}`);
+      remove.addEventListener('click', () => {
+        pendingAttachments = pendingAttachments.filter((item) => item !== attachment);
+        URL.revokeObjectURL(attachment.previewUrl);
+        messageObjectUrls.delete(attachment.previewUrl);
+        renderPendingAttachments();
+        updateSendState();
+      });
+      chip.append(name, remove);
+      return chip;
+    });
+    attachmentStrip.replaceChildren(...chips);
+    attachmentStrip.hidden = chips.length === 0;
+  }
+
+  function addAttachmentFiles(files) {
+    if (chatBusy) return;
+    const errors = [];
+    for (const file of Array.from(files || [])) {
+      const media = resolveMediaType(file);
+      if (!media) {
+        errors.push(`${file.name || 'A file'} is not a supported image, audio, or video format.`);
+        continue;
+      }
+      if (!file.size || file.size > MAX_MEDIA_FILE_BYTES) {
+        errors.push(`${file.name || 'A file'} must be under 32 MiB.`);
+        continue;
+      }
+      if (pendingAttachments.length >= MAX_PENDING_ATTACHMENTS) {
+        errors.push(`Attach up to ${MAX_PENDING_ATTACHMENTS} files per message.`);
+        break;
+      }
+      const previewUrl = URL.createObjectURL(file);
+      messageObjectUrls.add(previewUrl);
+      pendingAttachments.push({ file, name: file.name || 'Media file', ...media, previewUrl });
+    }
+    renderPendingAttachments();
+    updateSendState();
+    if (errors.length) setStatus(statusElement, errors[0], true);
+    else if (files?.length) setStatus(statusElement, 'Attachments ready. Add a note or send them as-is.');
+  }
+
+  async function preparePendingAttachments() {
+    const prepared = [];
+    for (const attachment of pendingAttachments) {
+      const item = {
+        type: attachment.type,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        previewUrl: attachment.previewUrl,
+      };
+      if (attachment.type === 'video') {
+        setStatus(statusElement, `Sampling frames from ${attachment.name}…`);
+        item.frames = await sampleVideoFrames(document, attachment.file, attachment.previewUrl);
+      } else {
+        item.data = await readFileAsBase64(attachment.file);
+      }
+      prepared.push(item);
+    }
+    return prepared;
   }
 
   function setMode(nextMode) {
@@ -749,8 +1052,15 @@ function wireRenderer({ document, client }) {
           refreshSkillUi();
           return;
         }
+        const nextSkills = localSkills.map((skill) => skill.id === id ? { ...skill, enabled } : skill);
+        const activeInstructions = nextSkills.filter((skill) => skill.enabled).reduce((total, skill) => total + skill.instructions.length, 0);
+        if (activeInstructions > MAX_ACTIVE_SKILL_INSTRUCTIONS) {
+          setStatus(skillStatus, `Keep active skill instructions under ${MAX_ACTIVE_SKILL_INSTRUCTIONS} characters in total.`, true);
+          refreshSkillUi();
+          return;
+        }
         try {
-          localSkills = writeLocalSkills(localSkills.map((skill) => skill.id === id ? { ...skill, enabled } : skill), storage);
+          localSkills = writeLocalSkills(nextSkills, storage);
           setStatus(skillStatus, 'Skill selection saved.');
         } catch (error) {
           setStatus(skillStatus, error?.message || 'Could not save skill selection.', true);
@@ -781,6 +1091,52 @@ function wireRenderer({ document, client }) {
     const activeCount = renderSkillCount(skillCount, localSkills);
     const composerSkills = document.getElementById('composer-skills');
     composerSkills.textContent = activeCount ? `Skills · ${activeCount} active` : 'Use skills';
+  }
+
+  function renderInstalledSkillCatalog() {
+    const rows = installedSkills.map((skill) => {
+      const row = document.createElement('div');
+      row.className = 'installed-skill-row';
+      const name = document.createElement('span');
+      name.className = 'installed-skill-name';
+      name.textContent = skill.name;
+      if (skill.truncated) name.title = 'The full skill is longer than the per-skill prompt limit; only its first 32,000 characters are available.';
+      const skillId = `pack-${skill.id}`;
+      const exists = localSkills.some((item) => item.id === skillId);
+      const add = createButton(document, exists ? 'Added' : 'Add', 'button outline small', () => {
+        if (localSkills.length >= MAX_LOCAL_SKILLS) {
+          setStatus(skillStatus, `Keep up to ${MAX_LOCAL_SKILLS} skills on this device.`, true);
+          return;
+        }
+        try {
+          localSkills = writeLocalSkills([
+            ...localSkills,
+            { id: skillId, name: skill.name, instructions: skill.instructions, enabled: false },
+          ], storage);
+          refreshSkillUi();
+          renderInstalledSkillCatalog();
+          const limitNotice = skill.truncated ? ' The prompt was shortened to 32,000 characters.' : '';
+          setStatus(skillStatus, `${skill.name} added. Enable it when you want to use it.${limitNotice}`);
+        } catch (error) {
+          setStatus(skillStatus, error?.message || 'Could not add this skill.', true);
+        }
+      });
+      add.disabled = exists;
+      row.append(name, add);
+      return row;
+    });
+    installedSkillList.replaceChildren(...rows);
+    installedSkillCount.textContent = `${installedSkills.length} available`;
+  }
+
+  async function refreshInstalledSkillCatalog() {
+    try {
+      installedSkills = await client.listInstalledSkills();
+      renderInstalledSkillCatalog();
+    } catch {
+      installedSkillCount.textContent = 'Unavailable';
+      installedSkillList.replaceChildren();
+    }
   }
 
   function clearSkillEditor() {
@@ -1002,6 +1358,7 @@ function wireRenderer({ document, client }) {
     chatBusy = true;
     updateSendState();
     try {
+      const attachments = await preparePendingAttachments();
       await handleChatSubmit({
         client,
         document,
@@ -1012,19 +1369,45 @@ function wireRenderer({ document, client }) {
         mode,
         size: imageSize.value,
         skills: localSkills.filter((skill) => skill.enabled).map(({ name, instructions }) => ({ name, instructions })),
+        kits: localKits,
+        attachments,
         activityElement,
         activityLabel,
         newChatButton,
         modeButtons,
         copyText,
       });
-    } catch {} finally {
+      pendingAttachments = [];
+      renderPendingAttachments();
+    } catch (error) {
+      if (!statusElement.classList.contains('error')) setStatus(statusElement, error?.message || 'Could not prepare the attached media.', true);
+    } finally {
       chatBusy = false;
       updateSendState();
     }
   });
+  attachMediaButton.addEventListener('click', () => mediaFileInput.click());
+  mediaFileInput.addEventListener('change', () => {
+    addAttachmentFiles(mediaFileInput.files);
+    mediaFileInput.value = '';
+  });
   messageInput.addEventListener('input', updateSendState);
   messageInput.addEventListener('keydown', (event) => submitChatWithShortcut(event, chatForm, sendButton));
+  messageInput.addEventListener('paste', (event) => {
+    const files = [...(event.clipboardData?.items || [])].flatMap((item) => item.kind === 'file' ? [item.getAsFile()].filter(Boolean) : []);
+    if (files.length) {
+      event.preventDefault();
+      addAttachmentFiles(files);
+    }
+  });
+  composer.addEventListener('dragover', (event) => {
+    if ([...(event.dataTransfer?.types || [])].includes('Files')) event.preventDefault();
+  });
+  composer.addEventListener('drop', (event) => {
+    if (!event.dataTransfer?.files?.length) return;
+    event.preventDefault();
+    addAttachmentFiles(event.dataTransfer.files);
+  });
   for (const button of modeButtons) {
     if (button.dataset.mode !== 'video') button.addEventListener('click', () => setMode(button.dataset.mode));
   }
@@ -1036,17 +1419,18 @@ function wireRenderer({ document, client }) {
       messageInput.focus();
     });
   });
-  const libraryTabs = [
-    { button: document.getElementById('show-media'), content: mediaContent },
-    { button: document.getElementById('show-canvases'), content: canvasesContent },
-    { button: document.getElementById('show-runtimes'), content: runtimesContent },
-  ];
-  for (const selected of libraryTabs) {
-    selected.button.addEventListener('click', () => {
-      for (const tab of libraryTabs) {
-        const active = tab === selected;
-        tab.content.hidden = !active;
-        tab.button.setAttribute('aria-pressed', String(active));
+  navExplorer.addEventListener('click', () => selectLibraryView('explorer'));
+  navMedia.addEventListener('click', () => selectLibraryView('media'));
+  for (const item of settingsSections) item.tab.addEventListener('click', () => selectSettingsSection(item.id));
+  for (const checkbox of kitOptions) {
+    checkbox.checked = localKits.includes(checkbox.dataset.kit);
+    checkbox.addEventListener('change', () => {
+      try {
+        localKits = writeLocalKits(kitOptions.filter((option) => option.checked).map((option) => option.dataset.kit), storage);
+        setStatus(document.getElementById('kit-status'), 'Kit preferences saved for new canvases.');
+      } catch (error) {
+        checkbox.checked = !checkbox.checked;
+        setStatus(document.getElementById('kit-status'), error?.message || 'Could not save kit preferences.', true);
       }
     });
   }
@@ -1087,17 +1471,50 @@ function wireRenderer({ document, client }) {
     else return;
     event.preventDefault();
   });
-  document.getElementById('settings-open').addEventListener('click', () => openDialog(settingsDialog));
+  let workbenchPointerId = null;
+  const resizeWorkbenchAt = (clientX) => {
+    const bounds = leftColumn.getBoundingClientRect();
+    applyWorkbenchWidth(clientX - bounds.left - 6);
+  };
+  workbenchSplitter.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    workbenchPointerId = event.pointerId;
+    workbenchSplitter.setPointerCapture(event.pointerId);
+    workbenchSplitter.classList.add('is-dragging');
+    resizeWorkbenchAt(event.clientX);
+  });
+  workbenchSplitter.addEventListener('pointermove', (event) => {
+    if (event.pointerId === workbenchPointerId) resizeWorkbenchAt(event.clientX);
+  });
+  const stopWorkbenchResize = (event) => {
+    if (event.pointerId !== workbenchPointerId) return;
+    workbenchPointerId = null;
+    workbenchSplitter.classList.remove('is-dragging');
+  };
+  workbenchSplitter.addEventListener('pointerup', stopWorkbenchResize);
+  workbenchSplitter.addEventListener('pointercancel', stopWorkbenchResize);
+  workbenchSplitter.addEventListener('keydown', (event) => {
+    const current = Number(workbenchSplitter.getAttribute('aria-valuenow')) || 360;
+    const limits = workbenchWidthLimits();
+    if (event.key === 'ArrowLeft') applyWorkbenchWidth(current - 20);
+    else if (event.key === 'ArrowRight') applyWorkbenchWidth(current + 20);
+    else if (event.key === 'Home') applyWorkbenchWidth(limits.min);
+    else if (event.key === 'End') applyWorkbenchWidth(limits.max);
+    else return;
+    event.preventDefault();
+  });
+  activitySettings.addEventListener('click', () => openSettings('connections'));
+  document.getElementById('connections-open').addEventListener('click', () => openSettings('connections'));
   document.getElementById('settings-close').addEventListener('click', () => settingsDialog.close());
-  settingsDialog.addEventListener('close', updateCanvasBounds);
+  settingsDialog.addEventListener('close', () => {
+    activitySettings.setAttribute('aria-pressed', 'false');
+    updateCanvasBounds();
+  });
   const openSkills = () => {
     setStatus(skillStatus, '');
-    openDialog(skillsDialog, skillNameInput);
+    openSettings('skills', skillNameInput);
   };
-  document.getElementById('skills-open').addEventListener('click', openSkills);
   document.getElementById('composer-skills').addEventListener('click', openSkills);
-  document.getElementById('skills-close').addEventListener('click', () => skillsDialog.close());
-  skillsDialog.addEventListener('close', updateCanvasBounds);
   document.getElementById('skill-new').addEventListener('click', () => {
     clearSkillEditor();
     skillNameInput.focus();
@@ -1109,7 +1526,7 @@ function wireRenderer({ document, client }) {
     skillFileInput.value = '';
     if (!file) return;
     try {
-      if (file.size > MAX_SKILL_INSTRUCTIONS + 2_000) throw new Error('Choose a skill file under 14 KB.');
+      if (file.size > MAX_SKILL_INSTRUCTIONS * 4) throw new Error('Choose a skill file under 128 KB.');
       const imported = parseSkillMarkdown(await file.text(), file.name);
       editingSkillId = '';
       skillNameInput.value = imported.name;
@@ -1138,6 +1555,11 @@ function wireRenderer({ document, client }) {
       : [...localSkills, skill];
     if (next.length > MAX_LOCAL_SKILLS) {
       setStatus(skillStatus, `Keep up to ${MAX_LOCAL_SKILLS} skills on this device.`, true);
+      return;
+    }
+    const activeInstructions = next.filter((item) => item.enabled).reduce((total, item) => total + item.instructions.length, 0);
+    if (activeInstructions > MAX_ACTIVE_SKILL_INSTRUCTIONS) {
+      setStatus(skillStatus, `Keep active skill instructions under ${MAX_ACTIVE_SKILL_INSTRUCTIONS} characters in total.`, true);
       return;
     }
     try {
@@ -1185,6 +1607,10 @@ function wireRenderer({ document, client }) {
       }));
       assetPreviews.clear();
       pendingAssetCaptions.clear();
+      pendingAttachments = [];
+      for (const objectUrl of messageObjectUrls) URL.revokeObjectURL(objectUrl);
+      messageObjectUrls.clear();
+      renderPendingAttachments();
       messagesElement.scrollTop = 0;
       setStatus(statusElement, 'New chat started.');
     } catch (error) {
@@ -1204,6 +1630,28 @@ function wireRenderer({ document, client }) {
       assetPreviews,
       pendingAssetCaptions,
       onLibraryRefresh: refreshAssets,
+      onAddToCanvas: (assetId, button) => {
+        if (button?.disabled) return;
+        if (button) {
+          button.disabled = true;
+          button.textContent = 'Adding…';
+        }
+        addAssetToCanvas({
+          client,
+          assetId,
+          statusElement,
+          options: { createIfMissing: true },
+        }).catch(() => {}).finally(() => {
+          if (button) {
+            button.disabled = false;
+            button.textContent = 'Add to canvas';
+          }
+        });
+      },
+      onImageReady: ({ assetId }) => {
+        client.addAssetToCanvas(assetId, { onlyIfEmpty: true, createIfMissing: true })
+          .catch((error) => setStatus(statusElement, `Could not place the generated image on canvas: ${error?.message || 'canvas update failed'}`, true));
+      },
       onCanvasChange: (canvas) => {
         updateCanvasState({ id: canvas.canvasId, title: canvas.title, undoAvailable: canvas.undoAvailable });
         refreshCanvases();
@@ -1226,13 +1674,22 @@ function wireRenderer({ document, client }) {
   resizeObserver?.observe(canvasHost);
   const savedPanelRatio = readStoredValue(PANEL_RATIO_STORAGE_KEY);
   applyPanelRatio(savedPanelRatio === null ? 31 : Number(savedPanelRatio));
+  selectLibraryView('explorer');
+  selectSettingsSection('connections');
+  const savedWorkbenchWidth = readStoredValue(WORKBENCH_WIDTH_STORAGE_KEY);
+  applyWorkbenchWidth(savedWorkbenchWidth === null ? 360 : Number(savedWorkbenchWidth));
   setPanelCollapsed('library', readStoredValue('easel-studio.library-collapsed.v1') === 'true');
   setPanelCollapsed('chat', readStoredValue('easel-studio.chat-collapsed.v1') === 'true');
+  const handleWindowResize = () => {
+    applyWorkbenchWidth(Number(workbenchSplitter.getAttribute('aria-valuenow')) || 360);
+    updateCanvasBounds();
+  };
   if (typeof window !== 'undefined') {
-    window.addEventListener('resize', updateCanvasBounds);
+    window.addEventListener('resize', handleWindowResize);
     window.addEventListener('scroll', updateCanvasBounds, true);
   }
   refreshSkillUi();
+  refreshInstalledSkillCatalog();
   setMode(mode);
   updateSendState();
   refreshLibraries();
@@ -1243,7 +1700,7 @@ function wireRenderer({ document, client }) {
       unsubscribe();
       resizeObserver?.disconnect();
       if (typeof window !== 'undefined') {
-        window.removeEventListener('resize', updateCanvasBounds);
+        window.removeEventListener('resize', handleWindowResize);
         window.removeEventListener('scroll', updateCanvasBounds, true);
       }
     },
