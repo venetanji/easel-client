@@ -13,12 +13,19 @@ const CHANNELS = Object.freeze({
   SAVE_CANVAS: 'canvases:save',
   EXPORT_CANVAS: 'canvases:export',
   ADD_ASSET_TO_CANVAS: 'canvas:add-asset',
+  UNDO_CANVAS: 'canvas:undo',
   SET_CANVAS_BOUNDS: 'canvas:set-bounds',
+  LIST_LITELLM_MODELS: 'litellm:models:list',
+  TEST_LITELLM_CHAT: 'litellm:probe:chat',
+  TEST_LITELLM_IMAGE: 'litellm:probe:image',
 });
 
 function createBridge({ contextBridge: bridge, ipcRenderer: ipc }) {
   const api = Object.freeze({
     getSettings: () => ipc.invoke(CHANNELS.GET_SETTINGS),
+    listLiteLLMModels: () => ipc.invoke(CHANNELS.LIST_LITELLM_MODELS),
+    testLiteLLMChat: (model) => ipc.invoke(CHANNELS.TEST_LITELLM_CHAT, model),
+    testLiteLLMImage: (model) => ipc.invoke(CHANNELS.TEST_LITELLM_IMAGE, model),
     saveSettings: (settings) => ipc.invoke(CHANNELS.SAVE_SETTINGS, settings),
     sendMessage: (text, options) => ipc.invoke(CHANNELS.SEND_MESSAGE, text, options),
     clearChat: () => ipc.invoke(CHANNELS.CLEAR_CHAT),
@@ -29,6 +36,7 @@ function createBridge({ contextBridge: bridge, ipcRenderer: ipc }) {
     saveCanvas: (id) => ipc.invoke(CHANNELS.SAVE_CANVAS, id),
     exportCanvas: (id) => ipc.invoke(CHANNELS.EXPORT_CANVAS, id),
     addAssetToCanvas: (id) => ipc.invoke(CHANNELS.ADD_ASSET_TO_CANVAS, id),
+    undoCanvas: (id) => ipc.invoke(CHANNELS.UNDO_CANVAS, id),
     setCanvasBounds: (bounds) => ipc.send(CHANNELS.SET_CANVAS_BOUNDS, bounds),
     onAgentEvent(callback) {
       if (typeof callback !== 'function') throw new TypeError('Event callback must be a function.');

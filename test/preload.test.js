@@ -37,10 +37,15 @@ test('preload exposes a narrow frozen API without secret getters', async () => {
 
   assert.deepEqual(Object.keys(api).sort(), [
     'addAssetToCanvas', 'clearChat', 'createCanvas', 'exportCanvas', 'getSettings', 'listAssets', 'listCanvases',
-    'onAgentEvent', 'openCanvas', 'saveCanvas', 'saveSettings', 'sendMessage', 'setCanvasBounds',
+    'listLiteLLMModels', 'onAgentEvent', 'openCanvas', 'saveCanvas', 'saveSettings', 'sendMessage', 'setCanvasBounds',
+    'testLiteLLMChat', 'testLiteLLMImage', 'undoCanvas',
   ]);
   assert.equal(Object.isFrozen(api), true);
   await api.getSettings();
+  await api.listLiteLLMModels();
+  await api.testLiteLLMChat('model-a');
+  await api.testLiteLLMImage('model-a');
+  await api.undoCanvas('c'.repeat(32));
   await api.saveSettings({ easelApiKey: 'entered-once' });
   await api.sendMessage('generate a still life');
   await api.clearChat();
@@ -53,9 +58,10 @@ test('preload exposes a narrow frozen API without secret getters', async () => {
   await api.addAssetToCanvas('b'.repeat(32));
   api.setCanvasBounds({ x: 0, y: 0, width: 640, height: 480 });
   assert.deepEqual(calls.map((call) => call.channel), [
-    'settings:get', 'settings:save', 'chat:send', 'chat:clear', 'assets:list', 'canvases:list', 'canvases:create',
+    'settings:get', 'litellm:models:list', 'litellm:probe:chat', 'litellm:probe:image', 'canvas:undo', 'settings:save', 'chat:send', 'chat:clear', 'assets:list', 'canvases:list', 'canvases:create',
     'canvases:open', 'canvases:save', 'canvases:export', 'canvas:add-asset', 'canvas:set-bounds',
   ]);
+  assert.deepEqual(calls.slice(1, 5).map((call) => call.args), [[], ['model-a'], ['model-a'], ['c'.repeat(32)]]);
   const unsubscribe = api.onAgentEvent(() => {});
   assert.equal(listeners.size, 1);
   unsubscribe();

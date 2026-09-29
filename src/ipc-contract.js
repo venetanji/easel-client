@@ -11,7 +11,11 @@ const IPC_CHANNELS = Object.freeze({
   SAVE_CANVAS: 'canvases:save',
   EXPORT_CANVAS: 'canvases:export',
   ADD_ASSET_TO_CANVAS: 'canvas:add-asset',
+  UNDO_CANVAS: 'canvas:undo',
   SET_CANVAS_BOUNDS: 'canvas:set-bounds',
+  LIST_LITELLM_MODELS: 'litellm:models:list',
+  TEST_LITELLM_CHAT: 'litellm:probe:chat',
+  TEST_LITELLM_IMAGE: 'litellm:probe:image',
 });
 
 const SETTING_KEYS = new Set([
@@ -70,6 +74,13 @@ function validateChatMessage(value) {
   const message = value.trim();
   if (message.length > MAX_MESSAGE_LENGTH) throw new Error('Message is too long.');
   return message;
+}
+
+function validateLiteLLMModelInput(value) {
+  if (typeof value !== 'string' || !value.trim()) throw new Error('LiteLLM model is required.');
+  const model = value.trim();
+  if (model.length > 256) throw new Error('LiteLLM model is too long.');
+  return model;
 }
 
 function validateChatOptions(value) {
@@ -134,6 +145,7 @@ module.exports = {
   assertKnownChannel,
   assertTrustedSender,
   validateChatMessage,
+  validateLiteLLMModelInput,
   validateChatOptions,
   validateCanvasBounds,
   validateCanvasTitle,

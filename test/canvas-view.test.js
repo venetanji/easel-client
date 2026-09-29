@@ -62,7 +62,7 @@ test('embeds the canvas in an isolated web contents and scopes CDP to it', async
   assert.equal(fake.state.url, 'about:blank');
   assert.equal(fake.state.commands[0].method, 'Runtime.enable');
   assert.ok(fake.state.commands.some((command) => command.method === 'Runtime.evaluate' && command.params.expression.includes('A'.repeat(2_100_000))));
-  assert.equal(await canvas.inspect(), '{"ok":true}');
+  assert.equal(await canvas.inspect(), '{"ok":true,"consoleErrors":[]}');
   assert.equal((await canvas.saveCurrent()).id, 'c'.repeat(32));
   assert.match(fake.state.savedCanvas.html, /<h1>snapshot<\/h1>/);
   assert.equal(await canvas.addImage({ assetId: 'a'.repeat(32), alt: 'preview' }), '{"ok":true}');

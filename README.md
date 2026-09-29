@@ -5,7 +5,7 @@ A local-first Electron chat client for Easel image generation. LiteLLM supplies 
 ## Configure
 
 1. Install and run Easel at `https://easel.ait4x.org` (or enter your own Easel HTTP(S) endpoint in Connections).
-2. Enter your LiteLLM OpenAI-compatible endpoint, model ID, and optional key. The default endpoint is `http://127.0.0.1:4000/v1`.
+2. Enter your LiteLLM OpenAI-compatible endpoint and optional key, save, then refresh the discovered model list and choose a model. Use **Test text** and **Test image** to check its capabilities; the image test sends a real generation request. The default endpoint is `http://127.0.0.1:4000/v1`.
 3. Enter an Easel API key only if your deployment requires one, then save connections.
 
 Keys are encrypted with Electron `safeStorage` and are only decrypted in the main process. The app fails closed if secure storage is unavailable. LiteLLM and Easel endpoints are configured separately.
@@ -28,7 +28,7 @@ npm start
 
 The workspace keeps media and chat on the left and an isolated HTML/JavaScript canvas view on the right. It can host Canvas 2D or browser WebGL content within its offline sandbox, which makes it useful for interactive prototypes and small games. Use **Image** to generate a still, or **Chat** to shape a direction and edit the open canvas. Create a named empty image-grid canvas with **New canvas**. Press Enter to send; Ctrl+Enter inserts a new line. Images are stored locally under opaque IDs and embedded into self-contained HTML canvases that can be reopened and exported.
 
-The current asset library supports PNG, JPEG, and WebP images. Optional local kits for Deckgen.js, Phaser, Three.js, physics, Tone.js, and video editing are planned, along with glTF/GLB assets. Video mode stays disabled until a video generation tool is connected. External CDNs and filesystem access remain blocked inside the canvas.
+The current asset library supports PNG, JPEG, and WebP images. **Undo** restores recent assistant-driven canvas JavaScript and image-placement changes (up to ten snapshots per canvas in the current app session). Optional local kits for Deckgen.js, Phaser, Three.js, physics, Tone.js, and video editing are planned, along with glTF/GLB assets. Video mode stays disabled until a video generation tool is connected. External CDNs and filesystem access remain blocked inside the canvas.
 
 ## Creative skills
 

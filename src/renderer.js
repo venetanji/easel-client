@@ -5,6 +5,69 @@ function setStatus(element, message, isError = false) {
   element.setAttribute('aria-live', isError ? 'assertive' : 'polite');
 }
 
+function modelOption(select, model, label) {
+  const option = select.ownerDocument?.createElement('option') || { setAttribute() {} };
+  option.value = model;
+  option.textContent = label;
+  return option;
+}
+
+function ensureLiteLLMModelOption(select, model) {
+  const selected = typeof model === 'string' ? model.trim() : '';
+  if (!selected) return;
+  const options = Array.from(select.children || []);
+  if (!options.some((option) => option.value === selected)) {
+    const option = modelOption(select, selected, `${selected} (saved; not in catalog)`);
+    select.replaceChildren(option, ...options);
+  }
+  select.value = selected;
+}
+
+async function refreshLiteLLMModels({ client, select, statusElement }) {
+  const savedModel = select.value;
+  setStatus(statusElement, 'Loading LiteLLM models…');
+  try {
+    const models = await client.listLiteLLMModels();
+    const options = models.map((model) => modelOption(select, model.id, model.name === model.id ? model.id : `${model.name} — ${model.id}`));
+    if (savedModel && !models.some((model) => model.id === savedModel)) {
+      options.unshift(modelOption(select, savedModel, `${savedModel} (saved; not in catalog)`));
+    }
+    select.replaceChildren(...options);
+    select.value = savedModel || models[0]?.id || '';
+    setStatus(statusElement, `${models.length} LiteLLM model${models.length === 1 ? '' : 's'} loaded.`);
+    return models;
+  } catch (error) {
+    ensureLiteLLMModelOption(select, savedModel);
+    setStatus(statusElement, `Could not load LiteLLM models: ${error?.message || 'connection failed'}`, true);
+    throw error;
+  }
+}
+
+async function testLiteLLMConnection({ client, modelSelect, kind, statusElement, button, onSuccess, onFailure }) {
+  const model = modelSelect.value;
+  if (!model) {
+    setStatus(statusElement, 'Choose a LiteLLM model first.', true);
+    return;
+  }
+  if (!['chat', 'image'].includes(kind)) throw new Error('Unsupported LiteLLM test.');
+  if (button) button.disabled = true;
+  setStatus(statusElement, kind === 'chat' ? 'Testing text response…' : 'Testing image response…');
+  try {
+    const result = kind === 'chat'
+      ? await client.testLiteLLMChat(model)
+      : await client.testLiteLLMImage(model);
+    setStatus(statusElement, result.message);
+    onSuccess?.(kind, model, result);
+    return result;
+  } catch (error) {
+    onFailure?.(kind, model, error);
+    setStatus(statusElement, `Connection test failed: ${error?.message || 'request failed'}`, true);
+    throw error;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function normalizeResultSource(value) {
   if (typeof value !== 'string') return null;
   if (/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/i.test(value)) return value;
@@ -378,6 +441,28 @@ async function createCanvas({ client, title, statusElement }) {
   }
 }
 
+async function undoCanvas({ client, canvasId, statusElement, onCanvasChange }) {
+  if (!canvasId) {
+    setStatus(statusElement, 'Open a canvas before undoing changes.', true);
+    return null;
+  }
+  setStatus(statusElement, 'Undoing last canvas change…');
+  try {
+    const result = await client.undoCanvas(canvasId);
+    if (result?.undone) {
+      onCanvasChange?.(result);
+      setStatus(statusElement, `Undid last change to ${result.title || 'canvas'}.`);
+    } else {
+      onCanvasChange?.(result);
+      setStatus(statusElement, 'Nothing to undo.');
+    }
+    return result;
+  } catch (error) {
+    setStatus(statusElement, error instanceof Error ? error.message : 'Could not undo canvas change.', true);
+    throw error;
+  }
+}
+
 function renderAgentEvent({ document, messagesElement, imagesElement, event, statusElement, activityElement, activityLabel, copyText, assetPreviews, pendingAssetCaptions, onLibraryRefresh, onCanvasChange, onCapabilities }) {
   if (!event || typeof event.type !== 'string') return;
   if (event.type === 'capabilities') {
@@ -550,6 +635,7 @@ function wireRenderer({ document, client }) {
   const canvasState = document.getElementById('canvas-state');
   const canvasStateDot = document.getElementById('canvas-state-dot');
   const exportCurrentButton = document.getElementById('export-current');
+  const undoCanvasButton = document.getElementById('canvas-undo');
   const modelLabel = document.getElementById('model-label');
   const connectionDot = document.getElementById('connection-dot');
   const imageSizeWrap = document.getElementById('image-size-wrap');
@@ -569,6 +655,7 @@ function wireRenderer({ document, client }) {
   const assetPreviews = new Map();
   const pendingAssetCaptions = new Map();
   let localSkills = readLocalSkills(storage);
+  let modelProbeState = { model: '', chat: false, image: false };
   let editingSkillId = '';
 
   function readStoredValue(key) {
@@ -706,11 +793,32 @@ function wireRenderer({ document, client }) {
   }
 
   function persistSettingsStatus(settings) {
-    const configured = Boolean(settings.litellmModel);
-    connectionDot.classList.toggle('ready', configured);
-    connectionDot.classList.toggle('needs-setup', !configured);
-    connectionDot.title = configured ? 'LiteLLM model configured' : 'Add a LiteLLM model in Connections';
-    modelLabel.textContent = configured ? settings.litellmModel : 'Add a model in Connections to start';
+    const model = typeof settings.litellmModel === 'string' ? settings.litellmModel : '';
+    if (modelProbeState.model !== model) modelProbeState = { model, chat: false, image: false };
+    const configured = Boolean(model);
+    const verified = configured && modelProbeState.chat && modelProbeState.image;
+    connectionDot.classList.toggle('ready', verified);
+    connectionDot.classList.toggle('needs-setup', !verified);
+    connectionDot.title = verified
+      ? 'LiteLLM text and image tests passed'
+      : configured ? 'LiteLLM model selected; connection tests are incomplete' : 'Choose a LiteLLM model in Connections';
+    if (!configured) modelLabel.textContent = 'Choose a model in Connections to start';
+    else if (verified) modelLabel.textContent = `${model} · verified`;
+    else if (modelProbeState.chat) modelLabel.textContent = `${model} · text tested`;
+    else if (modelProbeState.image) modelLabel.textContent = `${model} · image tested`;
+    else modelLabel.textContent = `${model} · not yet tested`;
+  }
+
+  function recordModelProbe(kind, model) {
+    if (modelProbeState.model !== model) modelProbeState = { model, chat: false, image: false };
+    modelProbeState[kind] = true;
+    persistSettingsStatus({ litellmModel: model });
+  }
+
+  function clearModelProbe(kind, model) {
+    if (modelProbeState.model !== model) modelProbeState = { model, chat: false, image: false };
+    modelProbeState[kind] = false;
+    persistSettingsStatus({ litellmModel: model });
   }
 
   async function refreshAssets() {
@@ -770,6 +878,7 @@ function wireRenderer({ document, client }) {
     canvasState.textContent = activeCanvasId ? 'Open' : 'Ready';
     canvasStateDot.classList.toggle('ready', Boolean(activeCanvasId));
     exportCurrentButton.disabled = !activeCanvasId;
+    undoCanvasButton.disabled = !activeCanvasId || canvas?.undoAvailable !== true;
     canvasEmpty.hidden = Boolean(activeCanvasId);
     refreshAssets();
     updateCanvasBounds();
@@ -841,6 +950,7 @@ function wireRenderer({ document, client }) {
         canvasState.textContent = 'Ready';
         canvasStateDot.classList.remove('ready');
         exportCurrentButton.disabled = true;
+        undoCanvasButton.disabled = true;
         canvasEmpty.hidden = false;
         refreshAssets();
         updateCanvasBounds();
@@ -853,11 +963,37 @@ function wireRenderer({ document, client }) {
     }
   }
 
+  const refreshLiteLLMButton = document.getElementById('litellm-refresh-models');
+  const testLiteLLMChatButton = document.getElementById('litellm-test-chat');
+  const testLiteLLMImageButton = document.getElementById('litellm-test-image');
+  async function refreshModelCatalog() {
+    const models = await refreshLiteLLMModels({ client, select: fields.litellmModel, statusElement: settingsStatus });
+    persistSettingsStatus({ litellmModel: fields.litellmModel.value });
+    return models;
+  }
+  refreshLiteLLMButton.addEventListener('click', () => {
+    refreshModelCatalog().catch(() => {});
+  });
+  testLiteLLMChatButton.addEventListener('click', () => {
+    testLiteLLMConnection({
+      client, modelSelect: fields.litellmModel, kind: 'chat', statusElement: settingsStatus,
+      button: testLiteLLMChatButton, onSuccess: recordModelProbe, onFailure: clearModelProbe,
+    }).catch(() => {});
+  });
+  testLiteLLMImageButton.addEventListener('click', () => {
+    testLiteLLMConnection({
+      client, modelSelect: fields.litellmModel, kind: 'image', statusElement: settingsStatus,
+      button: testLiteLLMImageButton, onSuccess: recordModelProbe, onFailure: clearModelProbe,
+    }).catch(() => {});
+  });
+  fields.litellmModel.addEventListener('change', () => persistSettingsStatus({ litellmModel: fields.litellmModel.value }));
   settingsForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     try {
       const settings = await handleSettingsSubmit({ client, fields, statusElement: settingsStatus });
+      modelProbeState = { model: settings.litellmModel || '', chat: false, image: false };
       persistSettingsStatus(settings);
+      await refreshModelCatalog().catch(() => {});
     } catch {}
   });
   chatForm.addEventListener('submit', async (event) => {
@@ -1031,6 +1167,12 @@ function wireRenderer({ document, client }) {
     }
   });
   exportCurrentButton.addEventListener('click', () => exportCanvas({ client, canvasId: activeCanvasId, statusElement }).catch(() => {}));
+  undoCanvasButton.addEventListener('click', () => undoCanvas({
+    client,
+    canvasId: activeCanvasId,
+    statusElement,
+    onCanvasChange: updateCanvasState,
+  }).catch(() => {}));
   newChatButton.addEventListener('click', async () => {
     if (chatBusy) return;
     try {
@@ -1063,7 +1205,7 @@ function wireRenderer({ document, client }) {
       pendingAssetCaptions,
       onLibraryRefresh: refreshAssets,
       onCanvasChange: (canvas) => {
-        updateCanvasState({ id: canvas.canvasId, title: canvas.title });
+        updateCanvasState({ id: canvas.canvasId, title: canvas.title, undoAvailable: canvas.undoAvailable });
         refreshCanvases();
       },
       onCapabilities: (tools) => {
@@ -1074,7 +1216,7 @@ function wireRenderer({ document, client }) {
   client.getSettings().then((settings) => {
     fields.easelBaseUrl.value = settings.easelBaseUrl;
     fields.litellmBaseUrl.value = settings.litellmBaseUrl;
-    fields.litellmModel.value = settings.litellmModel;
+    ensureLiteLLMModelOption(fields.litellmModel, settings.litellmModel);
     fields.easelApiKey.placeholder = settings.hasEaselApiKey ? 'Saved securely' : 'Optional';
     fields.litellmApiKey.placeholder = settings.hasLiteLLMApiKey ? 'Saved securely' : 'Optional';
     persistSettingsStatus(settings);
@@ -1120,6 +1262,9 @@ if (typeof module !== 'undefined') {
     handleChatSubmit,
     submitChatWithShortcut,
     handleSettingsSubmit,
+    undoCanvas,
+    refreshLiteLLMModels,
+    testLiteLLMConnection,
     renderAgentEvent,
     renderAssetLibrary,
     renderCanvasLibrary,

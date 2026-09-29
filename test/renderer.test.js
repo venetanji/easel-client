@@ -3,6 +3,9 @@ const assert = require('node:assert/strict');
 const {
   handleChatSubmit,
   handleSettingsSubmit,
+  refreshLiteLLMModels,
+  testLiteLLMConnection,
+  undoCanvas,
   renderAgentEvent,
   renderAssetLibrary,
   renderCanvasLibrary,
@@ -68,6 +71,75 @@ test('saves endpoint settings, clears entered secrets, and only receives public 
   assert.match(status.textContent, /saved/i);
 });
 
+test('refreshes one model catalog and preserves a saved model omitted by the server', async () => {
+  const select = element('select');
+  select.value = 'saved/model';
+  const status = element();
+  let requests = 0;
+  const models = await refreshLiteLLMModels({
+    client: { async listLiteLLMModels() { requests += 1; return [{ id: 'new/model', name: 'New Model' }]; } },
+    select,
+    statusElement: status,
+  });
+  assert.equal(requests, 1);
+  assert.deepEqual(models, [{ id: 'new/model', name: 'New Model' }]);
+  assert.equal(select.children.length, 2);
+  assert.equal(select.children[0].value, 'saved/model');
+  assert.equal(select.children[0].textContent, 'saved/model (saved; not in catalog)');
+  assert.equal(select.value, 'saved/model');
+  assert.match(status.textContent, /1 LiteLLM model/i);
+});
+
+test('keeps the saved model and reports a useful status when catalog refresh fails', async () => {
+  const select = element('select');
+  select.value = 'saved/model';
+  const status = element();
+  await assert.rejects(refreshLiteLLMModels({
+    client: { async listLiteLLMModels() { throw new Error('server unavailable'); } },
+    select,
+    statusElement: status,
+  }), /server unavailable/);
+  assert.equal(select.value, 'saved/model');
+  assert.match(status.textContent, /could not load.*server unavailable/i);
+});
+
+test('runs only the explicitly selected text or image connection probe', async () => {
+  const status = element();
+  const selected = element('select');
+  selected.value = 'provider/model-a';
+  const calls = [];
+  const verified = [];
+  const client = {
+    async testLiteLLMChat(model) { calls.push(['chat', model]); return { ok: true, message: 'Text response received.' }; },
+    async testLiteLLMImage(model) { calls.push(['image', model]); return { ok: true, message: 'Image generation response received.' }; },
+  };
+  await testLiteLLMConnection({
+    client, modelSelect: selected, kind: 'chat', statusElement: status,
+    onSuccess: (kind, model) => verified.push([kind, model]),
+  });
+  assert.match(status.textContent, /text response received/i);
+  await testLiteLLMConnection({
+    client, modelSelect: selected, kind: 'image', statusElement: status,
+    onSuccess: (kind, model) => verified.push([kind, model]),
+  });
+  assert.match(status.textContent, /image generation response received/i);
+  assert.deepEqual(calls, [['chat', 'provider/model-a'], ['image', 'provider/model-a']]);
+  assert.deepEqual(verified, [['chat', 'provider/model-a'], ['image', 'provider/model-a']]);
+});
+
+test('clears a prior capability result when a later probe fails', async () => {
+  const status = element();
+  const failures = [];
+  await assert.rejects(testLiteLLMConnection({
+    client: { async testLiteLLMChat() { throw new Error('endpoint unavailable'); } },
+    modelSelect: Object.assign(element('select'), { value: 'provider/model-a' }),
+    kind: 'chat',
+    statusElement: status,
+    onFailure: (kind, model) => failures.push([kind, model]),
+  }), /endpoint unavailable/);
+  assert.deepEqual(failures, [['chat', 'provider/model-a']]);
+});
+
 test('submits chat messages and always re-enables the send button', async () => {
   const input = element('textarea');
   input.value = '  make a paper crane  ';
@@ -99,6 +171,36 @@ test('creates a named canvas through the client and reports its title', async ()
   });
   assert.equal(result.title, 'Campaign board');
   assert.equal(status.textContent, 'Created Campaign board.');
+});
+
+test('undoes a canvas change and updates the active canvas state', async () => {
+  const status = element();
+  const updated = [];
+  const result = await undoCanvas({
+    client: { async undoCanvas(id) { return { id, title: 'Board', undone: true, undoAvailable: false }; } },
+    canvasId: 'c'.repeat(32),
+    statusElement: status,
+    onCanvasChange: (canvas) => updated.push(canvas),
+  });
+  assert.equal(result.undone, true);
+  assert.equal(status.textContent, 'Undid last change to Board.');
+  assert.deepEqual(updated, [result]);
+});
+
+test('reports when there is no canvas change to undo', async () => {
+  const status = element();
+  let requests = 0;
+  let updated;
+  const result = await undoCanvas({
+    client: { async undoCanvas(id) { requests += 1; return { id, title: 'Board', undone: false, undoAvailable: false }; } },
+    canvasId: 'c'.repeat(32),
+    statusElement: status,
+    onCanvasChange: (canvas) => { updated = canvas; },
+  });
+  assert.equal(requests, 1);
+  assert.equal(result.undone, false);
+  assert.equal(updated.undoAvailable, false);
+  assert.equal(status.textContent, 'Nothing to undo.');
 });
 
 test('Enter submits chat while Ctrl+Enter remains multiline', () => {

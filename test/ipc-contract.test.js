@@ -8,10 +8,12 @@ const {
   validateChatMessage,
   validateOpaqueId,
   validateSettingsInput,
+  validateLiteLLMModelInput,
 } = require('../src/ipc-contract');
 
 test('accepts only declared IPC channels', () => {
   assert.equal(assertKnownChannel(IPC_CHANNELS.GET_SETTINGS), IPC_CHANNELS.GET_SETTINGS);
+  assert.equal(assertKnownChannel(IPC_CHANNELS.UNDO_CANVAS), 'canvas:undo');
   assert.throws(() => assertKnownChannel('shell:exec'), /unsupported IPC channel/i);
 });
 
@@ -19,6 +21,12 @@ test('validates settings IPC payloads as plain objects', () => {
   assert.deepEqual(validateSettingsInput({ litellmModel: ' model-a ' }), { litellmModel: 'model-a' });
   assert.throws(() => validateSettingsInput(null), /settings object/i);
   assert.throws(() => validateSettingsInput({ unexpected: true }), /unsupported setting/i);
+});
+
+test('validates selected LiteLLM model IDs for explicit connection probes', () => {
+  assert.equal(validateLiteLLMModelInput(' provider/model-a '), 'provider/model-a');
+  assert.throws(() => validateLiteLLMModelInput(' '), /model is required/i);
+  assert.throws(() => validateLiteLLMModelInput('x'.repeat(257)), /too long/i);
 });
 
 test('validates and bounds chat messages', () => {

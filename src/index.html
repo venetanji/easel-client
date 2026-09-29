@@ -322,7 +322,7 @@
       <section class="panel canvas-panel" aria-label="HTML canvas workspace">
         <div class="canvas-toolbar">
           <div class="canvas-heading"><h2 id="canvas-title">Canvas</h2><span class="canvas-state"><span id="canvas-state-dot" class="state-dot" aria-hidden="true"></span><span id="canvas-state">Ready</span></span></div>
-          <div class="canvas-toolbar-actions"><button id="new-canvas-open" class="button outline small" type="button">New canvas</button><button id="export-current" class="button primary small" type="button" disabled>Export HTML</button></div>
+          <div class="canvas-toolbar-actions"><button id="new-canvas-open" class="button outline small" type="button">New canvas</button><button id="canvas-undo" class="button outline small" type="button" disabled>Undo</button><button id="export-current" class="button primary small" type="button" disabled>Export HTML</button></div>
         </div>
         <div id="open-canvas-tabs" class="canvas-tabs" role="group" aria-label="Open canvases" hidden></div>
         <div id="canvas-host" class="canvas-host">
@@ -336,15 +336,20 @@
       </section>
     </main>
     <dialog id="settings-dialog" aria-labelledby="settings-title">
-      <div class="dialog-head"><div><h2 id="settings-title">Connections</h2><p class="dialog-description">Keep your Easel media server and language model credentials on this device.</p></div><button id="settings-close" class="button outline small" type="button">Done</button></div>
+      <div class="dialog-head"><div><h2 id="settings-title">Connections</h2><p class="dialog-description">Keep your Easel media server and language model credentials on this device. Save the LiteLLM endpoint and key before refreshing or testing models; save the selected model to use it in chat. Test image sends a real generation request.</p></div><button id="settings-close" class="button outline small" type="button">Done</button></div>
       <form id="settings-form" class="settings-form">
         <label class="field" for="easel-url">Easel endpoint<input id="easel-url" name="easelBaseUrl" type="url" /></label>
         <label class="field" for="easel-key">Easel API key<input id="easel-key" name="easelApiKey" type="password" autocomplete="new-password" placeholder="Optional" /></label>
         <label class="check"><input id="clear-easel-key" type="checkbox" /> Clear saved Easel key</label>
         <label class="field" for="litellm-url">LiteLLM endpoint<input id="litellm-url" name="litellmBaseUrl" type="url" /></label>
-        <label class="field" for="litellm-model">Model ID<input id="litellm-model" name="litellmModel" type="text" placeholder="provider/model-name" /></label>
         <label class="field" for="litellm-key">LiteLLM API key<input id="litellm-key" name="litellmApiKey" type="password" autocomplete="new-password" placeholder="Optional" /></label>
         <label class="check"><input id="clear-litellm-key" type="checkbox" /> Clear saved LiteLLM key</label>
+        <label class="field" for="litellm-model">LiteLLM model<select id="litellm-model" name="litellmModel" aria-describedby="settings-status"></select></label>
+        <div class="button-row" aria-label="LiteLLM connection tests">
+          <button id="litellm-refresh-models" class="button outline small" type="button">Refresh models</button>
+          <button id="litellm-test-chat" class="button outline small" type="button">Test text</button>
+          <button id="litellm-test-image" class="button outline small" type="button">Test image</button>
+        </div>
         <button class="button primary settings-submit" type="submit">Save connections</button>
         <p id="settings-status" role="status" aria-live="polite"></p>
       </form>

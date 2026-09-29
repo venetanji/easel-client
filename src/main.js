@@ -18,6 +18,7 @@ const {
   validateCanvasTitle,
   validateChatMessage,
   validateChatOptions,
+  validateLiteLLMModelInput,
   validateOpaqueId,
   validateSettingsInput,
 } = require('./ipc-contract');
@@ -25,7 +26,9 @@ const { createSettingsStore } = require('./settings-store');
 const { createAssetStore } = require('./asset-store');
 const { createCanvasStore } = require('./canvas-store');
 const { createCanvasView } = require('./canvas-view');
+const { createCanvasHistory } = require('./canvas-history');
 const { createChatService } = require('./chat-service');
+const { createLiteLLMModelService } = require('./litellm-models');
 
 const SETTINGS = createSettingsStore({
   userDataPath: app.getPath('userData'),
@@ -47,6 +50,7 @@ const ASSETS = createAssetStore({
   },
 });
 const CANVASES = createCanvasStore({ userDataPath: app.getPath('userData') });
+const CANVAS_HISTORY = createCanvasHistory();
 let mainWindow;
 let canvasView;
 
@@ -56,8 +60,14 @@ function requireCanvasView() {
 }
 
 function emitCanvasSaved(canvas) {
+  const canvasId = canvas.id || canvas.canvasId || '';
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, { type: 'canvas', title: canvas.title, canvasId: canvas.id });
+    mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, {
+      type: 'canvas',
+      title: canvas.title,
+      canvasId,
+      undoAvailable: Boolean(canvasId && CANVAS_HISTORY.canUndo(canvasId)),
+    });
   }
 }
 
@@ -65,6 +75,15 @@ async function saveCanvasBeforeSwitch(controller) {
   if (controller.getCurrentCanvasId()) await controller.saveCurrent();
 }
 
+async function checkpointCanvasForUndo(controller) {
+  const canvasId = controller.getCurrentCanvasId();
+  if (!canvasId) return '';
+  await controller.saveCurrent();
+  CANVAS_HISTORY.record(canvasId, CANVASES.get(canvasId).html);
+  return canvasId;
+}
+
+const LITELLM_MODELS = createLiteLLMModelService({ settingsStore: SETTINGS });
 const CHAT = createChatService({
   settingsStore: SETTINGS,
   assetStore: ASSETS,
@@ -83,12 +102,14 @@ const CHAT = createChatService({
     inspect: () => requireCanvasView().inspect(),
     execute: async (code) => {
       const controller = requireCanvasView();
+      await checkpointCanvasForUndo(controller);
       const result = await controller.execute(code);
       emitCanvasSaved(await controller.saveCurrent());
       return result;
     },
     addImage: async (options) => {
       const controller = requireCanvasView();
+      await checkpointCanvasForUndo(controller);
       const result = await controller.addImage(options);
       emitCanvasSaved(await controller.saveCurrent());
       return result;
@@ -103,6 +124,18 @@ function registerIpcHandlers() {
   ipcMain.handle(IPC_CHANNELS.GET_SETTINGS, (event) => {
     assertTrustedSender(event, mainWindow);
     return SETTINGS.loadPublic();
+  });
+  ipcMain.handle(IPC_CHANNELS.LIST_LITELLM_MODELS, (event) => {
+    assertTrustedSender(event, mainWindow);
+    return LITELLM_MODELS.listModels();
+  });
+  ipcMain.handle(IPC_CHANNELS.TEST_LITELLM_CHAT, (event, model) => {
+    assertTrustedSender(event, mainWindow);
+    return LITELLM_MODELS.testChat(validateLiteLLMModelInput(model));
+  });
+  ipcMain.handle(IPC_CHANNELS.TEST_LITELLM_IMAGE, (event, model) => {
+    assertTrustedSender(event, mainWindow);
+    return LITELLM_MODELS.testImage(validateLiteLLMModelInput(model));
   });
   ipcMain.handle(IPC_CHANNELS.SAVE_SETTINGS, (event, input) => {
     assertTrustedSender(event, mainWindow);
@@ -129,14 +162,16 @@ function registerIpcHandlers() {
     assertTrustedSender(event, mainWindow);
     const controller = requireCanvasView();
     await saveCanvasBeforeSwitch(controller);
-    return controller.createEmpty(validateCanvasTitle(title));
+    const canvas = await controller.createEmpty(validateCanvasTitle(title));
+    return { ...canvas, undoAvailable: CANVAS_HISTORY.canUndo(canvas.id) };
   });
   ipcMain.handle(IPC_CHANNELS.OPEN_CANVAS, async (event, id) => {
     assertTrustedSender(event, mainWindow);
     const canvasId = validateOpaqueId(id, 'Canvas ID');
     const controller = requireCanvasView();
     if (controller.getCurrentCanvasId() !== canvasId) await saveCanvasBeforeSwitch(controller);
-    return controller.openSaved(canvasId);
+    const canvas = await controller.openSaved(canvasId);
+    return { ...canvas, undoAvailable: CANVAS_HISTORY.canUndo(canvasId) };
   });
   ipcMain.handle(IPC_CHANNELS.SAVE_CANVAS, async (event, id) => {
     assertTrustedSender(event, mainWindow);
@@ -164,9 +199,36 @@ function registerIpcHandlers() {
   ipcMain.handle(IPC_CHANNELS.ADD_ASSET_TO_CANVAS, async (event, id) => {
     assertTrustedSender(event, mainWindow);
     const controller = requireCanvasView();
+    await checkpointCanvasForUndo(controller);
     const result = await controller.addImage({ assetId: validateOpaqueId(id, 'Asset ID') });
     emitCanvasSaved(await controller.saveCurrent());
     return result;
+  });
+  ipcMain.handle(IPC_CHANNELS.UNDO_CANVAS, async (event, id) => {
+    assertTrustedSender(event, mainWindow);
+    const canvasId = validateOpaqueId(id, 'Canvas ID');
+    const controller = requireCanvasView();
+    if (controller.getCurrentCanvasId() !== canvasId) throw new Error('Open this canvas before undoing changes.');
+    const snapshot = CANVAS_HISTORY.undo(canvasId);
+    if (snapshot === null) {
+      const canvas = CANVASES.get(canvasId);
+      return { id: canvasId, title: canvas.title, undone: false, undoAvailable: false };
+    }
+    try {
+      const saved = CANVASES.update(canvasId, snapshot);
+      const opened = await controller.openSaved(canvasId);
+      const result = {
+        ...opened,
+        updatedAt: saved.updatedAt,
+        undone: true,
+        undoAvailable: CANVAS_HISTORY.canUndo(canvasId),
+      };
+      emitCanvasSaved(result);
+      return result;
+    } catch (error) {
+      CANVAS_HISTORY.record(canvasId, snapshot);
+      throw error;
+    }
   });
   ipcMain.on(IPC_CHANNELS.SET_CANVAS_BOUNDS, (event, input) => {
     assertTrustedSender(event, mainWindow);
