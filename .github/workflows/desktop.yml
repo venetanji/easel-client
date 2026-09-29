@@ -25,7 +25,7 @@ jobs:
             target: linux
     runs-on: ${{ matrix.os }}
     env:
-      ELECTRON_CACHE: ${{ runner.temp }}/electron-cache
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,7 +34,7 @@ jobs:
           cache: npm
       - uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/electron-cache
+          path: ${{ github.workspace }}/.cache/electron
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
       - name: Verify release tag and build MCP package
