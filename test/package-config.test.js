@@ -20,6 +20,7 @@ test('declares v0.0.1 cross-platform package scripts and MCP runtime files', () 
   assert.match(builder, /AppImage/);
   assert.match(builder, /nsis/);
   assert.match(builder, /dmg/);
+  assert.match(builder, /maintainer: ["']?Giovanni Lion <giovanni\.lion@gmail\.com>["']?/);
   assert.match(desktopWorkflow, /Install Electron binary[\s\S]*?node node_modules\/electron\/install\.js/);
   assert.match(desktopWorkflow, /electron_config_cache:/);
 });

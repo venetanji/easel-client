@@ -27,6 +27,7 @@ linux:
     - AppImage
     - deb
   category: Graphics
+  maintainer: "Giovanni Lion <giovanni.lion@gmail.com>"
 nsis:
   oneClick: false
   perMachine: false
