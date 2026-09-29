@@ -12,7 +12,7 @@ function defaultMcpLaunchOptions(settings, secrets, { isPackaged = false, resour
   return {
     command: process.execPath,
     args: [serverEntry],
-    cwd: appRoot,
+    cwd: isPackaged ? resourcesPath : appRoot,
     env: {
       PATH: process.env.PATH || '',
       HOME: process.env.HOME || '',
@@ -33,13 +33,14 @@ function createChatService({
   mcpFactory = createMediaMcpClient,
   mcpLaunchOptions = defaultMcpLaunchOptions,
   runtime = {},
+  canvasController,
   presentCanvas,
   onEvent,
 }) {
   const history = [];
   let busy = false;
 
-  async function sendMessage(input) {
+  async function sendMessage(input, { mode = 'chat', size = '1024x1024', skills = [] } = {}) {
     const userMessage = validateChatMessage(input);
     if (busy) throw new Error('A chat turn is already running.');
     busy = true;
@@ -57,10 +58,14 @@ function createChatService({
       try {
         const result = await runAgentTurn({
           userMessage,
+          mode,
+          size,
+          skills,
           history,
           llm,
           mcp,
           assetStore,
+          canvasController,
           presentCanvas,
           onEvent,
         });

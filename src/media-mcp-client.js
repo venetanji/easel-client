@@ -11,30 +11,46 @@ function createMediaMcpClient({
   command,
   args = [],
   env = {},
-  transportFactory = (options) => new StdioClientTransport({ ...options, stderr: 'inherit', maxBufferSize: 64 * 1024 * 1024 }),
+  cwd,
+  transportFactory = (options) => new StdioClientTransport({ ...options, stderr: 'pipe', maxBufferSize: 64 * 1024 * 1024 }),
   clientFactory = () => new Client({ name: 'easel-client', version: '0.0.1' }),
 }) {
   if (typeof command !== 'string' || !command.trim()) throw new Error('Media MCP command is required.');
-  const transport = transportFactory({ command, args, env });
+  const transport = transportFactory({ command, args, env, cwd });
   const client = clientFactory();
 
   let connected = false;
   let closed = false;
+  let serverStderr = '';
   const secret = typeof env.EASEL_API_KEY === 'string' ? env.EASEL_API_KEY : '';
+  transport.stderr?.on?.('data', (chunk) => {
+    serverStderr = `${serverStderr}${String(chunk)}`.slice(-8192);
+  });
+
+  function errorMessage(error, fallback) {
+    const message = error?.message || fallback;
+    const details = serverStderr.trim();
+    const combined = details ? `${message}\nMedia MCP server stderr: ${details}` : message;
+    return secret ? String(combined).split(secret).join('[redacted]') : combined;
+  }
 
   async function connect() {
     try {
       await client.connect(transport);
       connected = true;
     } catch (error) {
-      throw new Error(secret ? String(error?.message || error).split(secret).join('[redacted]') : (error?.message || 'Could not start Media MCP server.'));
+      throw new Error(errorMessage(error, 'Could not start Media MCP server.'));
     }
   }
 
   async function listTools() {
     if (!connected || closed) throw new Error('Media MCP client is not connected.');
-    const result = await client.listTools();
-    return result.tools.filter((tool) => ALLOWED_MEDIA_TOOLS.has(tool.name));
+    try {
+      const result = await client.listTools();
+      return result.tools.filter((tool) => ALLOWED_MEDIA_TOOLS.has(tool.name));
+    } catch (error) {
+      throw new Error(errorMessage(error, 'Media MCP tool listing failed.'));
+    }
   }
 
   async function callTool(name, argsValue) {
@@ -46,8 +62,7 @@ function createMediaMcpClient({
     try {
       return await client.callTool({ name, arguments: argsValue });
     } catch (error) {
-      const message = error?.message || 'Media MCP call failed.';
-      throw new Error(secret ? message.split(secret).join('[redacted]') : message);
+      throw new Error(errorMessage(error, 'Media MCP call failed.'));
     }
   }
 

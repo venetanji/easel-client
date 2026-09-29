@@ -4,6 +4,10 @@ const {
   handleChatSubmit,
   handleSettingsSubmit,
   renderAgentEvent,
+  renderAssetLibrary,
+  renderCanvasLibrary,
+  submitChatWithShortcut,
+  createCanvas,
 } = require('../src/renderer');
 
 function element(tagName = 'div') {
@@ -86,6 +90,31 @@ test('submits chat messages and always re-enables the send button', async () => 
   assert.equal(status.textContent, '');
 });
 
+test('creates a named canvas through the client and reports its title', async () => {
+  const status = element();
+  const result = await createCanvas({
+    client: { async createCanvas(title) { return { id: 'c'.repeat(32), title }; } },
+    title: 'Campaign board',
+    statusElement: status,
+  });
+  assert.equal(result.title, 'Campaign board');
+  assert.equal(status.textContent, 'Created Campaign board.');
+});
+
+test('Enter submits chat while Ctrl+Enter remains multiline', () => {
+  let submitted = 0;
+  let prevented = 0;
+  const form = { requestSubmit() { submitted += 1; } };
+  const button = element('button');
+  assert.equal(submitChatWithShortcut({ key: 'Enter', ctrlKey: false, preventDefault() { prevented += 1; } }, form, button), true);
+  assert.equal(submitChatWithShortcut({ key: 'Enter', ctrlKey: true, preventDefault() {} }, form, button), false);
+  assert.equal(submitted, 1);
+  assert.equal(prevented, 1);
+  button.disabled = true;
+  assert.equal(submitChatWithShortcut({ key: 'Enter', ctrlKey: false, preventDefault() {} }, form, button), true);
+  assert.equal(submitted, 1);
+});
+
 test('renders untrusted agent text literally and accepts only image data URLs', () => {
   const document = { createElement: (tagName) => element(tagName) };
   const messages = element();
@@ -114,4 +143,59 @@ test('renders untrusted agent text literally and accepts only image data URLs', 
     statusElement: element(),
   });
   assert.equal(images.children.length, 1);
+});
+
+test('renders only managed media thumbnails and calls the add-to-canvas action', () => {
+  const document = { createElement: (tagName) => element(tagName) };
+  const list = element();
+  const empty = element();
+  let added;
+  renderAssetLibrary({
+    document,
+    listElement: list,
+    emptyElement: empty,
+    assets: [
+      { id: 'a'.repeat(32), mimeType: 'image/png', thumbnail: 'data:image/png;base64,YWJj' },
+      { id: 'b'.repeat(32), mimeType: 'image/png', thumbnail: 'https://example.org/image.png' },
+    ],
+    onAdd: (id) => { added = id; },
+  });
+  assert.equal(list.children.length, 1);
+  assert.equal(list.children[0].children[0].children[0].src, 'data:image/png;base64,YWJj');
+  assert.equal(empty.hidden, true);
+  list.children[0].children[2].listeners.click();
+  assert.equal(added, 'a'.repeat(32));
+});
+
+test('disables adding media when no canvas is active', () => {
+  const document = { createElement: (tagName) => element(tagName) };
+  const list = element();
+  renderAssetLibrary({
+    document,
+    listElement: list,
+    emptyElement: element(),
+    assets: [{ id: 'a'.repeat(32), mimeType: 'image/png', thumbnail: 'data:image/png;base64,YWJj' }],
+    canAdd: false,
+  });
+  assert.equal(list.children[0].children[2].disabled, true);
+  assert.match(list.children[0].children[2].title, /open or create/i);
+});
+
+test('renders saved canvas rows with separate open and export actions', () => {
+  const document = { createElement: (tagName) => element(tagName) };
+  const list = element();
+  const empty = element();
+  const actions = [];
+  renderCanvasLibrary({
+    document,
+    listElement: list,
+    emptyElement: empty,
+    canvases: [{ id: 'c'.repeat(32), title: 'Poster' }],
+    onOpen: (canvas) => actions.push(['open', canvas.id]),
+    onExport: (id) => actions.push(['export', id]),
+  });
+  list.children[0].children[0].listeners.click();
+  list.children[0].children[1].listeners.click();
+  assert.deepEqual(actions, [['open', 'c'.repeat(32)], ['export', 'c'.repeat(32)]]);
+  assert.equal(empty.hidden, true);
 });

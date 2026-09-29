@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createChatService } = require('../src/chat-service');
+const path = require('node:path');
+const { createChatService, defaultMcpLaunchOptions } = require('../src/chat-service');
 
 function reply(text) {
   return { choices: [{ message: { role: 'assistant', content: text } }] };
@@ -16,6 +17,18 @@ function settingsStore(model = 'design-model') {
     loadSecrets: () => ({ easelApiKey: 'easel-key', litellmApiKey: 'llm-key' }),
   };
 }
+
+test('uses a physical working directory for the packaged MCP process', () => {
+  const resourcesPath = path.resolve('test-resources');
+  const options = defaultMcpLaunchOptions(
+    { easelBaseUrl: 'https://easel.ait4x.org' },
+    { easelApiKey: 'easel-key' },
+    { isPackaged: true, resourcesPath },
+  );
+
+  assert.equal(options.cwd, resourcesPath);
+  assert.equal(options.args[0], path.join(resourcesPath, 'app.asar.unpacked', 'packages', 'media-mcp', 'dist', 'cli.js'));
+});
 
 test('loads secrets only in main, keeps session history, and closes the MCP process', async () => {
   const completions = [];

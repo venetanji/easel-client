@@ -8,10 +8,19 @@ const { createAssetStore } = require('../src/asset-store');
 test('stores image bytes under generated opaque asset IDs and resolves them locally', async (t) => {
   const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-assets-'));
   t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
-  const store = createAssetStore({ userDataPath, idFactory: () => 'a'.repeat(32) });
+  const store = createAssetStore({
+    userDataPath,
+    idFactory: () => 'a'.repeat(32),
+    thumbnailFactory: () => 'data:image/png;base64,dGh1bWI=',
+  });
   const id = await store.save({ data: 'YWJj', mimeType: 'image/png' });
   assert.equal(id, 'a'.repeat(32));
   assert.deepEqual(await store.get(id), { id, data: 'YWJj', mimeType: 'image/png' });
+  const [asset] = await store.list();
+  assert.equal(asset.id, id);
+  assert.equal(asset.mimeType, 'image/png');
+  assert.equal(asset.thumbnail, 'data:image/png;base64,dGh1bWI=');
+  assert.equal(typeof asset.updatedAt, 'number');
   assert.deepEqual(fs.readdirSync(path.join(userDataPath, 'assets')), [`${id}.png`]);
 });
 

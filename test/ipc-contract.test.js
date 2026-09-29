@@ -3,7 +3,10 @@ const assert = require('node:assert/strict');
 const {
   IPC_CHANNELS,
   assertKnownChannel,
+  validateCanvasBounds,
+  validateCanvasTitle,
   validateChatMessage,
+  validateOpaqueId,
   validateSettingsInput,
 } = require('../src/ipc-contract');
 
@@ -22,4 +25,19 @@ test('validates and bounds chat messages', () => {
   assert.equal(validateChatMessage('  make a blue bird  '), 'make a blue bird');
   assert.throws(() => validateChatMessage('  '), /message is required/i);
   assert.throws(() => validateChatMessage('x'.repeat(20_001)), /too long/i);
+});
+
+test('validates opaque library IDs and bounded canvas layout rectangles', () => {
+  assert.equal(validateOpaqueId('a'.repeat(32), 'Asset ID'), 'a'.repeat(32));
+  assert.throws(() => validateOpaqueId('../settings.json', 'Canvas ID'), /invalid/i);
+  assert.deepEqual(validateCanvasBounds({ x: 10.8, y: 20, width: 700, height: 500 }), {
+    x: 10, y: 20, width: 700, height: 500,
+  });
+  assert.throws(() => validateCanvasBounds({ x: -1, y: 0, width: 10, height: 10 }), /x is invalid/i);
+});
+
+test('validates and trims empty canvas names', () => {
+  assert.equal(validateCanvasTitle('  Image board  '), 'Image board');
+  assert.throws(() => validateCanvasTitle('  '), /name is required/i);
+  assert.throws(() => validateCanvasTitle('x'.repeat(121)), /120 characters/i);
 });

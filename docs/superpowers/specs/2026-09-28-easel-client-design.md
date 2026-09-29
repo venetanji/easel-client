@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved direction: local-first Electron app, official OpenAI JS client pointed at LiteLLM, separate TypeScript Media MCP server over stdio, sandboxed HTML/JS canvas, and a headless screenshot tool. Streamable HTTP transport is deferred.
+Current direction: local-first Electron app, official OpenAI JS client pointed at LiteLLM Responses streaming, separate TypeScript Media MCP server over stdio, an in-window sandboxed HTML/JS canvas with canvas-scoped CDP controls, and a headless screenshot tool. Streamable HTTP transport is deferred.
 
 ## Goal
 
@@ -18,7 +18,7 @@ PR #1 supplies a plain Electron application and a direct call to `POST /v1/image
 
 - Use the official `openai` Node.js SDK, configured with LiteLLM's OpenAI-compatible base URL, model identifier, and optional API key. Do not use LangChain in v1.
 - Keep the LiteLLM client, conversation/tool loop, MCP client, settings, and credentials in Electron's main process.
-- Connect to the separate Media MCP server using stdio. Translate MCP tool definitions/results to/from the LiteLLM OpenAI tool-calling interface. Add one host-owned `present_canvas` tool for sending validated HTML/JS artifacts to the UI. Do not expose arbitrary tools to the model.
+- Connect to the separate Media MCP server using stdio. Translate MCP tool definitions/results to/from the LiteLLM Responses tool-calling interface. Add host-owned tools for `present_canvas`, canvas inspection, bounded canvas JavaScript, and adding managed images. Do not expose arbitrary tools or the CDP connection to the model.
 - Store settings in the app's user-data directory and encrypt keys with Electron `safeStorage`. Keep keys out of renderer state, IPC responses, logs, and model messages.
 - Use the existing Easel default `https://easel.ait4x.org`; allow configuration for other Easel deployments and optional API keys.
 - Keep chat history in memory only for the app session.
@@ -33,10 +33,11 @@ PR #1 supplies a plain Electron application and a direct call to `POST /v1/image
 
 ### Canvas
 
-- Render the current artifact in a dedicated Electron `BrowserWindow` separate from the chat renderer. Agent-produced JavaScript may animate and handle local button interactions in this canvas window.
-- The canvas window has no preload/bridge, no Node integration, no access to parent DOM or application secrets, and no network access. Enforce a restrictive CSP and block navigation, popups, forms, permissions, and outbound requests.
-- Download/receive generated images through Easel/MCP, store them as managed local assets, and embed/pass their bytes into the canvas. Use controlled `data:`/`blob:` resources rather than arbitrary file paths or model-provided URLs.
-- Bound artifact and asset sizes; destroying/recreating the separate canvas window is the reset path for runaway code. The headless screenshot tool uses the same offline asset/markup contract.
+- Show the media library and chat in a left rail, with the live HTML canvas in the right side of the same app window. Use a dedicated Electron `WebContentsView` for the canvas so it remains isolated from the app renderer.
+- The canvas view has no preload/bridge, no Node integration, no access to the app DOM or credentials, and no network access. Enforce a restrictive CSP and block navigation, popups, forms, permissions, and outbound requests.
+- Attach CDP only to the canvas view's `webContents`. Expose host-owned inspect, bounded JavaScript, and saved-image insertion tools; never expose a debugging port or the main app's target.
+- Store media under opaque IDs with small thumbnails. Save each canvas as self-contained HTML with embedded image data, reopen it from the library, and export it through a user-selected path.
+- Bound artifact, script, snapshot, and asset sizes. The headless screenshot tool uses the same offline asset/markup contract.
 
 ### Settings and credentials
 

@@ -25,6 +25,103 @@ function redact(value, secret) {
   return secret ? text.split(secret).join('[redacted]') : text;
 }
 
+function toResponsesInput(messages) {
+  const input = [];
+  for (const message of messages) {
+    if (message.role === 'user' || message.role === 'assistant') {
+      if (typeof message.content === 'string' && message.content) {
+        input.push({
+          role: message.role,
+          content: [{ type: message.role === 'user' ? 'input_text' : 'output_text', text: message.content }],
+        });
+      }
+      if (message.role === 'assistant') {
+        for (const call of message.tool_calls || []) {
+          input.push({
+            type: 'function_call',
+            call_id: call.id,
+            name: call.function.name,
+            arguments: call.function.arguments,
+          });
+        }
+      }
+      continue;
+    }
+    if (message.role === 'tool') {
+      input.push({ type: 'function_call_output', call_id: message.tool_call_id, output: message.content });
+      continue;
+    }
+    throw new Error(`Unsupported LiteLLM message role: ${String(message.role)}`);
+  }
+  return input;
+}
+
+function toResponsesTools(tools = []) {
+  return tools
+    .filter((tool) => tool.type === 'function' && tool.function)
+    .map((tool) => ({
+      type: 'function',
+      name: tool.function.name,
+      description: tool.function.description || '',
+      parameters: tool.function.parameters || { type: 'object', properties: {}, additionalProperties: false },
+    }));
+}
+
+async function collectStreamedCompletion(stream) {
+  let completedResponse;
+  let text = '';
+  const streamedFunctionCalls = new Map();
+  for await (const event of stream) {
+    if (event.type === 'response.output_text.delta' || event.type === 'response.refusal.delta') {
+      text += event.delta || '';
+    } else if (event.type === 'response.output_item.added' && event.item?.type === 'function_call') {
+      streamedFunctionCalls.set(event.output_index, event.item);
+    } else if (event.type === 'response.function_call_arguments.delta') {
+      const item = streamedFunctionCalls.get(event.output_index);
+      if (item) item.arguments = `${item.arguments || ''}${event.delta || ''}`;
+    } else if (event.type === 'response.function_call_arguments.done') {
+      const item = streamedFunctionCalls.get(event.output_index);
+      if (item) item.arguments = event.arguments;
+    } else if (event.type === 'response.output_item.done' && event.item?.type === 'function_call') {
+      streamedFunctionCalls.set(event.output_index, event.item);
+    } else if (event.type === 'response.failed') {
+      throw new Error(event.response?.error?.message || 'LiteLLM Responses request failed.');
+    } else if (event.type === 'response.completed') {
+      completedResponse = event.response;
+    }
+  }
+
+  const output = Array.isArray(completedResponse?.output) && completedResponse.output.length
+    ? completedResponse.output
+    : [...streamedFunctionCalls.values()];
+  const responseText = output
+    .filter((item) => item.type === 'message')
+    .flatMap((item) => item.content || [])
+    .filter((item) => item.type === 'output_text' || item.type === 'refusal')
+    .map((item) => item.text || '')
+    .join('') || text;
+  const toolCalls = output
+    .filter((item) => item.type === 'function_call')
+    .map((item) => ({
+      id: item.call_id,
+      type: 'function',
+      function: { name: item.name, arguments: item.arguments || '{}' },
+    }));
+
+  if (!responseText && toolCalls.length === 0) {
+    const reason = completedResponse?.incomplete_details?.reason;
+    throw new Error(reason ? `LiteLLM returned an incomplete response: ${reason}.` : 'LiteLLM returned no message or tool call.');
+  }
+
+  return {
+    choices: [{
+      index: 0,
+      finish_reason: toolCalls.length ? 'tool_calls' : 'stop',
+      message: { role: 'assistant', content: responseText || null, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) },
+    }],
+  };
+}
+
 function createLiteLLMClient({
   baseUrl,
   apiKey = '',
@@ -57,12 +154,14 @@ function createLiteLLMClient({
     async createCompletion({ messages, tools, signal } = {}) {
       if (!Array.isArray(messages) || messages.length === 0) throw new Error('Chat messages are required.');
       try {
-        return await client.chat.completions.create({
+        const stream = await client.responses.create({
           model: cleanModel,
-          messages,
-          ...(Array.isArray(tools) && tools.length ? { tools } : {}),
+          input: toResponsesInput(messages),
+          ...(Array.isArray(tools) && tools.length ? { tools: toResponsesTools(tools) } : {}),
+          stream: true,
           ...(signal ? { signal } : {}),
         });
+        return await collectStreamedCompletion(stream);
       } catch (error) {
         throw new Error(redact(error, key));
       }
@@ -74,4 +173,7 @@ module.exports = {
   DEFAULT_LITELLM_BASE_URL,
   createLiteLLMClient,
   normalizeLiteLLMBaseUrl,
+  toResponsesInput,
+  toResponsesTools,
+  collectStreamedCompletion,
 };

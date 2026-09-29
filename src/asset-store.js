@@ -10,8 +10,14 @@ const FORMATS = Object.freeze({
   'image/webp': 'webp',
 });
 const ID_PATTERN = /^[a-f0-9]{32}$/;
+const MAX_ASSET_LIST_ITEMS = 200;
 
-function createAssetStore({ userDataPath, fileSystem = fs, idFactory = () => crypto.randomUUID().replaceAll('-', '') }) {
+function createAssetStore({
+  userDataPath,
+  fileSystem = fs,
+  idFactory = () => crypto.randomUUID().replaceAll('-', ''),
+  thumbnailFactory = (bytes, mimeType) => `data:${mimeType};base64,${bytes.toString('base64')}`,
+}) {
   const assetsPath = path.join(userDataPath, 'assets');
 
   async function save({ data, mimeType } = {}) {
@@ -52,7 +58,26 @@ function createAssetStore({ userDataPath, fileSystem = fs, idFactory = () => cry
     throw new Error('Asset was not found.');
   }
 
-  return { save, get };
+  async function list() {
+    if (!fileSystem.existsSync(assetsPath)) return [];
+    const mimeTypes = new Map(Object.entries(FORMATS).map(([mimeType, extension]) => [extension, mimeType]));
+    const filenames = fileSystem.readdirSync(assetsPath)
+      .filter((filename) => /^[a-f0-9]{32}\.(?:png|jpg|webp)$/.test(filename))
+      .map((filename) => ({ filename, updatedAt: fileSystem.statSync(path.join(assetsPath, filename)).mtimeMs }))
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .slice(0, MAX_ASSET_LIST_ITEMS);
+    return filenames.flatMap(({ filename, updatedAt }) => {
+      const match = filename.match(/^([a-f0-9]{32})\.(png|jpg|webp)$/);
+      const mimeType = mimeTypes.get(match?.[2]);
+      if (!match || !mimeType) return [];
+      const bytes = fileSystem.readFileSync(path.join(assetsPath, filename));
+      const thumbnail = thumbnailFactory(bytes, mimeType);
+      if (typeof thumbnail !== 'string' || !thumbnail.startsWith('data:image/')) return [];
+      return [{ id: match[1], mimeType, thumbnail, updatedAt }];
+    });
+  }
+
+  return { save, get, list };
 }
 
-module.exports = { MAX_ASSET_BYTES, createAssetStore };
+module.exports = { MAX_ASSET_BYTES, MAX_ASSET_LIST_ITEMS, createAssetStore };

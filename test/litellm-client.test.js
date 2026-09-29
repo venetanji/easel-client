@@ -2,14 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createLiteLLMClient, normalizeLiteLLMBaseUrl } = require('../src/litellm-client');
 
-function completionResponse(message = { role: 'assistant', content: 'Ready.' }) {
-  return new Response(JSON.stringify({
-    id: 'chatcmpl-test',
-    object: 'chat.completion',
-    created: 1,
-    model: 'design-model',
-    choices: [{ index: 0, finish_reason: 'stop', message }],
-  }), { status: 200, headers: { 'content-type': 'application/json' } });
+function responseStream(events) {
+  const body = events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n';
+  return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
 }
 
 test('normalizes LiteLLM base URLs and rejects unsafe endpoints', () => {
@@ -20,7 +15,7 @@ test('normalizes LiteLLM base URLs and rejects unsafe endpoints', () => {
   assert.throws(() => normalizeLiteLLMBaseUrl('https://llm.example/v1?token=secret'), /query/i);
 });
 
-test('uses the official OpenAI SDK with configured LiteLLM model, tools, and key', async () => {
+test('uses streamed Responses API with configured model, tools, history, and key', async () => {
   const requests = [];
   const client = createLiteLLMClient({
     baseUrl: 'https://llm.example/v1/',
@@ -28,23 +23,52 @@ test('uses the official OpenAI SDK with configured LiteLLM model, tools, and key
     model: 'design-model',
     fetchImpl: async (url, init) => {
       requests.push({ url: String(url), init });
-      return completionResponse({
-        role: 'assistant',
-        content: null,
-        tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'list_models', arguments: '{}' } }],
-      });
+      return responseStream([
+        { type: 'response.output_text.delta', delta: 'Ready.' },
+        { type: 'response.completed', response: { id: 'resp-test', output: [] } },
+      ]);
     },
   });
   const response = await client.createCompletion({
-    messages: [{ role: 'user', content: 'make an image' }],
-    tools: [{ type: 'function', function: { name: 'list_models', parameters: { type: 'object' } } }],
+    messages: [
+      { role: 'user', content: 'List image models.' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'list_models', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'call_1', content: 'Available models: flux2.' },
+    ],
+    tools: [{ type: 'function', function: { name: 'list_models', description: 'List image models', parameters: { type: 'object' } } }],
   });
-  assert.equal(response.choices[0].message.tool_calls[0].function.name, 'list_models');
-  assert.equal(requests[0].url, 'https://llm.example/v1/chat/completions');
+  assert.equal(response.choices[0].message.content, 'Ready.');
+  assert.equal(requests[0].url, 'https://llm.example/v1/responses');
   assert.equal(new Headers(requests[0].init.headers).get('authorization'), 'Bearer proxy-secret');
   const payload = JSON.parse(String(requests[0].init.body));
   assert.equal(payload.model, 'design-model');
-  assert.equal(payload.tools[0].function.name, 'list_models');
+  assert.equal(payload.stream, true);
+  assert.deepEqual(payload.input, [
+    { role: 'user', content: [{ type: 'input_text', text: 'List image models.' }] },
+    { type: 'function_call', call_id: 'call_1', name: 'list_models', arguments: '{}' },
+    { type: 'function_call_output', call_id: 'call_1', output: 'Available models: flux2.' },
+  ]);
+  assert.deepEqual(payload.tools[0], {
+    type: 'function', name: 'list_models', description: 'List image models', parameters: { type: 'object' },
+  });
+});
+
+test('assembles streamed function calls when the completed response output is empty', async () => {
+  const client = createLiteLLMClient({
+    baseUrl: 'https://llm.example/v1',
+    model: 'design-model',
+    fetchImpl: async () => responseStream([
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'call_1', name: 'list_models', arguments: '' } },
+      { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{' },
+      { type: 'response.function_call_arguments.delta', output_index: 0, delta: '}' },
+      { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', call_id: 'call_1', name: 'list_models', arguments: '{}' } },
+      { type: 'response.completed', response: { id: 'resp-test', output: [] } },
+    ]),
+  });
+  const response = await client.createCompletion({ messages: [{ role: 'user', content: 'List models.' }] });
+  assert.deepEqual(response.choices[0].message.tool_calls, [{
+    id: 'call_1', type: 'function', function: { name: 'list_models', arguments: '{}' },
+  }]);
 });
 
 test('omits authorization when LiteLLM has no API key', async () => {
@@ -54,7 +78,10 @@ test('omits authorization when LiteLLM has no API key', async () => {
     model: 'local-model',
     fetchImpl: async (_url, init) => {
       headers = new Headers(init.headers);
-      return completionResponse();
+      return responseStream([
+        { type: 'response.output_text.delta', delta: 'Ready.' },
+        { type: 'response.completed', response: { id: 'resp-test', output: [] } },
+      ]);
     },
   });
   await client.createCompletion({ messages: [{ role: 'user', content: 'hello' }] });

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildCanvasDocument } = require('../src/canvas-policy');
+const { buildCanvasDocument, buildCanvasSnapshotDocument } = require('../src/canvas-policy');
 
 test('builds a local-JS canvas document with a no-network CSP and local image data', () => {
   const html = buildCanvasDocument({
@@ -23,4 +23,12 @@ test('rejects unknown assets, external sources, unsupported formats, and oversiz
     assets: [{ name: 'bad', data: 'YWJj', mimeType: 'image/svg+xml' }],
   }), /unsupported image type/i);
   assert.throws(() => buildCanvasDocument({ html: 'x'.repeat(1_048_577) }), /1 MiB/i);
+});
+
+test('restores restrictive CSP when saving an edited DOM snapshot', () => {
+  const snapshot = buildCanvasSnapshotDocument('<html><head><meta http-equiv="Content-Security-Policy" content="default-src *"><title>Edited</title></head><body><img src="data:image/png;base64,YWJj"></body></html>');
+  assert.equal((snapshot.match(/Content-Security-Policy/g) || []).length, 1);
+  assert.match(snapshot, /connect-src 'none'/);
+  assert.match(snapshot, /data:image\/png;base64,YWJj/);
+  assert.throws(() => buildCanvasSnapshotDocument('<img src="https://example.com/image.png">'), /external URLs/i);
 });
