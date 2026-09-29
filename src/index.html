@@ -3,174 +3,82 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Easel Client</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none" />
+    <title>Easel Studio</title>
     <style>
-      :root {
-        color-scheme: dark;
-        font-family: Inter, system-ui, sans-serif;
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      body {
-        margin: 0;
-        background: #111827;
-        color: #f9fafb;
-      }
-
-      main {
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 24px;
-        display: grid;
-        gap: 24px;
-      }
-
-      .panel {
-        background: #1f2937;
-        border: 1px solid #374151;
-        border-radius: 16px;
-        padding: 20px;
-      }
-
-      h1,
-      h2,
-      p {
-        margin-top: 0;
-      }
-
-      form {
-        display: grid;
-        gap: 16px;
-      }
-
-      .grid {
-        display: grid;
-        gap: 16px;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      }
-
-      label {
-        display: grid;
-        gap: 8px;
-        font-weight: 600;
-      }
-
-      input,
-      textarea,
-      button {
-        font: inherit;
-      }
-
-      input,
-      textarea {
-        width: 100%;
-        padding: 12px;
-        border-radius: 12px;
-        border: 1px solid #4b5563;
-        background: #111827;
-        color: inherit;
-      }
-
-      textarea {
-        min-height: 140px;
-        resize: vertical;
-      }
-
-      button {
-        border: 0;
-        border-radius: 999px;
-        padding: 12px 18px;
-        font-weight: 700;
-        cursor: pointer;
-        background: #60a5fa;
-        color: #111827;
-      }
-
-      button:disabled {
-        cursor: wait;
-        opacity: 0.75;
-      }
-
-      #status {
-        min-height: 24px;
-        color: #bfdbfe;
-      }
-
-      #status.error {
-        color: #fca5a5;
-      }
-
-      #results {
-        display: grid;
-        gap: 16px;
-        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      }
-
-      .result-card {
-        background: #111827;
-        border: 1px solid #374151;
-        border-radius: 16px;
-        overflow: hidden;
-      }
-
-      .result-card img {
-        display: block;
-        width: 100%;
-        aspect-ratio: 1 / 1;
-        object-fit: cover;
-        background: #030712;
-      }
-
-      .result-card a {
-        display: block;
-        padding: 12px;
-        color: #93c5fd;
-        text-decoration: none;
-      }
+      :root { color-scheme: light; font-family: Georgia, 'Iowan Old Style', serif; color: #202c27; background: #eee9dd; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; background: radial-gradient(ellipse at 16% 5%, #d9e0d2 0, transparent 35%), linear-gradient(135deg, #f1eddf, #e4e1d6); }
+      main { width: min(1440px, 100%); min-height: 100vh; margin: auto; padding: 26px clamp(16px, 4vw, 56px); display: grid; grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: auto 1fr; gap: 20px; }
+      header { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: end; border-bottom: 1px solid #aab4a8; padding: 10px 0 17px; }
+      .eyebrow { margin: 0 0 5px; font: 700 10px/1.2 ui-monospace, monospace; letter-spacing: .19em; text-transform: uppercase; color: #537063; }
+      h1 { margin: 0; font-size: clamp(30px, 4vw, 47px); line-height: .98; letter-spacing: -.045em; font-weight: 500; }
+      header p:last-child { margin: 0; max-width: 340px; font-size: 14px; line-height: 1.45; color: #59655e; text-align: right; }
+      .panel { border: 1px solid #bec5b7; border-radius: 4px; background: rgba(250, 249, 243, .76); box-shadow: 0 14px 40px #3245380c; }
+      .workspace { display: flex; flex-direction: column; min-height: 500px; overflow: hidden; }
+      .workspace-head { padding: 18px 22px 12px; border-bottom: 1px solid #d6d9cf; display: flex; justify-content: space-between; align-items: baseline; }
+      h2 { margin: 0; font-size: 19px; font-weight: 500; }
+      .workspace-head small { color: #7b877c; font: 11px ui-monospace, monospace; }
+      #messages { flex: 1; overflow: auto; padding: 24px clamp(16px, 4vw, 52px); display: flex; flex-direction: column; gap: 15px; }
+      .message { max-width: min(82%, 720px); white-space: pre-wrap; overflow-wrap: anywhere; padding: 13px 17px; border-radius: 4px 15px 15px 15px; line-height: 1.5; font-size: 16px; }
+      .message.assistant { align-self: flex-start; background: #e5e9df; border-left: 3px solid #738b73; }
+      .message.user { align-self: flex-end; background: #294a3e; color: #f6f2e7; border-radius: 15px 4px 15px 15px; }
+      #images { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; padding: 0 22px 18px; }
+      .image-result { margin: 0; border: 1px solid #d1d6ca; background: #e8e9df; }
+      .image-result img { display: block; width: 100%; max-height: 400px; object-fit: contain; }
+      #status { min-height: 23px; margin: 0; padding: 5px 22px 10px; color: #63766a; font: 12px ui-monospace, monospace; }
+      #status.error, #settings-status.error { color: #9b3d2f; }
+      #chat-form { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 14px 18px 18px; border-top: 1px solid #d6d9cf; }
+      textarea, input { font: inherit; color: #202c27; background: #fbfaf5; border: 1px solid #bdc6b9; border-radius: 3px; padding: 12px 13px; }
+      textarea { min-height: 55px; max-height: 160px; resize: vertical; line-height: 1.4; }
+      button { align-self: end; min-width: 94px; border: 0; border-radius: 3px; padding: 14px 18px; background: #d05e3e; color: white; font: 700 13px ui-monospace, monospace; letter-spacing: .04em; cursor: pointer; }
+      button:hover { background: #b94e33; } button:disabled { opacity: .55; cursor: wait; }
+      aside { padding: 20px; align-self: start; }
+      aside h2 { margin-bottom: 6px; }
+      aside > p { color: #68736b; font: 12px/1.5 ui-monospace, monospace; margin: 0 0 20px; }
+      #settings-form { display: grid; gap: 14px; }
+      label { display: grid; gap: 6px; font: 700 11px ui-monospace, monospace; letter-spacing: .03em; color: #57695e; }
+      input { width: 100%; font: 13px ui-monospace, monospace; letter-spacing: 0; }
+      input[type=password] { font-family: sans-serif; }
+      .check { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+      .check input { width: auto; margin: 0; accent-color: #294a3e; }
+      #settings-form button { width: 100%; background: #294a3e; }
+      #settings-form button:hover { background: #1b382e; }
+      #settings-status { min-height: 18px; color: #63766a; font: 11px ui-monospace, monospace; }
+      .footnote { margin-top: 22px; padding-top: 14px; border-top: 1px solid #d6d9cf; color: #79837b; font-size: 12px; line-height: 1.5; }
+      @media (max-width: 800px) { main { grid-template-columns: 1fr; padding: 12px; gap: 12px; } header { align-items: start; gap: 12px; } header p:last-child { max-width: 180px; font-size: 12px; } .workspace { min-height: 56vh; } aside { order: 3; } }
+      @media (max-width: 520px) { header p:last-child { display: none; } #chat-form { grid-template-columns: 1fr; } #chat-form button { width: 100%; } .message { max-width: 94%; font-size: 14px; } }
     </style>
   </head>
   <body>
     <main>
-      <section class="panel">
-        <h1>Easel Client</h1>
-        <p>Generate images from a local or remote <code>venetanji/easel</code> server.</p>
-        <form id="generation-form">
-          <div class="grid">
-            <label>
-              Easel URL
-              <input id="base-url" name="baseUrl" type="url" />
-            </label>
-            <label>
-              API key
-              <input id="api-key" name="apiKey" type="password" autocomplete="current-password" />
-            </label>
-            <label>
-              Model (optional)
-              <input id="model" name="model" type="text" placeholder="flux2-9b" />
-            </label>
-            <label>
-              Size (optional)
-              <input id="size" name="size" type="text" placeholder="1024x1024" />
-            </label>
-          </div>
-          <label>
-            Prompt
-            <textarea id="prompt" name="prompt" placeholder="Describe the image you want Easel to create." required></textarea>
-          </label>
-          <div>
-            <button id="submit" type="submit">Generate image</button>
-          </div>
-        </form>
-      </section>
-
-      <section class="panel">
-        <h2>Results</h2>
+      <header>
+        <div><p class="eyebrow">Local creative agent · 01</p><h1>Easel Studio</h1></div>
+        <p>Describe an image, then shape the results on an interactive local canvas.</p>
+      </header>
+      <section class="panel workspace" aria-label="Conversation">
+        <div class="workspace-head"><h2>Studio conversation</h2><small>SESSION ONLY</small></div>
+        <div id="messages" aria-live="polite"><article class="message assistant">Tell me what you want to make. I can generate images with Easel and compose them in the canvas.</article></div>
+        <div id="images" aria-label="Generated images"></div>
         <p id="status" role="status" aria-live="polite"></p>
-        <div id="results" role="list" aria-live="polite" aria-label="Generated images"></div>
+        <form id="chat-form"><textarea id="message" name="message" placeholder="Describe an image or ask for a composition…" required></textarea><button id="send" type="submit">SEND ↗</button></form>
       </section>
+      <aside class="panel">
+        <h2>Connections</h2>
+        <p>Credentials stay in this app's encrypted store.</p>
+        <form id="settings-form">
+          <label for="easel-url">EASEL ENDPOINT<input id="easel-url" name="easelBaseUrl" type="url" /></label>
+          <label for="easel-key">EASEL API KEY<input id="easel-key" name="easelApiKey" type="password" autocomplete="new-password" placeholder="Optional" /></label>
+          <label class="check"><input id="clear-easel-key" type="checkbox" /> Clear saved Easel key</label>
+          <label for="litellm-url">LITELLM ENDPOINT<input id="litellm-url" name="litellmBaseUrl" type="url" /></label>
+          <label for="litellm-model">MODEL ID<input id="litellm-model" name="litellmModel" type="text" placeholder="provider/model-name" /></label>
+          <label for="litellm-key">LITELLM API KEY<input id="litellm-key" name="litellmApiKey" type="password" autocomplete="new-password" placeholder="Optional" /></label>
+          <label class="check"><input id="clear-litellm-key" type="checkbox" /> Clear saved LiteLLM key</label>
+          <button type="submit">SAVE CONNECTIONS</button>
+          <p id="settings-status" role="status" aria-live="polite"></p>
+        </form>
+        <p class="footnote">The chat and its memory live only for this app session. Generated images are saved locally for canvas use.</p>
+      </aside>
     </main>
     <script src="./renderer.js"></script>
   </body>

@@ -1,0 +1,35 @@
+appId: org.ait4x.easelclient
+directories:
+  output: release
+files:
+  - src/**/*
+  - packages/media-mcp/dist/**/*
+  - packages/media-mcp/package.json
+  - package.json
+asar: true
+asarUnpack:
+  - packages/media-mcp/dist/**/*
+  - packages/media-mcp/package.json
+extraMetadata:
+  main: src/main.js
+npmRebuild: false
+publish: null
+win:
+  target:
+    - nsis
+    - zip
+mac:
+  target:
+    - dmg
+    - zip
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Graphics
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+productName: Easel Studio

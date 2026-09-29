@@ -1,147 +1,207 @@
-function setStatus(statusElement, message, isError = false) {
-  statusElement.textContent = message;
-  statusElement.classList.toggle('error', isError);
-  statusElement.setAttribute('role', isError ? 'alert' : 'status');
-  statusElement.setAttribute('aria-live', isError ? 'assertive' : 'polite');
+function setStatus(element, message, isError = false) {
+  element.textContent = message;
+  element.classList.toggle('error', isError);
+  element.setAttribute('role', isError ? 'alert' : 'status');
+  element.setAttribute('aria-live', isError ? 'assertive' : 'polite');
+}
+
+function normalizeResultSource(value) {
+  if (typeof value !== 'string') return null;
+  if (/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/i.test(value)) return value;
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 function resultSummary(count) {
   return `Generated ${count} image${count === 1 ? '' : 's'}.`;
 }
 
-function normalizeResultSource(source) {
-  if (typeof source !== 'string' || !source) {
-    return null;
-  }
-
-  if (source.startsWith('data:image/')) {
-    return source;
-  }
-
-  try {
-    const url = new URL(source);
-    if (!['http:', 'https:'].includes(url.protocol)) {
-      return null;
-    }
-
-    return url.toString();
-  } catch {
-    return null;
-  }
-}
-
-function renderResults({ document, resultsElement, prompt, images }) {
-  resultsElement.replaceChildren();
-  let renderedCount = 0;
-
-  images.forEach((source, index) => {
-    const safeSource = normalizeResultSource(source);
-    if (!safeSource) {
-      return;
-    }
-
-    const card = document.createElement('article');
-    card.className = 'result-card';
-    card.setAttribute('role', 'listitem');
-
-    const image = document.createElement('img');
-    image.src = safeSource;
-    image.alt = `${prompt.trim() || 'Generated image'} ${index + 1}`;
-
-    const link = document.createElement('a');
-    link.href = safeSource;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    link.textContent = `Open image ${index + 1}`;
-
-    card.append(image, link);
-    resultsElement.append(card);
-    renderedCount += 1;
-  });
-
-  return renderedCount;
-}
-
-async function handleGenerationSubmit({
-  client,
-  document,
-  baseUrlInput,
-  apiKeyInput,
-  modelInput,
-  sizeInput,
-  promptInput,
-  submitButton,
-  statusElement,
-  resultsElement,
-}) {
+async function handleGenerationSubmit({ client, document, promptInput, submitButton, statusElement, resultsElement, ...options }) {
   submitButton.disabled = true;
-  resultsElement.replaceChildren();
-  setStatus(statusElement, 'Generating image…');
-
+  setStatus(statusElement, 'Generating images…');
   try {
     const images = await client.generateImages({
-      baseUrl: baseUrlInput.value,
-      apiKey: apiKeyInput.value,
-      model: modelInput.value,
-      size: sizeInput.value,
+      baseUrl: options.baseUrlInput?.value,
+      apiKey: options.apiKeyInput?.value,
+      model: options.modelInput?.value,
+      size: options.sizeInput?.value,
       prompt: promptInput.value,
     });
-
-    const renderedCount = renderResults({
-      document,
-      resultsElement,
-      prompt: promptInput.value,
-      images,
+    const cards = images.flatMap((source, index) => {
+      const safeSource = normalizeResultSource(source);
+      if (!safeSource) return [];
+      const card = document.createElement('article');
+      card.className = 'result-card';
+      card.setAttribute('role', 'listitem');
+      const image = document.createElement('img');
+      image.src = safeSource;
+      image.alt = `${promptInput.value.trim()} ${index + 1}`;
+      card.append(image);
+      return [card];
     });
-    if (renderedCount === 0) {
-      throw new Error('Easel returned no safe image results.');
-    }
-
-    setStatus(statusElement, resultSummary(renderedCount));
+    resultsElement.replaceChildren(...cards);
+    setStatus(statusElement, resultSummary(cards.length));
+    return cards.length;
   } catch (error) {
-    setStatus(statusElement, error instanceof Error ? error.message : 'Unable to generate images.', true);
+    setStatus(statusElement, error instanceof Error ? error.message : 'Image generation failed.', true);
+    throw error;
   } finally {
     submitButton.disabled = false;
   }
 }
 
-function wireRenderer({ document, client }) {
-  const form = document.getElementById('generation-form');
-  const baseUrlInput = document.getElementById('base-url');
-  const apiKeyInput = document.getElementById('api-key');
-  const modelInput = document.getElementById('model');
-  const sizeInput = document.getElementById('size');
-  const promptInput = document.getElementById('prompt');
-  const submitButton = document.getElementById('submit');
-  const statusElement = document.getElementById('status');
-  const resultsElement = document.getElementById('results');
+function appendTextMessage(document, messagesElement, role, text) {
+  const message = document.createElement('article');
+  message.className = `message ${role}`;
+  message.textContent = text;
+  messagesElement.append(message);
+  return message;
+}
 
-  baseUrlInput.value = client.defaults.baseUrl;
+function renderAgentEvent({ document, messagesElement, imagesElement, event, statusElement }) {
+  if (!event || typeof event.type !== 'string') return;
+  if (event.type === 'assistant' && typeof event.text === 'string' && event.text) {
+    appendTextMessage(document, messagesElement, 'assistant', event.text);
+    setStatus(statusElement, '');
+    return;
+  }
+  if (event.type === 'tool-start') {
+    setStatus(statusElement, 'Working with Easel…');
+    return;
+  }
+  if (event.type === 'image') {
+    if (typeof event.data !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(event.data)) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(event.mimeType)) return;
+    const card = document.createElement('figure');
+    card.className = 'image-result';
+    const image = document.createElement('img');
+    image.src = `data:${event.mimeType};base64,${event.data}`;
+    image.alt = 'Image generated by Easel';
+    card.append(image);
+    imagesElement.append(card);
+    return;
+  }
+  if (event.type === 'canvas') {
+    setStatus(statusElement, `Canvas updated: ${String(event.title || 'Easel Canvas')}`);
+    return;
+  }
+  if (event.type === 'error' && typeof event.message === 'string') {
+    setStatus(statusElement, event.message, true);
+  }
+}
 
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    await handleGenerationSubmit({
-      client,
-      document,
-      baseUrlInput,
-      apiKeyInput,
-      modelInput,
-      sizeInput,
-      promptInput,
-      submitButton,
-      statusElement,
-      resultsElement,
+async function handleSettingsSubmit({ client, fields, statusElement }) {
+  setStatus(statusElement, 'Saving settings…');
+  try {
+    const result = await client.saveSettings({
+      easelBaseUrl: fields.easelBaseUrl.value,
+      easelApiKey: fields.easelApiKey.value,
+      clearEaselApiKey: fields.clearEaselApiKey.checked === true,
+      litellmBaseUrl: fields.litellmBaseUrl.value,
+      litellmModel: fields.litellmModel.value,
+      litellmApiKey: fields.litellmApiKey.value,
+      clearLiteLLMApiKey: fields.clearLiteLLMApiKey.checked === true,
     });
+    fields.easelApiKey.value = '';
+    fields.litellmApiKey.value = '';
+    fields.clearEaselApiKey.checked = false;
+    fields.clearLiteLLMApiKey.checked = false;
+    fields.easelApiKey.placeholder = result.hasEaselApiKey ? 'Saved securely' : 'Optional';
+    fields.litellmApiKey.placeholder = result.hasLiteLLMApiKey ? 'Saved securely' : 'Optional';
+    setStatus(statusElement, 'Settings saved.');
+    return result;
+  } catch (error) {
+    setStatus(statusElement, error instanceof Error ? error.message : 'Could not save settings.', true);
+    throw error;
+  }
+}
+
+async function handleChatSubmit({ client, document, input, button, statusElement, messagesElement }) {
+  const text = input.value.trim();
+  if (!text) return;
+  button.disabled = true;
+  appendTextMessage(document, messagesElement, 'user', text);
+  setStatus(statusElement, 'Thinking…');
+  try {
+    const result = await client.sendMessage(text);
+    input.value = '';
+    if (!result?.events) setStatus(statusElement, '');
+    return result;
+  } catch (error) {
+    setStatus(statusElement, error instanceof Error ? error.message : 'The message could not be sent.', true);
+    throw error;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function wireRenderer({ document, client }) {
+  const fields = {
+    easelBaseUrl: document.getElementById('easel-url'),
+    easelApiKey: document.getElementById('easel-key'),
+    clearEaselApiKey: document.getElementById('clear-easel-key'),
+    litellmBaseUrl: document.getElementById('litellm-url'),
+    litellmModel: document.getElementById('litellm-model'),
+    litellmApiKey: document.getElementById('litellm-key'),
+    clearLiteLLMApiKey: document.getElementById('clear-litellm-key'),
+  };
+  const settingsForm = document.getElementById('settings-form');
+  const settingsStatus = document.getElementById('settings-status');
+  const chatForm = document.getElementById('chat-form');
+  const messageInput = document.getElementById('message');
+  const sendButton = document.getElementById('send');
+  const statusElement = document.getElementById('status');
+  const messagesElement = document.getElementById('messages');
+  const imagesElement = document.getElementById('images');
+
+  settingsForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      await handleSettingsSubmit({ client, fields, statusElement: settingsStatus });
+    } catch {}
   });
+  chatForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      await handleChatSubmit({
+        client,
+        document,
+        input: messageInput,
+        button: sendButton,
+        statusElement,
+        messagesElement,
+      });
+    } catch {}
+  });
+
+  const unsubscribe = client.onAgentEvent((event) => {
+    renderAgentEvent({ document, messagesElement, imagesElement, event, statusElement });
+  });
+  client.getSettings().then((settings) => {
+    fields.easelBaseUrl.value = settings.easelBaseUrl;
+    fields.litellmBaseUrl.value = settings.litellmBaseUrl;
+    fields.litellmModel.value = settings.litellmModel;
+    fields.easelApiKey.placeholder = settings.hasEaselApiKey ? 'Saved securely' : 'Optional';
+    fields.litellmApiKey.placeholder = settings.hasLiteLLMApiKey ? 'Saved securely' : 'Optional';
+  }).catch((error) => setStatus(settingsStatus, error?.message || 'Could not load settings.', true));
+
+  return { dispose: unsubscribe };
 }
 
 if (typeof module !== 'undefined') {
   module.exports = {
+    appendTextMessage,
     handleGenerationSubmit,
-    renderResults,
-    resultSummary,
-    setStatus,
     normalizeResultSource,
+    resultSummary,
+    handleChatSubmit,
+    handleSettingsSubmit,
+    renderAgentEvent,
+    setStatus,
     wireRenderer,
   };
 }

@@ -1,22 +1,29 @@
-const { contextBridge } = require('electron');
-const { DEFAULT_API_URL, generateImages: requestImages, normalizeBaseUrl } = require('./easel-api');
+const { contextBridge, ipcRenderer } = require('electron');
 
-function generateImages(options = {}) {
-  const payload = {
-    baseUrl: normalizeBaseUrl(typeof options.baseUrl === 'string' ? options.baseUrl : ''),
-    apiKey: typeof options.apiKey === 'string' ? options.apiKey : '',
-    prompt: typeof options.prompt === 'string' ? options.prompt : '',
-    model: typeof options.model === 'string' ? options.model : '',
-    size: typeof options.size === 'string' ? options.size : '',
-    n: typeof options.n === 'number' || typeof options.n === 'string' ? options.n : undefined,
-  };
+const CHANNELS = Object.freeze({
+  GET_SETTINGS: 'settings:get',
+  SAVE_SETTINGS: 'settings:save',
+  SEND_MESSAGE: 'chat:send',
+  AGENT_EVENT: 'agent:event',
+});
 
-  return requestImages(payload);
+function createBridge({ contextBridge: bridge, ipcRenderer: ipc }) {
+  const api = Object.freeze({
+    getSettings: () => ipc.invoke(CHANNELS.GET_SETTINGS),
+    saveSettings: (settings) => ipc.invoke(CHANNELS.SAVE_SETTINGS, settings),
+    sendMessage: (text) => ipc.invoke(CHANNELS.SEND_MESSAGE, text),
+    onAgentEvent(callback) {
+      if (typeof callback !== 'function') throw new TypeError('Event callback must be a function.');
+      const listener = (_event, payload) => callback(payload);
+      ipc.on(CHANNELS.AGENT_EVENT, listener);
+      return () => ipc.removeListener(CHANNELS.AGENT_EVENT, listener);
+    },
+  });
+
+  bridge.exposeInMainWorld('easelClient', api);
+  return api;
 }
 
-contextBridge.exposeInMainWorld('easelClient', Object.freeze({
-  defaults: Object.freeze({
-    baseUrl: DEFAULT_API_URL,
-  }),
-  generateImages,
-}));
+createBridge({ contextBridge, ipcRenderer });
+
+module.exports = { createBridge };

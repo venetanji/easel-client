@@ -1,0 +1,59 @@
+name: Desktop Builds
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: package (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win
+          - os: macos-latest
+            target: mac
+          - os: ubuntu-latest
+            target: linux
+    runs-on: ${{ matrix.os }}
+    env:
+      ELECTRON_CACHE: ${{ runner.temp }}/electron-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/electron-cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      - name: Verify release tag and build MCP package
+        run: npm run build
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+      - name: Verify Electron download marker
+        shell: bash
+        run: test -f node_modules/electron/dist/version
+      - name: Package desktop app
+        run: npm run dist:${{ matrix.target }}
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+      - name: Package headless MCP server
+        shell: bash
+        run: tar -czf release/easel-media-mcp-${{ matrix.target }}.tar.gz -C packages/media-mcp dist package.json README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: easel-${{ matrix.target }}-${{ github.run_id }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
