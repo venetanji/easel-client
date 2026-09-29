@@ -37,6 +37,10 @@ jobs:
           path: ${{ github.workspace }}/.cache/electron
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
+      - name: Install Electron binary
+        run: node node_modules/electron/install.js
+        env:
+          electron_config_cache: ${{ github.workspace }}/.cache/electron
       - name: Verify release tag and build MCP package
         run: npm run build
         env:

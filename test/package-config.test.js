@@ -7,6 +7,7 @@ const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const pkg = require('../package.json');
 const builder = fs.readFileSync(path.join(root, 'electron-builder.yml'), 'utf8');
+const desktopWorkflow = fs.readFileSync(path.join(root, '.github/workflows/desktop.yml'), 'utf8');
 
 test('declares v0.0.1 cross-platform package scripts and MCP runtime files', () => {
   assert.equal(pkg.version, '0.0.1');
@@ -19,6 +20,8 @@ test('declares v0.0.1 cross-platform package scripts and MCP runtime files', () 
   assert.match(builder, /AppImage/);
   assert.match(builder, /nsis/);
   assert.match(builder, /dmg/);
+  assert.match(desktopWorkflow, /Install Electron binary[\s\S]*?node node_modules\/electron\/install\.js/);
+  assert.match(desktopWorkflow, /electron_config_cache:/);
 });
 
 test('checks release tags against the package version', () => {
