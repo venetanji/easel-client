@@ -537,7 +537,7 @@ TOOL_HOST = createEaselToolHost({
       .map((connection) => [connection.id, SETTINGS.loadSecrets(connection.id).litellmApiKey]));
     return createMediaMcpClient({ ...defaultMcpLaunchOptions(settings, secrets, { isPackaged: app.isPackaged, resourcesPath: process.resourcesPath }), signal });
   },
-  getKits: () => CANVAS_CONTROLLER.getCurrentKits() || [],
+  getKits: () => CANVAS_CONTROLLER.getCurrentKits() || (CANVAS_KIT_BUNDLES.tone ? ['tone'] : []),
   getOrigin: () => CHAT.getToolOrigin(),
   registerMediaJob: registerTrackedMediaJob, control: AGENT_CONTROL,
   eventStore: { read: (...args) => CONTROL_EVENTS.read(...args) },
@@ -553,9 +553,9 @@ TOOL_HOST = createEaselToolHost({
       publishControlEvent({ type: 'project-opened', projectId, documentPath: result.documentPath, title: result.title });
       return { ok: true, projectId, title: result.title, documentPath: result.documentPath };
     }),
-    create: ({ title, kits = [] }, { signal }) => withCanvas(async (controller) => {
+    create: ({ title, kits }, { signal }) => withCanvas(async (controller) => {
       signal?.throwIfAborted();
-      assertInstalledKits(kits, CANVAS_KIT_BUNDLES);
+      if (kits) assertInstalledKits(kits, CANVAS_KIT_BUNDLES);
       await saveCanvasBeforeSwitch(controller);
       const created = CANVASES.createProject({ title: validateCanvasTitle(title), kits });
       const result = await controller.openSaved(created.id);
