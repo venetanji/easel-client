@@ -12,6 +12,8 @@ test('connects over stdio, filters tool listings, and closes the MCP client', as
     async listTools() {
       return { tools: [
         { name: 'generate_image', inputSchema: { type: 'object' } },
+        { name: 'edit_image', inputSchema: { type: 'object' } },
+        { name: 'create_image_variation', inputSchema: { type: 'object' } },
         { name: 'list_models', inputSchema: { type: 'object' } },
         { name: 'read_local_file', inputSchema: { type: 'object' } },
       ] };
@@ -30,12 +32,12 @@ test('connects over stdio, filters tool listings, and closes the MCP client', as
 
   assert.deepEqual(calls[0], ['connect', transport]);
   assert.equal(transportOptions.cwd, 'C:\\app\\resources');
-  assert.deepEqual((await mcp.listTools()).map((tool) => tool.name), ['generate_image', 'list_models']);
+  assert.deepEqual((await mcp.listTools()).map((tool) => tool.name), ['generate_image', 'edit_image', 'create_image_variation', 'list_models']);
   await mcp.callTool('generate_image', { prompt: 'a lamp' });
   await assert.rejects(mcp.callTool('read_local_file', {}), /not allowlisted/i);
   await mcp.close();
   assert.deepEqual(calls.at(-1), ['close']);
-  assert.deepEqual([...ALLOWED_MEDIA_TOOLS].sort(), ['capture_canvas_screenshot', 'generate_image', 'list_models']);
+  assert.deepEqual([...ALLOWED_MEDIA_TOOLS].sort(), ['capture_canvas_screenshot', 'create_image_variation', 'edit_image', 'generate_image', 'list_models']);
 });
 
 test('does not expose a failing child transport as a connected client', async () => {

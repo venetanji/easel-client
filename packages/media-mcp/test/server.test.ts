@@ -26,7 +26,7 @@ test('registers only allowlisted media tools and returns image content', async (
   assert.deepEqual([...registered.keys()].sort(), ['capture_canvas_screenshot', 'generate_image', 'list_models']);
   const models = await registered.get('list_models')!.handler({});
   assert.deepEqual(models, {
-    content: [{ type: 'text', text: 'Available models: flux2-9b' }],
+    content: [{ type: 'text', text: 'Available Media models: ["flux2-9b"]' }],
     structuredContent: { models: ['flux2-9b'] },
   });
   const image = await registered.get('generate_image')!.handler({ prompt: 'a cat' }) as { content: unknown[] };

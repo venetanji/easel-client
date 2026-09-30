@@ -80,11 +80,13 @@ function createChatService({
     pendingSave = false;
   }
 
-  function ensureChatId(title = 'New chat') {
+  function ensureChatId(title = 'New chat', { persist = true } = {}) {
     if (chatId) return chatId;
-    chatId = crypto.randomUUID().replaceAll('-', '');
-    if (!chatTitle) chatTitle = title.slice(0, 120);
-    if (chatStore) chatStore.save({ id: chatId, title: chatTitle || title.slice(0, 120), history: [...history] });
+    const nextId = crypto.randomUUID().replaceAll('-', '');
+    const nextTitle = chatTitle || title.slice(0, 120);
+    if (persist && chatStore) chatStore.save({ id: nextId, title: nextTitle, history: [...history] });
+    chatId = nextId;
+    chatTitle = nextTitle;
     return chatId;
   }
 
@@ -198,7 +200,8 @@ function createChatService({
     }
     busy = true;
     try {
-      ensureChatId(userMessage.replace(/\s+/g, ' ').slice(0, 120) || 'Attached media');
+      // Save the actual prompt through checkpoint, which retains it in memory on disk errors.
+      ensureChatId(userMessage.replace(/\s+/g, ' ').slice(0, 120) || 'Attached media', { persist: false });
       const turnChatId = chatId;
       const turnOptions = { mode, size, skills, kits };
       lastTurnOptions = turnOptions;

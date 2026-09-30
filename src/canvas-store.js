@@ -94,6 +94,25 @@ function addCanvasMetadata(html, id, title) {
   return clean.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${metadata}`);
 }
 
+function referencesProjectItem(content, fromFile, targetPath, assetId) {
+  // Check authored references before assembly, including files outside the current document's dependency graph.
+  if (assetId && new RegExp(`\\{\\{asset:${assetId}\\}\\}|\\basset:(?:\\/\\/)?${assetId}(?![a-f0-9])`, 'i').test(content)) return true;
+  const references = [...content.matchAll(/"([^"\r\n]*)"|'([^'\r\n]*)'|`([^`\r\n]*)`/g)].map((match) => match.slice(1).find((value) => value !== undefined));
+  references.push(...[...content.matchAll(/url\(\s*([^)'"\s]+)\s*\)/gi)].map((match) => match[1]));
+  references.push(...[...content.matchAll(/\b(?:src|href|poster|action)\s*=\s*([^\s"'=<>`]+)/gi)].map((match) => match[1]));
+  for (let reference of references) {
+    reference = reference.replace(/\\u([a-f0-9]{4})|\\x([a-f0-9]{2})/gi, (_match, unicode, hex) => String.fromCharCode(parseInt(unicode || hex, 16))).replace(/\\([/'"`\\])/g, '$1');
+    if (assetId && reference.toLowerCase() === assetId.toLowerCase()) return true;
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/|#)/i.test(reference)) continue;
+    for (const token of reference.split(/,\s*/).map((value) => value.trim().split(/\s+/)[0])) {
+      let local = token.split(/[?#]/)[0];
+      try { local = decodeURIComponent(local); } catch { continue; }
+      if (local && path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), local)) === targetPath) return true;
+    }
+  }
+  return false;
+}
+
 function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, assetStore, thumbnailFactory = (bytes, mimeType) => `data:${mimeType};base64,${bytes.toString('base64')}`, idFactory = () => crypto.randomUUID().replaceAll('-', '') }) {
   const canvasesPath = path.join(userDataPath, 'canvases');
   const dependenciesPath = path.join(canvasesPath, '.dependencies');
@@ -175,7 +194,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return match ? unescapeAttribute(match[1]) : 'Easel Canvas';
   }
 
-  function loadProject(id) {
+  function loadProject(id, { readOnly = false } = {}) {
     const filename = projectFilename(id);
     if (fileSystem.existsSync(filename)) {
       const project = validateProject(JSON.parse(fileSystem.readFileSync(filename, 'utf8')));
@@ -183,6 +202,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     }
     const htmlFile = getFilename(id);
     if (!fileSystem.existsSync(htmlFile)) throw new Error('Canvas was not found.');
+    if (readOnly) throw new Error('Open this legacy canvas before inspecting deletion so its project metadata can be migrated.');
     const html = fileSystem.readFileSync(htmlFile, 'utf8');
     const project = projectFromDocument(html, { extractAssets, extractKits });
     project.title = titleFromHtml(html);
@@ -453,14 +473,77 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return { ...commitProject(id, project), editCount: args.edits.length, filesChanged: diff.length, diff, syntax, atomic: true, effects: { source: 'all edits persisted in one project revision', runtime: 'unchanged until reload' } };
   }
 
-  function deleteFile(id, args = {}) {
+  function validateDeletionProject(project, id) {
+    validateProject(project);
+    const failures = [];
+    for (const document of projectDocuments(project)) {
+      try { assemble(project, id, document.title, { documentPath: document.path }); }
+      catch (error) { failures.push({ path: document.path, error: error.message }); }
+    }
+    return failures;
+  }
+
+  function fileDeletionPlan(id, args = {}) {
     const name = validateFilePath(args.path);
-    const project = loadProject(id);
+    const project = loadProject(id, { readOnly: true });
     checkRevisions(project, name, args);
-    if (name === project.manifest.entry) throw new Error('Select another entry before deleting the current entry file.');
     if (!Object.hasOwn(project.files, name)) throw new Error('Canvas project file was not found.');
+    const isDocument = /\.html?$/i.test(name);
+    const previousEntry = project.manifest.entry;
+    const documents = projectDocuments(project).filter((document) => document.path !== name);
+    const nextEntry = name === previousEntry ? documents[0]?.path || null : previousEntry;
+    const referencingFiles = Object.entries(project.files).filter(([file, content]) => file !== name && referencesProjectItem(content, file, name)).map(([file]) => file).sort();
+    const summary = { id, path: name, title: project.title, bytes: Buffer.byteLength(project.files[name]), revision: digest(project.files[name]), projectRevision: projectRevision(project), isDocument, isEntry: name === previousEntry, previousEntry, nextEntry, remainingDocuments: documents, referencingFiles, ok: false };
+    if (isDocument && !documents.length) return { project, summary: { ...summary, reason: 'The last HTML document cannot be deleted. Create another HTML document first.' } };
+    if (referencingFiles.length) return { project, summary: { ...summary, reason: `File ${name} is still referenced by: ${referencingFiles.join(', ')}. Remove these source references first.` } };
     delete project.files[name];
-    return { ...commitProject(id, project), path: name, deleted: true, effects: { source: 'persisted', runtime: 'unchanged until reload' } };
+    project.manifest.entry = nextEntry;
+    const validationErrors = validateDeletionProject(project, id);
+    if (validationErrors.length) return { project, summary: { ...summary, validationErrors, reason: `Deletion would leave invalid project documents: ${validationErrors.map((failure) => `${failure.path}: ${failure.error}`).join('; ')}` } };
+    return { project, summary: { ...summary, ok: true, remainingDocuments: projectDocuments(project), validation: { ok: true, checkedDocuments: documents.map((document) => document.path) } } };
+  }
+
+  function deletionError(summary) {
+    const error = new Error(summary.reason);
+    error.code = 'CANVAS_DELETE_BLOCKED';
+    error.referencingFiles = summary.referencingFiles;
+    if (summary.validationErrors) error.validationErrors = summary.validationErrors;
+    return error;
+  }
+
+  function inspectDeletion(id, args = {}) {
+    return fileDeletionPlan(id, args).summary;
+  }
+
+  function deleteFile(id, args = {}) {
+    const { project, summary } = fileDeletionPlan(id, args);
+    if (!summary.ok) throw deletionError(summary);
+    return { ...commitProject(id, project), path: summary.path, deletedPath: summary.path, deleted: true, isDocument: summary.isDocument, isEntry: summary.isEntry, previousEntry: summary.previousEntry, nextEntry: summary.nextEntry, documents: projectDocuments(project), effects: { source: 'file removed from the project; a surviving HTML document remains the entry', runtime: 'unchanged until host reload' } };
+  }
+
+  function assetDeletionPlan(id, args = {}) {
+    if (typeof args.assetId !== 'string' || !ATTACHED_ID_PATTERN.test(args.assetId)) throw new Error('Project asset ID is invalid.');
+    const project = loadProject(id, { readOnly: true });
+    checkRevisions(project, undefined, args);
+    const asset = project.manifest.assets.find((candidate) => candidate.id === args.assetId);
+    if (!asset) throw new Error('This media asset is not attached to the selected project.');
+    const referencingFiles = Object.entries(project.files).filter(([file, content]) => referencesProjectItem(content, file, asset.path, asset.id)).map(([file]) => file).sort();
+    const summary = { id, assetId: asset.id, title: project.title, asset: { ...asset }, projectRevision: projectRevision(project), referencingFiles, ok: false };
+    if (referencingFiles.length) return { project, summary: { ...summary, reason: `Media ${asset.path} is still referenced by: ${referencingFiles.join(', ')}. Remove these source references first.` } };
+    project.manifest.assets = project.manifest.assets.filter((candidate) => candidate.id !== asset.id);
+    const validationErrors = validateDeletionProject(project, id);
+    if (validationErrors.length) return { project, summary: { ...summary, validationErrors, reason: `Detaching media would leave invalid project documents: ${validationErrors.map((failure) => `${failure.path}: ${failure.error}`).join('; ')}` } };
+    return { project, summary: { ...summary, ok: true } };
+  }
+
+  function inspectAssetDeletion(id, args = {}) {
+    return assetDeletionPlan(id, args).summary;
+  }
+
+  function detachAsset(id, args = {}) {
+    const { project, summary } = assetDeletionPlan(id, args);
+    if (!summary.ok) throw deletionError(summary);
+    return { ...commitProject(id, project), assetId: summary.assetId, detachedAssetId: summary.assetId, detached: true, asset: summary.asset, documents: projectDocuments(project), effects: { source: 'project attachment removed; shared library media and cached blobs are preserved', runtime: 'unchanged until host reload' } };
   }
 
   function updateManifest(id, args = {}) {
@@ -699,7 +782,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return { ...archive, id, title: project.title, fileName: `${slug}.zip`, bytes: archive.data.length, documents, manifest, contributions };
   }
 
-  return { attachAsset, attachAssets, createDocument, createEmpty, createProject, deleteFile, exportProject, get, getAsset, getDocument, getProject, insertImage, list, listAssets, listDocuments, listFiles, migrateAssetReferences, patchFile, patchFiles, readAsset: getAsset, readFile, readProjectState, renameProject, save, saveProjectState, update, updateManifest, writeFile };
+  return { attachAsset, attachAssets, createDocument, createEmpty, createProject, deleteFile, detachAsset, exportProject, get, getAsset, getDocument, getProject, inspectAssetDeletion, inspectDeletion, insertImage, list, listAssets, listDocuments, listFiles, migrateAssetReferences, patchFile, patchFiles, readAsset: getAsset, readFile, readProjectState, renameProject, save, saveProjectState, update, updateManifest, writeFile };
 }
 
 module.exports = { EMPTY_CANVAS_HTML, MAX_DOCUMENT_EXPORT_BYTES, MAX_PROJECT_EXPORT_BYTES, createCanvasStore };

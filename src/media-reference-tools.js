@@ -16,6 +16,11 @@ const MEDIA_REFERENCE_TOOLS = Object.freeze([
     description: 'Inspect a saved reference. Images are provided to the model as a temporary visual observation. Use get_video_frames for a recorded video. Binary data is excluded from the saved tool result.',
     parameters: { type: 'object', additionalProperties: false, required: ['assetId'], properties: { assetId: ASSET_ID, projectId: PROJECT_ID } },
   } },
+  { type: 'function', function: {
+    name: 'delete_media_asset',
+    description: 'Preview saved media and ask the user to confirm deletion. Project scope removes an unused attachment and preserves library/other project copies. Library scope deletes only the shared library copy. Referenced project assets cannot be removed. Cancel leaves all media unchanged. Never assume approval.',
+    parameters: { type: 'object', additionalProperties: false, required: ['assetId'], properties: { assetId: ASSET_ID, projectId: PROJECT_ID, scope: { type: 'string', enum: ['project', 'library'], default: 'project' } } },
+  } },
 ]);
 
 function mediaToolSchema(tool) {

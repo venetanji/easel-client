@@ -9,8 +9,8 @@ test('normalizes LiteLLM model catalogs to unique selectable IDs', () => {
     { id: 'model-b' },
     { name: 'missing-id' },
   ] }), [
-    { id: 'provider/model-a', name: 'Model A' },
-    { id: 'model-b', name: 'model-b' },
+    { id: 'provider/model-a', name: 'Model A', suggestedRoles: ['agent'] },
+    { id: 'model-b', name: 'model-b', suggestedRoles: ['agent'] },
   ]);
 });
 
@@ -26,7 +26,7 @@ test('lists models from the configured OpenAI-compatible API', async () => {
       return { models: { list: async () => ({ data: [{ id: 'model-a' }] }) } };
     },
   });
-  assert.deepEqual(await service.listModels(), [{ id: 'model-a', name: 'model-a' }]);
+  assert.deepEqual(await service.listModels(), [{ id: 'model-a', name: 'model-a', suggestedRoles: ['agent'] }]);
   assert.equal(options.baseURL, 'http://localhost:4000/v1');
   assert.equal(options.apiKey, 'secret-key');
 });

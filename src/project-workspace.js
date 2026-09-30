@@ -1,3 +1,20 @@
+function createDeleteButton(document, label, action) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'delete-control';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.setAttribute('aria-haspopup', 'dialog');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  for (const [name, value] of Object.entries({ viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) svg.setAttribute(name, value);
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M3.5 5.5h13M7.5 5.5v-2h5v2M5 5.5l.8 11h8.4l.8-11M8 8.5v5M12 8.5v5');
+  svg.append(path);
+  button.append(svg);
+  button.addEventListener('click', action);
+  return button;
+}
+
 function createProjectWorkspace({ document, client, storage, onSelection, onStatus, onBounds, onAttach, onCreate, onFiles, onBusy, onDrawerChange, isBusy }) {
   const picker = document.getElementById('project-select');
   const drawer = document.querySelector('.library');
@@ -25,6 +42,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   let mediaVersion = 0;
   let mediaUrl = '';
   let zoomed = false;
+  let deletionQueue = Promise.resolve();
   const tabs = new Map();
   function read(key, fallback) { try { return JSON.parse(storage?.getItem(key) || 'null') ?? fallback; } catch { return fallback; } }
   for (const tab of read(tabStorageKey, [])) {
@@ -52,6 +70,11 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     return item;
   }
   function report(error) { onStatus(error?.message || String(error), true); }
+  function deleteButton(label, action) {
+    const item = createDeleteButton(document, label, () => run(action));
+    item.disabled = operation || Boolean(isBusy?.());
+    return item;
+  }
   async function run(action) {
     if (operation) return;
     try { await action(); } catch (error) { report(error); }
@@ -143,8 +166,8 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     const bytes = Uint8Array.from(atob(asset.data), (character) => character.charCodeAt(0));
     return new Blob([bytes], { type: asset.mimeType });
   }
-  async function openMedia(asset, library = false) {
-    guard();
+  async function openMedia(asset, library = false, { trustedPreview = false } = {}) {
+    if (!trustedPreview) guard();
     const owner = projectId;
     const version = ++selectionVersion;
     operation = true;
@@ -152,7 +175,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     try {
       const full = library ? await client.getLibraryAsset(asset.id) : await client.getProjectAsset(owner, asset.id);
       if (version !== selectionVersion || owner !== projectId) return;
-      await client.hideCanvasPreview();
+      if (!trustedPreview) await client.hideCanvasPreview();
       hideMedia();
       mediaUrl = URL.createObjectURL(mediaBlob(full));
       const kind = mediaKind(full);
@@ -189,11 +212,12 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   }
   async function refreshAssets() {
     const owner = projectId;
+    const library = scope.value === 'library';
     const version = ++mediaVersion;
     const current = owner ? await client.getProjectAssets(owner) : [];
     if (version !== mediaVersion || owner !== projectId) return;
     assets = Array.isArray(current) ? current : current.assets || [];
-    const all = scope.value === 'library' ? await client.listAssets() : assets;
+    const all = library ? await client.listAssets() : assets;
     if (version !== mediaVersion || owner !== projectId) return;
     const attached = new Set(assets.map((asset) => asset.id));
     mediaList.replaceChildren(...all.filter((asset) => mediaKind(asset)).map((asset) => {
@@ -220,7 +244,9 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       if (!inProject) actions.append(button('Add to project', 'button quiet small', () => addToProject(asset)));
       actions.append(button('Use in chat', 'button quiet small', () => attachMedia(asset, !inProject)));
       actions.append(button('Download', 'button quiet small', () => downloadMedia(asset.id, !inProject)));
-      figure.append(thumbnail, label, actions);
+      const heading = node('div', 'project-media-heading');
+      heading.append(label, deleteButton(`${library ? 'Delete from library' : 'Remove from project'}: ${label.textContent}`, () => deleteMedia(asset.id, library)));
+      figure.append(thumbnail, heading, actions);
       return figure;
     }));
     const empty = document.getElementById('media-empty');
@@ -255,6 +281,43 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     const result = library ? await client.saveLibraryAsset(id) : await client.saveProjectAsset(projectId, id);
     if (!result?.canceled) onStatus('Media downloaded.');
   }
+  async function deleteFile(path) {
+    guard();
+    const owner = projectId;
+    if (!owner) return;
+    operation = true;
+    updateBusy();
+    let deleted = false;
+    try {
+      const result = await client.deleteProjectFile(owner, { path });
+      if (!result?.deleted) return;
+      deleted = true;
+      await acceptDeletion({ ...result, type: 'project-file-deleted', projectId: owner, deletedPath: path });
+      onStatus(`Deleted ${path}.`);
+    } finally {
+      operation = false;
+      updateBusy();
+      if (deleted && owner === projectId && !drawer.hidden) documentsList.querySelector('button')?.focus();
+    }
+  }
+  async function deleteMedia(assetId, library) {
+    guard();
+    const owner = projectId;
+    operation = true;
+    updateBusy();
+    let deleted = false;
+    try {
+      const result = library ? await client.deleteLibraryAsset(assetId) : await client.deleteProjectAsset(owner, assetId);
+      if (!result?.deleted) return;
+      deleted = true;
+      await acceptDeletion({ ...result, type: 'media-deleted', scope: library ? 'library' : 'project', projectId: owner, assetId });
+      onStatus(library ? 'Deleted media from the library. Project copies are kept.' : 'Removed media from this project. The library copy is kept.');
+    } finally {
+      operation = false;
+      updateBusy();
+      if (deleted && owner === projectId && !drawer.hidden) (mediaList.querySelector('button') || scope).focus();
+    }
+  }
   function renderDocuments() {
     documentsList.replaceChildren(...documents.map((entry) => {
       const path = entry.path || entry.documentPath;
@@ -263,7 +326,9 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       item.setAttribute('aria-current', String(activeTab?.kind === 'document' && activeTab.resource === path));
       const detail = node('small', '', path);
       item.append(detail);
-      return item;
+      const row = node('div', 'project-file-row');
+      row.append(item, deleteButton(`Delete ${path}`, () => deleteFile(path)));
+      return row;
     }));
     document.getElementById('canvases-empty').hidden = documents.length > 0;
     document.getElementById('canvases-empty').textContent = projectId ? 'Create an HTML canvas in this project.' : 'Select a project above to browse its documents.';
@@ -334,7 +399,9 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     document.getElementById('project-source-files').replaceChildren(...files.map((file) => {
       const item = button(file.path, 'project-source-file', () => onFiles(file.path));
       item.title = `${file.path} - ${Number(file.bytes || 0).toLocaleString()} bytes`;
-      return item;
+      const row = node('div', 'project-file-row');
+      row.append(item, deleteButton(`Delete ${file.path}`, () => deleteFile(file.path)));
+      return row;
     }));
     if (!files.length) document.getElementById('project-source-files').append(node('p', 'empty-library', 'Shared scripts and styles appear here.'));
     await refreshAssets();
@@ -415,6 +482,47 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       await refreshAssets();
     }
   }
+  function acceptDeletion(event) {
+    const update = async () => {
+      const file = event.type === 'project-file-deleted';
+      if (event.scope === 'library' || event.projectId === projectId) selectionVersion += 1;
+      const matches = (tab) => file
+        ? tab.projectId === event.projectId && tab.kind === 'document' && tab.resource === event.deletedPath
+        : isMediaTab(tab) && tab.resource === event.assetId && (event.scope === 'library' ? tab.library : !tab.library && tab.projectId === event.projectId);
+      const removedActive = activeTab && matches(activeTab) ? activeTab : null;
+      for (const [key, tab] of tabs) if (matches(tab)) tabs.delete(key);
+      if (removedActive) {
+        hideMedia();
+        select(null);
+      } else { writeState(); renderTabs(); }
+      await refreshProjects(false);
+      if (!projectId) await refreshAssets();
+      if (event.projectId === projectId && file) {
+        const opened = event.opened || event;
+        const path = opened.documentPath;
+        if (path && documents.some((entry) => (entry.path || entry.documentPath) === path) && (removedActive || activeTab?.kind === 'document')) {
+          hideMedia();
+          select({ projectId, kind: 'document', resource: path, title: opened.documentTitle || documents.find((entry) => (entry.path || entry.documentPath) === path)?.title || path }, opened);
+        } else if (!removedActive) select(activeTab, event);
+        renderDocuments();
+      }
+      updateBusy();
+      onBounds();
+    };
+    const result = deletionQueue.then(update);
+    deletionQueue = result.catch(() => {});
+    return result;
+  }
+  async function previewMedia(event) {
+    if (!event.asset?.id) throw new Error('The media preview is missing its asset reference.');
+    if (event.projectId && event.projectId !== projectId) {
+      projects = await client.listCanvases();
+      projectId = event.projectId;
+      renderPicker();
+      await loadProjectContents(projectId);
+    }
+    await openMedia(event.asset, event.scope === 'library', { trustedPreview: true });
+  }
   async function create(kind, name, kits) {
     guard();
     operation = true;
@@ -445,7 +553,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     }
     const busy = operation || Boolean(isBusy?.());
     picker.disabled = busy;
-    for (const element of document.querySelectorAll('.project-document, .project-source-file, .project-media-actions button, .project-thumbnail, .canvas-tab button, #project-new, #project-rename, #drawer-new-document')) element.disabled = busy;
+    for (const element of document.querySelectorAll('.project-document, .project-source-file, .library .delete-control, .project-media-actions button, .project-thumbnail, .canvas-tab button, #project-new, #project-rename, #drawer-new-document')) element.disabled = busy;
     document.getElementById('project-rename').disabled = busy || !projectId;
     document.getElementById('image-use-chat').disabled = busy || !isMediaTab();
   }
@@ -464,8 +572,8 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   });
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !drawer.hidden && !document.querySelector('dialog[open]')) setDrawer(false); });
   setDrawer(false, false);
-  return { refreshProjects, refreshAssets, openProject, openDocument, changed, assetsChanged, create, exportCurrent, updateBusy,
+  return { refreshProjects, refreshAssets, openProject, openDocument, changed, assetsChanged, acceptDeletion, previewMedia, create, exportCurrent, updateBusy,
     getProjectId: () => projectId, getPreviewKind: () => activeTab?.kind || 'empty', isOperating: () => operation, setDrawer };
 }
 
-if (typeof module !== 'undefined') module.exports = { createProjectWorkspace };
+if (typeof module !== 'undefined') module.exports = { createDeleteButton, createProjectWorkspace };

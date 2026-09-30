@@ -97,7 +97,7 @@ test('renders an agent-authored canvas using only saved image asset IDs', async 
   });
   assert.equal(canvas.title, 'Composition');
   assert.equal(canvas.html, '<h1>Local collage</h1><img src="{{asset:hero}}">');
-  assert.deepEqual(canvas.assets, [{ name: 'hero', data: 'YWJj', mimeType: 'image/png' }]);
+  assert.deepEqual(canvas.assets, [{ name: 'hero', assetId, data: 'YWJj', mimeType: 'image/png' }]);
   assert.equal(PRESENT_CANVAS_TOOL.function.name, 'present_canvas');
 });
 
@@ -158,25 +158,39 @@ test('creates a named preset canvas through the host controller tool', async () 
   assert.ok(events.some((event) => event.type === 'canvas' && event.canvasId === 'd'.repeat(32)));
 });
 
-test('rejects unknown tools and malformed arguments', async () => {
+test('returns structured errors for unknown tools and malformed arguments', async () => {
   const base = {
     userMessage: 'do it',
     history: [],
-    mcp: { async listTools() { return mediaTools; }, async callTool() { return { content: [] }; } },
+    mcp: { async listTools() { return mediaTools; }, async callTool() { assert.fail('invalid tool calls must not execute through MCP'); } },
     assetStore: { async save() {}, async get() {} },
     presentCanvas: async () => {},
   };
-  await assert.rejects(runAgentTurn({
-    ...base,
-    llm: { async createCompletion() { return response(toolCall('read_local_file', {})); } },
-  }), /unknown or disallowed tool/i);
-  await assert.rejects(runAgentTurn({
-    ...base,
-    llm: { async createCompletion() { return response({
-      role: 'assistant',
-      tool_calls: [{ id: 'bad', type: 'function', function: { name: 'list_models', arguments: '{' } }],
-    }); } },
-  }), /invalid tool arguments/i);
+  for (const [invalidCall, expectedError] of [
+    [toolCall('read_local_file', {}), /unknown or unavailable tool/i],
+    [{ role: 'assistant', tool_calls: [{ id: 'bad', type: 'function', function: { name: 'list_models', arguments: '{' } }] }, /invalid tool arguments/i],
+  ]) {
+    let requests = 0;
+    const result = await runAgentTurn({
+      ...base,
+      llm: { async createCompletion({ messages }) {
+        requests += 1;
+        if (requests === 1) return response(invalidCall);
+        const failure = JSON.parse(messages.at(-1).content);
+        assert.equal(failure.ok, false);
+        assert.equal(failure.code, 'INVALID_TOOL_ARGUMENTS');
+        assert.equal(failure.errorType, 'validation');
+        assert.match(failure.error, expectedError);
+        assert.equal(typeof failure.correction, 'string');
+        assert.equal(typeof failure.example, 'object');
+        return response({ role: 'assistant', content: 'I can continue with a corrected request.' });
+      } },
+    });
+    assert.equal(requests, 2);
+    assert.equal(result.text, 'I can continue with a corrected request.');
+    assert.deepEqual(result.history.map((message) => message.role), ['user', 'assistant', 'tool', 'assistant']);
+    assert.equal(result.history[2].tool_call_id, invalidCall.tool_calls[0].id);
+  }
 });
 
 test('finishes with tools disabled at the budget and preserves a resumable conversation', async () => {

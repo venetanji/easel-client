@@ -65,7 +65,7 @@ test('loads secrets only in main, keeps session history, and closes the MCP proc
 
 test('requires a configured LiteLLM model and still closes MCP on agent errors', async () => {
   const missingModel = createChatService({ settingsStore: settingsStore('') });
-  await assert.rejects(missingModel.sendMessage('hello'), /LiteLLM model is required/i);
+  await assert.rejects(missingModel.sendMessage('hello'), /Choose a model in chat before sending/i);
 
   let closed = false;
   const service = createChatService({

@@ -34,3 +34,50 @@ test('rejects path traversal, unknown IDs, unsupported formats, and oversized as
   await assert.rejects(store.save({ data: 'not base64!', mimeType: 'image/png' }), /base64/i);
   await assert.rejects(store.save({ data: 'A'.repeat(44_739_248), mimeType: 'image/png' }), /32 MiB/i);
 });
+
+test('removes only the selected image ID across recognized formats and preserves project copies', async (t) => {
+  const temporaryRoot = path.resolve(os.tmpdir());
+  const userDataPath = fs.mkdtempSync(path.join(temporaryRoot, 'easel-assets-remove-'));
+  t.after(() => {
+    assert.equal(path.dirname(path.resolve(userDataPath)), temporaryRoot);
+    fs.rmSync(userDataPath, { recursive: true, force: true });
+  });
+  const id = 'a'.repeat(32);
+  const otherId = 'b'.repeat(32);
+  let nextId = id;
+  const store = createAssetStore({ userDataPath, idFactory: () => nextId });
+  for (const mimeType of ['image/png', 'image/jpeg', 'image/webp']) await store.save({ data: 'YWJj', mimeType });
+  nextId = otherId;
+  await store.save({ data: 'ZGVm', mimeType: 'image/png' });
+  const unrelated = path.join(userDataPath, 'assets', `${id}.png.tmp`);
+  fs.writeFileSync(unrelated, 'unfinished unrelated file');
+  const projectDirectory = path.join(userDataPath, 'project-assets');
+  fs.mkdirSync(projectDirectory);
+  const projectCopy = path.join(projectDirectory, 'c'.repeat(64));
+  fs.writeFileSync(projectCopy, 'project image bytes');
+
+  assert.deepEqual(await store.remove(id), { id, deleted: true });
+  for (const extension of ['png', 'jpg', 'webp']) assert.equal(fs.existsSync(path.join(userDataPath, 'assets', `${id}.${extension}`)), false);
+  await assert.rejects(store.get(id), /not found/i);
+  assert.equal((await store.get(otherId)).data, 'ZGVm');
+  assert.deepEqual((await store.list()).map((asset) => asset.id), [otherId]);
+  assert.equal(fs.readFileSync(projectCopy, 'utf8'), 'project image bytes');
+  assert.equal(fs.readFileSync(unrelated, 'utf8'), 'unfinished unrelated file');
+});
+
+test('rejects invalid and missing removal IDs before changing image library files', async (t) => {
+  const temporaryRoot = path.resolve(os.tmpdir());
+  const userDataPath = fs.mkdtempSync(path.join(temporaryRoot, 'easel-assets-remove-'));
+  t.after(() => {
+    assert.equal(path.dirname(path.resolve(userDataPath)), temporaryRoot);
+    fs.rmSync(userDataPath, { recursive: true, force: true });
+  });
+  const id = 'a'.repeat(32);
+  const store = createAssetStore({ userDataPath, idFactory: () => id });
+  await store.save({ data: 'YWJj', mimeType: 'image/png' });
+  for (const invalid of ['../../settings.json', 'a'.repeat(64), id.toUpperCase(), '', undefined]) {
+    await assert.rejects(store.remove(invalid), /asset ID is invalid/i);
+  }
+  await assert.rejects(store.remove('b'.repeat(32)), /not found/i);
+  assert.equal((await store.get(id)).data, 'YWJj');
+});

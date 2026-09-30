@@ -40,6 +40,8 @@ const { createChatStore } = require('./chat-store');
 const { createCanvasInputStore } = require('./canvas-input-store');
 const { renderCanvasInputScript, dismissCanvasInputScript } = require('./canvas-input-runtime');
 const { createCanvasMediaStore } = require('./canvas-media-store');
+const { createDeletionService } = require('./deletion-service');
+const { validateFilePath } = require('./canvas-project');
 const { createLiteLLMModelService } = require('./litellm-models');
 const { readInstalledSkills } = require('./skill-catalog');
 const { loadCanvasKitBundles } = require('./canvas-kits');
@@ -74,7 +76,14 @@ const ASSETS = createAssetStore({
 const CANVAS_KIT_BUNDLES = loadCanvasKitBundles(path.join(app.getAppPath(), 'canvas-kits'));
 const CANVAS_INPUTS = createCanvasInputStore({ userDataPath: app.getPath('userData') });
 const CAPTURE_MEDIA = createCanvasMediaStore({ userDataPath: app.getPath('userData') });
-const MEDIA_ASSETS = { get: async (id) => { try { return await ASSETS.get(id); } catch { return CAPTURE_MEDIA.get(id); } } };
+const MEDIA_ASSETS = {
+  get: async (id) => { try { return await ASSETS.get(id); } catch { return CAPTURE_MEDIA.get(id); } },
+  remove: async (id) => {
+    let image = false;
+    try { await ASSETS.get(id); image = true; } catch {}
+    return image ? ASSETS.remove(id) : CAPTURE_MEDIA.remove(id);
+  },
+};
 const CANVASES = createCanvasStore({ userDataPath: app.getPath('userData'), kitBundles: CANVAS_KIT_BUNDLES, assetStore: MEDIA_ASSETS, thumbnailFactory: projectThumbnail });
 const CANVAS_HISTORY = createCanvasHistory();
 let mainWindow;
@@ -146,6 +155,42 @@ async function attachProjectAssets(controller, projectId, assetIds, { kits = [] 
 function publicAsset(asset) {
   return Object.fromEntries(['id', 'name', 'mimeType', 'data', 'bytes', 'width', 'height', 'duration', 'codec', 'thumbnail'].filter((key) => asset[key] !== undefined).map((key) => [key, asset[key]]));
 }
+
+function validateFileDeletion(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['path', 'expectedRevision', 'expectedProjectRevision'].includes(key))) throw new Error('File deletion options are invalid.');
+  for (const key of ['expectedRevision', 'expectedProjectRevision']) if (input[key] !== undefined && (typeof input[key] !== 'string' || !/^[a-f0-9]{64}$/.test(input[key]))) throw new Error('File deletion revision is invalid.');
+  return { ...input, path: validateFilePath(input.path) };
+}
+
+const DELETIONS = createDeletionService({
+  canvasStore: CANVASES,
+  mediaStore: MEDIA_ASSETS,
+  recordUndo: (id, snapshot) => CANVAS_HISTORY.record(id, snapshot),
+  onChanged: emitCanvasSaved,
+  onEvent: (event) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, event); },
+  previewFile: async (controller, id, info) => {
+    if (info.isDocument) emitCanvasSaved(await controller.openSaved(id, info.path));
+    else {
+      mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, { type: 'canvas-file-preview', projectId: id, path: info.path });
+    }
+  },
+  previewMedia: async (controller, { projectId, scope, asset }) => {
+    await controller.hide();
+    const { data, ...metadata } = asset;
+    mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, { type: 'canvas-media-preview', projectId, scope, asset: metadata, previewHidden: true });
+  },
+  confirm: async ({ kind, projectId, scope, name, info }, { signal } = {}) => {
+    const projectTitle = projectId ? CANVASES.getProject(projectId).title : '';
+    const action = kind === 'media' && scope === 'project' ? 'Remove' : 'Delete';
+    const detail = kind === 'file'
+      ? `This deletes ${name} from ${projectTitle}.${info.isEntry ? ` The new default document will be ${info.nextEntry}.` : ''}`
+      : scope === 'project'
+        ? `This removes the attachment from ${projectTitle}. The shared library and other project copies are kept.`
+        : 'This deletes the saved library copy and any recorded frame samples. Existing project copies are kept.';
+    const result = await dialog.showMessageBox(mainWindow, { type: 'warning', title: `${action} ${kind === 'file' ? 'file' : 'media'}`, message: `${action} ${name}?`, detail, buttons: [action, 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, ...(signal ? { signal } : {}) });
+    return result.response === 0;
+  },
+});
 
 async function listStoredMedia() {
   const [images, captures] = await Promise.all([ASSETS.list(), CAPTURE_MEDIA.list()]);
@@ -265,11 +310,18 @@ const CHAT = createChatService({
     captureLiveCanvas: (options, context) => withCanvas((controller) => controller.captureLiveCanvas(options, context)),
     recordCanvasVideo: (options, context) => withCanvas((controller) => controller.recordCanvasVideo(options, context)),
     getVideoFrames: ({ assetId, maxFrames } = {}) => CAPTURE_MEDIA.getFrames(validateOpaqueId(assetId, 'Video asset ID'), { maxFrames }),
+    deleteCanvasFile: (args, context) => withCanvas((controller) => DELETIONS.deleteProjectFile(controller, validateOpaqueId(controller.getCurrentCanvasId(), 'Project ID'), validateFileDeletion(args), { ...context, preview: true })),
+    deleteMediaAsset: (args, context) => withCanvas((controller) => {
+      const scope = args.scope || 'project';
+      const projectId = scope === 'project' ? validateOpaqueId(args.projectId || controller.getCurrentCanvasId(), 'Project ID') : undefined;
+      const assetId = scope === 'library' ? validateOpaqueId(args.assetId, 'Asset ID') : validateProjectAssetId(args.assetId);
+      return DELETIONS.deleteMedia(controller, { projectId, assetId, scope }, { ...context, preview: true });
+    }),
     reloadCanvas: (options) => withCanvas((controller) => controller.reloadCanvas(options)),
     listCanvasFiles: (options) => withCanvas((controller) => controller.listCanvasFiles(options)),
     readCanvasFile: (options) => withCanvas((controller) => controller.readCanvasFile(options)),
     getCanvasState: (options) => withCanvas((controller) => controller.getCanvasState(options)),
-    ...Object.fromEntries(['writeCanvasFile', 'patchCanvasFile', 'applyCanvasFilePatches', 'deleteCanvasFile', 'updateCanvasProject', 'attachCanvasAsset', 'attachCanvasAssets', 'setCanvasState'].map((method) => [method, (options) => projectMutation(method, options)])),
+    ...Object.fromEntries(['writeCanvasFile', 'patchCanvasFile', 'applyCanvasFilePatches', 'updateCanvasProject', 'attachCanvasAsset', 'attachCanvasAssets', 'setCanvasState'].map((method) => [method, (options) => projectMutation(method, options)])),
     applyCanvasPatch: (options) => withCanvas(async (controller) => {
       const canvasId = controller.getCurrentCanvasId();
       const before = canvasId ? CANVASES.get(canvasId).html : '';
@@ -436,6 +488,21 @@ function registerIpcHandlers() {
     // Recording owns the canvas queue, so cancel it before queueing a view switch.
     await requireCanvasView().cancelCanvasRecording('The canvas preview was hidden.');
     return withCanvas((controller) => controller.hide());
+  });
+  canvasHandle(IPC_CHANNELS.DELETE_PROJECT_FILE, (event, id, input) => {
+    assertTrustedSender(event, mainWindow);
+    if (CHAT.isBusy()) throw new Error('Stop the agent or wait for its reply before deleting a file.');
+    return DELETIONS.deleteProjectFile(requireCanvasView(), validateOpaqueId(id, 'Project ID'), validateFileDeletion(input));
+  });
+  canvasHandle(IPC_CHANNELS.DELETE_PROJECT_ASSET, (event, id, assetId) => {
+    assertTrustedSender(event, mainWindow);
+    if (CHAT.isBusy()) throw new Error('Stop the agent or wait for its reply before removing media.');
+    return DELETIONS.deleteMedia(requireCanvasView(), { projectId: validateOpaqueId(id, 'Project ID'), assetId: validateProjectAssetId(assetId), scope: 'project' });
+  });
+  canvasHandle(IPC_CHANNELS.DELETE_LIBRARY_ASSET, (event, assetId) => {
+    assertTrustedSender(event, mainWindow);
+    if (CHAT.isBusy()) throw new Error('Stop the agent or wait for its reply before deleting media.');
+    return DELETIONS.deleteMedia(requireCanvasView(), { assetId: validateOpaqueId(assetId, 'Asset ID'), scope: 'library' });
   });
   ipcMain.handle(IPC_CHANNELS.LIST_CANVAS_INPUTS, (event) => {
     assertTrustedSender(event, mainWindow);

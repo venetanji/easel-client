@@ -16,24 +16,29 @@ const {
 function element(tagName = 'div') {
   const listeners = {};
   const classes = new Set();
+  let text = '';
   return {
     tagName,
     listeners,
     children: [],
     attributes: {},
+    dataset: {},
     value: '',
-    textContent: '',
+    get textContent() { return text + this.children.map((child) => child.textContent || '').join(''); },
+    set textContent(value) { text = String(value); this.children = []; },
     className: '',
     disabled: false,
     placeholder: '',
     classList: {
+      add(...names) { names.forEach((name) => classes.add(name)); },
       toggle(name, enabled) { enabled ? classes.add(name) : classes.delete(name); },
       contains(name) { return classes.has(name); },
     },
     addEventListener(name, callback) { listeners[name] = callback; },
     setAttribute(name, value) { this.attributes[name] = value; },
     append(...children) { this.children.push(...children); },
-    replaceChildren(...children) { this.children = [...children]; },
+    replaceChildren(...children) { text = ''; this.children = [...children]; },
+    querySelectorAll() { return []; },
   };
 }
 
@@ -234,18 +239,32 @@ test('Enter submits chat while Ctrl+Enter remains multiline', () => {
   assert.equal(submitted, 1);
 });
 
-test('renders untrusted agent text literally and accepts only image data URLs', () => {
-  const document = { createElement: (tagName) => element(tagName) };
+test('renders safe Markdown, escapes untrusted HTML, and accepts only image data URLs', (t) => {
+  const previousMarkdownIt = globalThis.markdownit;
+  globalThis.markdownit = require('markdown-it');
+  t.after(() => {
+    if (previousMarkdownIt === undefined) delete globalThis.markdownit;
+    else globalThis.markdownit = previousMarkdownIt;
+  });
+  const document = {
+    createElement: (tagName) => element(tagName),
+    createTextNode: (text) => ({ nodeType: 3, textContent: String(text) }),
+  };
   const messages = element();
   const images = element();
   renderAgentEvent({
     document,
     messagesElement: messages,
     imagesElement: images,
-    event: { type: 'assistant', text: '<img src=x onerror=alert(1)>' },
+    event: { type: 'assistant', text: '**Safe formatting**\n\n<img src=x onerror=alert(1)>\n\n[Run](javascript:alert(1))\n\n![Remote image](https://example.org/a.png)' },
     statusElement: element(),
   });
-  assert.equal(messages.children[0].textContent, '<img src=x onerror=alert(1)>');
+  const content = messages.children[0].children[0];
+  assert.match(content.innerHTML, /<strong>Safe formatting<\/strong>/);
+  assert.match(content.innerHTML, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.match(content.innerHTML, /Remote image/);
+  assert.doesNotMatch(content.innerHTML, /<img\b|href=["']javascript:/i);
+  assert.equal(content.classList.contains('markdown'), true);
   renderAgentEvent({
     document,
     messagesElement: messages,

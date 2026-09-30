@@ -58,6 +58,24 @@ function createAssetStore({
     throw new Error('Asset was not found.');
   }
 
+  async function remove(id) {
+    if (typeof id !== 'string' || !ID_PATTERN.test(id)) throw new Error('Asset ID is invalid.');
+    const root = path.resolve(assetsPath);
+    const filenames = [];
+    for (const extension of Object.values(FORMATS)) {
+      const filename = path.resolve(root, `${id}.${extension}`);
+      if (path.dirname(filename) !== root) throw new Error('Asset path is outside the image library.');
+      let stat;
+      try { stat = fileSystem.lstatSync(filename); }
+      catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      if (!stat.isFile() && !stat.isSymbolicLink()) throw new Error('Image library asset is not a file.');
+      filenames.push(filename);
+    }
+    if (!filenames.length) throw new Error('Asset was not found.');
+    for (const filename of filenames) fileSystem.unlinkSync(filename);
+    return { id, deleted: true };
+  }
+
   async function list() {
     if (!fileSystem.existsSync(assetsPath)) return [];
     const mimeTypes = new Map(Object.entries(FORMATS).map(([mimeType, extension]) => [extension, mimeType]));
@@ -77,7 +95,7 @@ function createAssetStore({
     });
   }
 
-  return { save, get, list };
+  return { save, get, list, remove };
 }
 
 module.exports = { MAX_ASSET_BYTES, MAX_ASSET_LIST_ITEMS, createAssetStore };

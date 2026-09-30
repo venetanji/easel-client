@@ -37,11 +37,12 @@ test('validates and bounds chat messages', () => {
 });
 
 test('accepts only offline canvas kits at the IPC boundary', () => {
-  assert.deepEqual(validateCanvasKits(['canvas-2d', 'tone', 'tone']), ['canvas-2d', 'tone']);
+  assert.deepEqual(validateCanvasKits(['canvas-2d', 'tone', 'p5', 'tone']), ['canvas-2d', 'tone', 'p5']);
   assert.deepEqual(validateCanvasKits(), []);
   assert.throws(() => validateCanvasKits({ tone: true }), /kit preferences are invalid/i);
   assert.throws(() => validateCanvasKits(['https://cdn.example/tone.js']), /kit preference is invalid/i);
-  assert.throws(() => validateCanvasKits(Array(7).fill('tone')), /kit preferences are invalid/i);
+  assert.throws(() => validateCanvasKits(['strudel']), /kit preference is invalid/i);
+  assert.throws(() => validateCanvasKits(Array(8).fill('tone')), /kit preferences are invalid/i);
 });
 
 test('validates opaque library IDs and bounded canvas layout rectangles', () => {

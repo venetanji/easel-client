@@ -8,7 +8,7 @@ test('builds a local-JS canvas document with a no-network CSP and local image da
     assets: [{ name: 'hero', data: 'YWJj', mimeType: 'image/png' }],
   });
   assert.match(html, /script-src 'unsafe-inline'/);
-  assert.match(html, /connect-src 'none'/);
+  assert.match(html, /connect-src data: blob:;/);
   assert.match(html, /img-src data: blob:/);
   assert.match(html, /data:image\/png;base64,YWJj/);
   assert.match(html, /document\.body\.dataset\.ready/);
@@ -28,7 +28,7 @@ test('rejects unknown assets, external sources, unsupported formats, and oversiz
 test('restores restrictive CSP when saving an edited DOM snapshot', () => {
   const snapshot = buildCanvasSnapshotDocument('<html><head><meta http-equiv="Content-Security-Policy" content="default-src *"><title>Edited</title></head><body><img src="data:image/png;base64,YWJj"></body></html>');
   assert.equal((snapshot.match(/Content-Security-Policy/g) || []).length, 1);
-  assert.match(snapshot, /connect-src 'none'/);
+  assert.match(snapshot, /connect-src data: blob:;/);
   assert.match(snapshot, /data:image\/png;base64,YWJj/);
   assert.throws(() => buildCanvasSnapshotDocument('<img src="https://example.com/image.png">'), /external URLs/i);
 });

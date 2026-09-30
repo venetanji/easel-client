@@ -35,8 +35,8 @@ const PROJECT_CANVAS_TOOLS = Object.freeze([
     edits: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'object', additionalProperties: false, required: ['path', 'find', 'replace'], properties: { path: PATH, find: { type: 'string', minLength: 1, maxLength: 65536 }, replace: { type: 'string', maxLength: 65536 }, expectedRevision: REVISION } } },
     ...MUTATION_OPTIONS,
   }, ['edits']),
-  tool('delete_canvas_file', 'Delete a persisted source file. Remove its active references first; the entry file cannot be deleted. Changes persist without affecting runtime unless reload:true.', {
-    path: PATH, expectedRevision: REVISION, ...MUTATION_OPTIONS,
+  tool('delete_canvas_file', 'Request deletion of a persisted source file after a native user confirmation. Cancelled confirmation changes nothing. Remove authored references first; every surviving HTML document must remain valid. The entry HTML can be deleted when another HTML document exists; Easel chooses a surviving entry and opens a surviving document with lifecycle cleanup and validation. The last HTML document cannot be deleted. Read current file/project revisions before requesting deletion.', {
+    path: PATH, expectedRevision: REVISION, expectedProjectRevision: MUTATION_OPTIONS.expectedProjectRevision,
   }, ['path']),
   tool('update_canvas_project', 'Change the open project entry HTML or named kit dependencies. Kits are bundled only for render/export, never included in source reads. A kit must be installed offline. Project files stay flexible and framework-independent.', {
     entry: PATH, kits: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 64 } }, ...MUTATION_OPTIONS,

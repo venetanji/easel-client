@@ -899,6 +899,7 @@ function wireRenderer({ document, client }) {
   let filesCanvasId = '';
   let fileReadVersion = 0;
   let fileReading = false;
+  let fileDeleting = false;
   let currentFilePage = null;
   let themedDropdowns = [];
   const workspace = createProjectWorkspace({
@@ -1016,9 +1017,10 @@ function wireRenderer({ document, client }) {
   }
 
   function updateFileControls() {
-    canvasFilesList.querySelectorAll('button').forEach((button) => { button.disabled = fileReading; });
-    canvasFilePrevious.disabled = fileReading || !currentFilePage || currentFilePage.offsets.length < 2;
-    canvasFileNext.disabled = fileReading || !currentFilePage || currentFilePage.nextOffset === null;
+    canvasFilesList.querySelectorAll('.canvas-file-item').forEach((button) => { button.disabled = fileReading || fileDeleting; });
+    canvasFilesList.querySelectorAll('.delete-control').forEach((button) => { button.disabled = fileReading || fileDeleting || chatBusy || canvasResumeBusy || workspace.isOperating(); });
+    canvasFilePrevious.disabled = fileReading || fileDeleting || !currentFilePage || currentFilePage.offsets.length < 2;
+    canvasFileNext.disabled = fileReading || fileDeleting || !currentFilePage || currentFilePage.nextOffset === null;
   }
 
   async function readCanvasFilePage(path, offset = 0, offsets = [0]) {
@@ -1040,7 +1042,7 @@ function wireRenderer({ document, client }) {
       setStatus(canvasFileStatus, result.totalBytes
         ? `Bytes ${(result.offset + 1).toLocaleString()}-${end.toLocaleString()} of ${result.totalBytes.toLocaleString()}`
         : 'This file is empty.');
-      for (const button of canvasFilesList.querySelectorAll('button')) button.setAttribute('aria-current', String(button.dataset.path === path));
+      for (const button of canvasFilesList.querySelectorAll('.canvas-file-item')) button.setAttribute('aria-current', String(button.dataset.path === path));
     } catch (error) {
       if (version !== fileReadVersion || !canvasFilesDialog.open) return;
       canvasFileSource.textContent = '';
@@ -1054,9 +1056,9 @@ function wireRenderer({ document, client }) {
     }
   }
 
-  async function openCanvasFiles(selectedPath) {
-    if (!activeCanvasId || typeof client.listCanvasFiles !== 'function') return;
-    filesCanvasId = activeCanvasId;
+  async function openCanvasFiles(selectedPath, projectId = activeCanvasId) {
+    if (!projectId || typeof client.listCanvasFiles !== 'function') return;
+    filesCanvasId = projectId;
     const canvasId = filesCanvasId;
     const version = ++fileReadVersion;
     currentFilePage = null;
@@ -1068,12 +1070,15 @@ function wireRenderer({ document, client }) {
     setStatus(canvasFilesSummary, 'Loading files...');
     setStatus(canvasFileStatus, '');
     updateFileControls();
-    openDialog(canvasFilesDialog, document.getElementById('canvas-files-close'));
+    if (!canvasFilesDialog.open) openDialog(canvasFilesDialog, document.getElementById('canvas-files-close'));
     try {
       const project = await client.listCanvasFiles(canvasId);
       if (version !== fileReadVersion || !canvasFilesDialog.open) return;
       const files = Array.isArray(project.files) ? project.files : [];
+      document.getElementById('canvas-files-description').textContent = `${project.title || canvasTitle.textContent} - saved source. Edits are made through chat.`;
       canvasFilesList.replaceChildren(...files.map((file) => {
+        const row = document.createElement('div');
+        row.className = 'canvas-file-row';
         const button = createButton(document, '', 'canvas-file-item', () => readCanvasFilePage(file.path));
         button.dataset.path = file.path;
         const name = document.createElement('span');
@@ -1081,7 +1086,8 @@ function wireRenderer({ document, client }) {
         const size = document.createElement('small');
         size.textContent = `${Number(file.bytes || 0).toLocaleString()} bytes`;
         button.append(name, size);
-        return button;
+        row.append(button, createDeleteButton(document, `Delete ${file.path}`, () => deleteCanvasSourceFile(file.path)));
+        return row;
       }));
       const kitCount = project.manifest?.kits?.length || 0;
       const assetCount = project.manifest?.assets?.length || 0;
@@ -1097,6 +1103,37 @@ function wireRenderer({ document, client }) {
       fileReading = false;
       updateFileControls();
       setStatus(canvasFilesSummary, error?.message || 'Could not load canvas files. Close this panel and try again.', true);
+    }
+  }
+
+  async function handleDeletionEvent(event) {
+    const selectedPath = currentFilePage?.path;
+    await workspace.acceptDeletion(event);
+    if (event.type === 'project-file-deleted' && canvasFilesDialog.open && filesCanvasId === event.projectId) {
+      await openCanvasFiles(selectedPath === event.deletedPath ? event.documentPath : selectedPath, event.projectId);
+    }
+  }
+
+  async function deleteCanvasSourceFile(path) {
+    if (!filesCanvasId || fileReading || fileDeleting || chatBusy || canvasResumeBusy || workspace.isOperating()) return;
+    const projectId = filesCanvasId;
+    fileDeleting = true;
+    nativeDialogOpen = true;
+    updateFileControls();
+    updateCanvasBounds();
+    try {
+      const result = await client.deleteProjectFile(projectId, { path });
+      if (!result?.deleted) return;
+      await handleDeletionEvent({ ...result, type: 'project-file-deleted', projectId, deletedPath: path });
+      setStatus(statusElement, `Deleted ${path}.`);
+    } catch (error) {
+      setStatus(canvasFileStatus, error?.message || 'Could not delete this file. Try again.', true);
+    } finally {
+      fileDeleting = false;
+      nativeDialogOpen = false;
+      updateFileControls();
+      updateCanvasBounds();
+      canvasFilesList.querySelector('.canvas-file-item[aria-current="true"]')?.focus();
     }
   }
 
@@ -1160,6 +1197,7 @@ function wireRenderer({ document, client }) {
     templateSelect.disabled = busy;
     for (const node of canvasInputNodes.values()) if (node.retry) node.retry.disabled = busy || modelSaving || credentialsSaving || node.retrying;
     if (canvasResumeBusy) activityElement.hidden = false;
+    updateFileControls();
   }
 
   function renderPendingAttachments() {
@@ -1988,6 +2026,18 @@ function wireRenderer({ document, client }) {
   });
 
   const unsubscribe = client.onAgentEvent((event) => {
+    if (event.type === 'project-file-deleted' || event.type === 'media-deleted') {
+      handleDeletionEvent(event).catch((error) => setStatus(statusElement, `Deleted, but the project list could not refresh: ${error.message}`, true));
+      return;
+    }
+    if (event.type === 'canvas-file-preview') {
+      openCanvasFiles(event.path, event.projectId).catch((error) => setStatus(statusElement, `Could not preview ${event.path || 'this file'}: ${error.message}`, true));
+      return;
+    }
+    if (event.type === 'canvas-media-preview') {
+      workspace.previewMedia(event).catch((error) => setStatus(statusElement, `Could not preview this media: ${error.message}. Open it from Project files & media to try again.`, true));
+      return;
+    }
     if (event.type === 'agent-stopped') {
       activityElement.hidden = true;
       setStatus(statusElement, event.saveWarning || (event.canvasInputRequestId ? 'Stopped. Your canvas response is saved; use Retry response to continue.' : 'Stopped. Completed edits are kept.'), Boolean(event.saveWarning));

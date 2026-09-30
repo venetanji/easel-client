@@ -245,7 +245,9 @@
       .canvas-files-summary { flex: 0 0 auto; margin: 0; padding: 10px 17px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }
       .canvas-files-layout { display: grid; grid-template-columns: minmax(150px, 24%) minmax(0, 1fr); flex: 1 1 auto; min-height: 0; }
       .canvas-files-list { min-height: 0; overflow: auto; padding: 7px; border-right: 1px solid var(--line); }
+      .canvas-file-row { display: flex; align-items: center; gap: 2px; }
       .canvas-file-item { display: flex; flex-direction: column; gap: 3px; width: 100%; min-height: 44px; margin: 1px 0; border: 0; border-radius: 6px; padding: 8px; color: var(--ink); background: transparent; text-align: left; }
+      .canvas-file-row .canvas-file-item { flex: 1; min-width: 0; }
       .canvas-file-item:hover:not(:disabled), .canvas-file-item[aria-current="true"] { color: var(--green-deep); background: var(--green-wash); }
       .canvas-file-item span { overflow-wrap: anywhere; font: 12px/1.4 Consolas, monospace; }
       .canvas-file-item small { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -369,6 +371,12 @@
       #project-media-scope { min-width: 0; min-height: 30px; border: 0; padding: 4px; color: var(--muted); background: transparent; font-size: 11px; }
       .project-documents { flex: 0 0 auto; border-bottom: 1px solid var(--line); }
       .project-images { flex: 1 0 auto; }
+      .project-file-row { display: flex; align-items: center; gap: 2px; }
+      .project-file-row > .project-document, .project-file-row > .project-source-file { flex: 1; min-width: 0; }
+      .delete-control { display: inline-grid; place-items: center; flex: 0 0 auto; width: 30px; height: 32px; border: 0; border-radius: 5px; padding: 6px; color: var(--muted); background: transparent; }
+      .delete-control svg { display: block; width: 17px; height: 17px; }
+      .delete-control:hover:not(:disabled) { color: #943b2a; background: #f6e9e2; }
+      .delete-control:active:not(:disabled) { background: #eddbd1; }
       .project-document { display: block; width: 100%; min-height: 42px; border: 0; border-radius: 4px; padding: 6px 8px; color: var(--ink); background: transparent; text-align: left; overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
       .project-document small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; font-weight: 400; }
       .project-document[aria-current="true"], .project-document:hover:not(:disabled), .project-source-file:hover:not(:disabled) { color: var(--green-deep); background: var(--green-wash); }
@@ -383,6 +391,9 @@
       .project-thumbnail-kind svg { width: 12px; height: 12px; }
       .project-thumbnail-placeholder { width: 28px; height: 28px; }
       .project-media-name { overflow: hidden; margin: 6px 0 2px; color: var(--ink); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+      .project-media-heading { display: flex; align-items: center; gap: 3px; margin-top: 3px; }
+      .project-media-heading .project-media-name { flex: 1; min-width: 0; margin: 0; }
+      .project-media-heading .delete-control { width: 28px; height: 28px; padding: 5px; }
       .project-media-actions { display: flex; flex-wrap: wrap; gap: 0 5px; }
       .project-media-actions .button { min-height: 26px; padding: 3px 0; font-size: 11px; text-align: left; }
       .project-media-actions .button:hover:not(:disabled) { color: var(--green); background: transparent; text-decoration: underline; text-underline-offset: 3px; }

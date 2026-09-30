@@ -109,6 +109,33 @@ function createCanvasMediaStore({ userDataPath, fileSystem = fs, idFactory = () 
 
   async function getMetadata(id) { return publicMetadata(record(checkId(id)).metadata); }
 
+  async function remove(id) {
+    checkId(id);
+    const root = path.resolve(directory);
+    const folder = path.resolve(capturePath(id));
+    const candidates = [folder, ...Object.values(FORMATS).map((extension) => path.resolve(directory, `${id}.${extension}`))];
+    const targets = [];
+    for (const target of candidates) {
+      if (!target.startsWith(root + path.sep) || path.dirname(target) !== root) {
+        throw new Error('Capture path is outside the media library.');
+      }
+      let stat;
+      try { stat = fileSystem.lstatSync(target); }
+      catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      if (target === folder) {
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Capture library directory is invalid.');
+      } else if (!stat.isFile() && !stat.isSymbolicLink()) throw new Error('Legacy capture media is not a file.');
+      targets.push(target);
+    }
+    if (!targets.length) throw new Error('Capture media was not found.');
+    // Only the validated direct child folder is removed recursively; project copies live elsewhere.
+    for (const target of targets) {
+      if (target === folder) fileSystem.rmSync(target, { recursive: true });
+      else fileSystem.unlinkSync(target);
+    }
+    return { id, deleted: true };
+  }
+
   async function get(id) {
     const saved = record(checkId(id));
     if (fileSystem.statSync(saved.filename).size !== saved.metadata.bytes) throw new Error('Saved capture media size is inconsistent.');
@@ -147,7 +174,7 @@ function createCanvasMediaStore({ userDataPath, fileSystem = fs, idFactory = () 
     return result.sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 200);
   }
 
-  return { save, get, getMetadata, list, getFrames, getVideoFrames: getFrames };
+  return { save, get, getMetadata, list, getFrames, getVideoFrames: getFrames, remove };
 }
 
 module.exports = { MAX_FRAME_BYTES, MAX_MEDIA_BYTES, MAX_VIDEO_FRAMES, createCanvasMediaStore };

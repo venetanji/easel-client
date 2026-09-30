@@ -8,6 +8,36 @@ const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const script = path.join(root, 'scripts/publish-release.sh');
 
+function findBash() {
+  if (process.platform !== 'win32') return 'bash';
+  const gitPaths = spawnSync('where.exe', ['git'], { encoding: 'utf8' }).stdout || '';
+  const installRoots = [
+    ...gitPaths.trim().split(/\r?\n/).filter(Boolean).map((git) => path.resolve(path.dirname(git), '..')),
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Git'),
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'Git'),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Git'),
+  ].filter(Boolean);
+  for (const installRoot of installRoots) {
+    for (const relative of ['bin/bash.exe', 'usr/bin/bash.exe']) {
+      const candidate = path.join(installRoot, relative);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  throw new Error('Git Bash is required to run the release publisher tests on Windows.');
+}
+
+function bashPath(value) {
+  if (process.platform !== 'win32') return value;
+  return path.resolve(value).replace(/\\/g, '/').replace(/^([A-Za-z]):(?=\/)/, (_, drive) => `/${drive.toLowerCase()}`);
+}
+
+function removePublisherTemp(temp) {
+  const resolved = path.resolve(temp);
+  assert.equal(path.dirname(resolved), path.resolve(os.tmpdir()));
+  assert.match(path.basename(resolved), /^easel-release-[A-Za-z0-9]+$/);
+  fs.rmSync(resolved, { recursive: true, force: true });
+}
+
 function runPublisher({ existingRelease = false, files = [], tag = 'v0.0.1-rc.1' } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-release-'));
   const assetDir = path.join(temp, 'assets');
@@ -24,17 +54,39 @@ if (args[0] === 'release' && args[1] === 'view') process.exit(process.env.GH_REL
 `);
   fs.chmodSync(path.join(binDir, 'gh'), 0o755);
 
-  const result = spawnSync('bash', [script], {
+  // Windows checkouts may use CRLF even though the committed shell script uses LF.
+  const testScript = path.join(temp, 'publish-release.sh');
+  fs.writeFileSync(testScript, fs.readFileSync(script, 'utf8').replace(/\r\n/g, '\n'));
+  const env = { ...process.env };
+  const inheritedPath = Object.keys(env).find((key) => key.toLowerCase() === 'path');
+  const originalPath = inheritedPath ? env[inheritedPath] : '';
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'path') delete env[key];
+  }
+  const nodeDir = path.dirname(process.execPath);
+  Object.assign(env, {
+    PATH: [binDir, nodeDir, originalPath].join(path.delimiter),
+    ASSET_DIR: bashPath(assetDir),
+    GH_LOG: logPath,
+    GH_RELEASE_EXISTS: String(existingRelease),
+    GITHUB_REPOSITORY: 'venetanji/easel-client',
+    RELEASE_TAG: tag,
+    PUBLISH_TEST_BIN: bashPath(binDir),
+    PUBLISH_TEST_NODE_DIR: bashPath(nodeDir),
+    PUBLISH_TEST_SCRIPT: bashPath(testScript),
+  });
+
+  // Fail before running the publisher if gh would resolve outside the test sandbox.
+  const wrapper = `export PATH="$PUBLISH_TEST_BIN:$PUBLISH_TEST_NODE_DIR:$PATH"
+if [[ "$(command -v gh)" != "$PUBLISH_TEST_BIN/gh" ]]; then
+  printf '%s\\n' 'Release test refused to use a non-test gh executable.' >&2
+  exit 1
+fi
+exec "$BASH" "$PUBLISH_TEST_SCRIPT"
+`;
+  const result = spawnSync(findBash(), ['--noprofile', '--norc', '-c', wrapper], {
     cwd: root,
-    env: {
-      ...process.env,
-      PATH: `${binDir}:${process.env.PATH}`,
-      ASSET_DIR: assetDir,
-      GH_LOG: logPath,
-      GH_RELEASE_EXISTS: String(existingRelease),
-      GITHUB_REPOSITORY: 'venetanji/easel-client',
-      RELEASE_TAG: tag,
-    },
+    env,
     encoding: 'utf8',
   });
   const calls = fs.existsSync(logPath)
@@ -54,7 +106,7 @@ test('publishes individual desktop files as prerelease assets, not the MCP tarba
     'easel-media-mcp-linux.tar.gz',
   ];
   const { result, calls, temp } = runPublisher({ files });
-  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  t.after(() => removePublisherTemp(temp));
 
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(calls[0].slice(0, 3), ['release', 'view', 'v0.0.1-rc.1']);
@@ -74,7 +126,7 @@ test('uploads assets with clobber when the tagged release already exists', (t) =
     existingRelease: true,
     files: ['Easel Studio-0.0.1-rc.1-win-x64.exe'],
   });
-  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  t.after(() => removePublisherTemp(temp));
 
   assert.equal(result.status, 0, result.stderr);
   assert.ok(calls.some((args) => args[1] === 'upload' && args.includes('--clobber')));
@@ -87,7 +139,7 @@ test('publishes a normal release without marking it prerelease', (t) => {
     tag: 'v0.0.1',
     files: ['Easel Studio-0.0.1-win-x64.exe'],
   });
-  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  t.after(() => removePublisherTemp(temp));
 
   assert.equal(result.status, 0, result.stderr);
   const create = calls.find((args) => args[1] === 'create');
@@ -97,7 +149,7 @@ test('publishes a normal release without marking it prerelease', (t) => {
 
 test('refuses to publish when there are no desktop package files', (t) => {
   const { result, calls, temp } = runPublisher({ files: ['easel-media-mcp-linux.tar.gz'] });
-  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  t.after(() => removePublisherTemp(temp));
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /no desktop package assets/i);

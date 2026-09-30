@@ -56,6 +56,8 @@ Canvas code runs in a dedicated sandboxed `WebContentsView` on a secure local or
 
 ### Canvas projects
 
+Trash controls in **Project files & media** and the **Files** inspector ask for confirmation before deleting. File deletion keeps at least one HTML document and blocks known references from surviving files. Deleting the default HTML selects a surviving document as the new entry. Removing project media keeps library and other project copies; deleting from **All media** removes only the library copy. Agent tools `delete_canvas_file` and `delete_media_asset` preview the target and use the same host confirmation, with Cancel selected by default. Revisions are checked again before committing.
+
 Each canvas keeps editable text files separately from shared kit bundles and media blobs. New and migrated canvases start with `index.html`, `app.js`, and `styles.css`; the agent can add nested source files and choose another HTML entry. **Files** opens a bounded source viewer. Existing HTML canvases migrate lazily, preserving their original HTML. The atomic `.project.json` record is canonical; HTML export assembles a self-contained offline document.
 
 Relative script and stylesheet paths work inside the project. ES modules support relative static and literal dynamic imports, including cycles, through a local blob import map. Package/HTTP imports and computed dynamic imports are unsupported. Classic scripts execute at their tag position; use a body-end script or `type="module"` for deferred execution. Media uses exact `{{asset:id}}` references or `assets/` aliases in HTML/CSS; use placeholders in JavaScript. Source reads exclude library bundles and media bytes.
