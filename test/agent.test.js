@@ -37,7 +37,7 @@ test('returns normal assistant replies and retains session history', async () =>
   assert.equal(result.text, 'Hello.');
   assert.deepEqual(result.history.map((message) => message.role), ['user', 'assistant']);
   assert.equal(requests[0].messages.some((message) => message.role === 'system'), false);
-  assert.match(requests[0].instructions, /^You are Easel, a creative image assistant\./);
+  assert.match(requests[0].instructions, /^You are Easel, a creative canvas and media assistant\./);
   assert.equal(requests[0].messages[0].content, 'hello');
   assert.equal(result.history[0].content, 'hello');
 });
