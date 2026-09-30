@@ -864,6 +864,9 @@ function wireRenderer({ document, client }) {
   const chatHistoryStatus = document.getElementById('chat-history-status');
   const conversationPanel = document.getElementById('conversation-panel');
   const conversationButton = document.getElementById('nav-chat');
+  const unreadBadge = document.getElementById('chat-unread');
+  const starterComposer = document.getElementById('canvas-start-composer');
+  const conversationContent = document.getElementById('conversation-content');
   const historyNewChatButton = document.getElementById('history-new-chat');
   const storage = typeof localStorage === 'undefined' ? null : localStorage;
   const copyText = typeof navigator !== 'undefined' && navigator.clipboard?.writeText
@@ -872,6 +875,11 @@ function wireRenderer({ document, client }) {
   let activeCanvasId = '';
   let activeDocumentPath = '';
   let activePreviewKind = 'empty';
+  let starterDocument = false;
+  let starterSubmitted = false;
+  let unreadMessages = 0;
+  let insertedStarterPrompt = '';
+  const notifiedCanvasInputs = new Set();
   let activeUndoAvailable = false;
   let creationKind = 'document';
   let modelSaving = false;
@@ -913,19 +921,23 @@ function wireRenderer({ document, client }) {
     onBusy: updateSendState,
     onDrawerChange: (open) => {
       if (open) {
+        studio.dataset.sidebar = 'open';
         chatHistoryPanel.hidden = true;
         chatHistoryPanel.inert = true;
         chatHistoryButton.setAttribute('aria-expanded', 'false');
       }
-      conversationPanel.inert = open || !chatHistoryPanel.hidden;
-      conversationButton.setAttribute('aria-pressed', String(!open && chatHistoryPanel.hidden));
+      conversationPanel.inert = open || !chatHistoryPanel.hidden || studio.dataset.sidebar === 'closed';
+      conversationButton.setAttribute('aria-pressed', String(!conversationPanel.inert));
       chatHistoryButton.setAttribute('aria-pressed', String(!open && !chatHistoryPanel.hidden));
+      if (!conversationPanel.inert) clearUnreadMessages();
     },
     isBusy: () => chatBusy || canvasResumeBusy,
   });
   themedDropdowns = [...document.querySelectorAll('select')].map((select) => createThemedDropdown(select, { onOpenChange: updateCanvasBounds }));
 
   function showConversation(focus = true) {
+    const hadUnread = unreadMessages > 0;
+    studio.dataset.sidebar = 'open';
     workspace.setDrawer(false, false);
     chatHistoryPanel.hidden = true;
     chatHistoryPanel.inert = true;
@@ -933,18 +945,77 @@ function wireRenderer({ document, client }) {
     conversationButton.setAttribute('aria-pressed', 'true');
     chatHistoryButton.setAttribute('aria-pressed', 'false');
     chatHistoryButton.setAttribute('aria-expanded', 'false');
+    dockComposer(false);
+    if (hadUnread) messagesElement.scrollTop = messagesElement.scrollHeight;
+    clearUnreadMessages();
+    updateCanvasBounds();
     if (focus) messageInput.focus();
   }
 
-  function showHistory() {
+  function dockComposer(centered) {
+    // Moving the same form preserves its draft, attachments, and event handlers.
+    const target = centered ? starterComposer : conversationContent;
+    if (chatForm.parentElement !== target) target.append(chatForm);
+    if (statusElement.parentElement !== target) {
+      if (centered) target.append(statusElement);
+      else target.insertBefore(statusElement, chatForm);
+    }
+    canvasEmpty.dataset.composing = String(centered);
+  }
+
+  function showStarterComposer(focus = false) {
+    studio.dataset.sidebar = 'closed';
     workspace.setDrawer(false, false);
+    chatHistoryPanel.hidden = true;
+    chatHistoryPanel.inert = true;
+    conversationPanel.inert = true;
+    conversationButton.setAttribute('aria-pressed', 'false');
+    chatHistoryButton.setAttribute('aria-pressed', 'false');
+    chatHistoryButton.setAttribute('aria-expanded', 'false');
+    dockComposer(true);
+    updateCanvasBounds();
+    if (focus) messageInput.focus();
+  }
+
+  function clearUnreadMessages() {
+    unreadMessages = 0;
+    updateUnreadBadge();
+  }
+
+  function updateUnreadBadge() {
+    unreadBadge.hidden = unreadMessages === 0;
+    unreadBadge.textContent = unreadMessages > 99 ? '99+' : String(unreadMessages);
+    const label = unreadMessages ? `Show conversation, ${unreadMessages} unread ${unreadMessages === 1 ? 'message' : 'messages'}` : 'Show conversation';
+    conversationButton.setAttribute('aria-label', label);
+    conversationButton.title = unreadMessages ? `${unreadMessages} unread ${unreadMessages === 1 ? 'message' : 'messages'}` : 'Conversation';
+  }
+
+  function receivedMessage() {
+    if (conversationIsReadable() && messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight < 56) return;
+    unreadMessages += 1;
+    updateUnreadBadge();
+  }
+
+  document.getElementById('chat-hide').addEventListener('click', () => {
+    studio.dataset.sidebar = 'closed';
+    conversationPanel.inert = true;
+    conversationButton.setAttribute('aria-pressed', 'false');
+    if (!canvasEmpty.hidden) dockComposer(true);
+    updateCanvasBounds();
+    conversationButton.focus();
+  });
+
+  function showHistory() {
+    studio.dataset.sidebar = 'open';
     chatHistoryPanel.hidden = false;
+    workspace.setDrawer(false, false);
     chatHistoryPanel.inert = false;
     conversationPanel.inert = true;
     conversationButton.setAttribute('aria-pressed', 'false');
     chatHistoryButton.setAttribute('aria-pressed', 'true');
     chatHistoryButton.setAttribute('aria-expanded', 'true');
     refreshChatHistory();
+    updateCanvasBounds();
     historyNewChatButton.focus();
   }
   conversationButton.addEventListener('click', () => showConversation());
@@ -997,7 +1068,7 @@ function wireRenderer({ document, client }) {
       client.setCanvasBounds({ x: 0, y: 0, width: 0, height: 0 });
       return;
     }
-    if (!activeCanvasId || activePreviewKind !== 'document') {
+    if (!activeCanvasId || activePreviewKind !== 'document' || !canvasEmpty.hidden) {
       client.setCanvasBounds({ x: 0, y: 0, width: 0, height: 0 });
       return;
     }
@@ -1177,7 +1248,7 @@ function wireRenderer({ document, client }) {
     const running = agentRunning || canvasResumeBusy;
     workspace.updateBusy();
     document.getElementById('new-canvas-open').disabled = busy;
-    document.getElementById('canvas-empty-new').disabled = busy;
+    document.querySelectorAll('[data-starter]').forEach((button) => { button.disabled = busy; });
     undoCanvasButton.disabled = busy || activePreviewKind !== 'document' || !activeUndoAvailable;
     sendButton.disabled = running ? stopPending : busy || modelSaving || credentialsSaving || !savedSettings.litellmModel || (!messageInput.value.trim() && pendingAttachments.length === 0);
     sendButton.dataset.action = running ? 'stop' : 'send';
@@ -1526,6 +1597,8 @@ function wireRenderer({ document, client }) {
   }
 
   function restoreChat(chat) {
+    clearUnreadMessages();
+    notifiedCanvasInputs.clear();
     activeChatId = chat.id || '';
     messagesElement.replaceChildren();
     canvasInputs.clear();
@@ -1647,19 +1720,25 @@ function wireRenderer({ document, client }) {
   }
 
   function updateCanvasState(canvas) {
-    activeCanvasId = canvas?.projectId || canvas?.id || '';
-    activeDocumentPath = canvas?.documentPath || '';
+    const nextId = canvas?.projectId || canvas?.id || '';
+    const nextPath = canvas?.documentPath || '';
+    if (nextId !== activeCanvasId || nextPath !== activeDocumentPath) starterSubmitted = false;
+    activeCanvasId = nextId;
+    activeDocumentPath = nextPath;
     activePreviewKind = canvas?.previewKind || 'empty';
+    starterDocument = activePreviewKind === 'document' && canvas?.starterDocument === true;
     activeUndoAvailable = canvas?.undoAvailable === true;
     canvasTitle.textContent = canvas?.documentTitle || canvas?.title || 'Project';
     const mediaPreview = ['image', 'video', 'audio'].includes(activePreviewKind);
-    canvasState.textContent = mediaPreview ? activePreviewKind[0].toUpperCase() + activePreviewKind.slice(1) : activePreviewKind === 'document' ? 'HTML' : activeCanvasId ? 'Project' : 'Ready';
+    canvasState.textContent = mediaPreview ? activePreviewKind[0].toUpperCase() + activePreviewKind.slice(1) : starterDocument ? 'Ready' : activePreviewKind === 'document' ? 'HTML' : activeCanvasId ? 'Project' : 'Ready';
     canvasStateDot.classList.toggle('ready', Boolean(activeCanvasId));
     exportCurrentButton.textContent = mediaPreview ? `Download ${activePreviewKind}` : 'Export project';
     exportCurrentButton.disabled = !activeCanvasId && !mediaPreview;
     canvasFilesButton.disabled = !activeCanvasId;
     canvasDevicesButton.disabled = activePreviewKind !== 'document' || nativeDialogOpen;
-    canvasEmpty.hidden = activePreviewKind !== 'empty';
+    canvasEmpty.hidden = activePreviewKind !== 'empty' && !starterDocument;
+    if (canvasEmpty.hidden) dockComposer(false);
+    else if (!starterSubmitted && !agentRunning && !canvasResumeBusy) showStarterComposer();
     for (const request of canvasInputs.values()) renderCanvasInputNote(request);
     updateSendState();
     updateCanvasBounds();
@@ -1719,10 +1798,27 @@ function wireRenderer({ document, client }) {
       return;
     }
     if (chatBusy || canvasResumeBusy || workspace.isOperating() || modelSaving || credentialsSaving || !savedSettings.litellmModel) return;
+    if (!messageInput.value.trim() && pendingAttachments.length === 0) return;
+    const startNewChat = chatForm.parentElement === starterComposer && !starterSubmitted && Boolean(activeChatId);
+    starterSubmitted = true;
+    showConversation(false);
     chatBusy = true;
     updateSendState();
     try {
       const attachments = await preparePendingAttachments();
+      if (startNewChat) {
+        await client.clearChat();
+        activeChatId = '';
+        messagesElement.replaceChildren();
+        canvasInputs.clear();
+        canvasInputNodes.clear();
+        canvasAnswerIds.clear();
+        notifiedCanvasInputs.clear();
+        assetPreviews.clear();
+        pendingAssetCaptions.clear();
+        const pendingUrls = new Set(pendingAttachments.map((attachment) => attachment.previewUrl));
+        for (const url of messageObjectUrls) if (!pendingUrls.has(url)) { URL.revokeObjectURL(url); messageObjectUrls.delete(url); }
+      }
       const result = await handleChatSubmit({
         client,
         document,
@@ -1745,6 +1841,7 @@ function wireRenderer({ document, client }) {
       pendingAttachments = [];
       renderPendingAttachments();
     } catch (error) {
+      if (startNewChat && activeChatId) starterSubmitted = false;
       if (!statusElement.classList.contains('error')) setStatus(statusElement, error?.message || 'Could not prepare the attached media.', true);
     } finally {
       agentRunning = false;
@@ -1796,6 +1893,25 @@ function wireRenderer({ document, client }) {
       messageInput.value = button.dataset.prompt || '';
       updateSendState();
       messageInput.focus();
+    });
+  });
+  const starterPrompts = {
+    ink: 'Create an interactive generative ink canvas with p5.js. Give me controls for density, motion, and a new seed. Keep it offline. Once it is visible, use a canvas choice to ask whether I prefer a calm or expressive direction, then refine the result from my answer.',
+    audio: 'Create a playable ambient soundscape with Tone.js and a responsive visual canvas. Include Play, Stop, and volume controls; start audio only from my Play click and use a worker-free scheduler. Once it is visible, ask me through the canvas whether I want a warm or bright sound and refine from my answer.',
+    image: 'Generate an editorial still life of citrus, glass, and soft morning light using an available image model. Save the image to this project. Present a canvas with the image and ask me to choose warm or cool lighting for a variation.',
+  };
+  document.querySelectorAll('[data-starter]').forEach((button) => {
+    button.addEventListener('click', () => {
+      if (chatBusy || canvasResumeBusy || workspace.isOperating()) return;
+      const prompt = starterPrompts[button.dataset.starter];
+      if (!prompt) return;
+      if (messageInput.value.trim() && messageInput.value !== insertedStarterPrompt) messageInput.value = `${messageInput.value.trim()}\n\n${prompt}`;
+      else messageInput.value = prompt;
+      insertedStarterPrompt = prompt;
+      if (!canvasEmpty.hidden) showStarterComposer();
+      updateSendState();
+      messageInput.focus();
+      messageInput.setSelectionRange(messageInput.value.length, messageInput.value.length);
     });
   });
   for (const [index, item] of settingsSections.entries()) {
@@ -1945,7 +2061,6 @@ function wireRenderer({ document, client }) {
     openDialog(newCanvasDialog, newCanvasName);
   }
   document.getElementById('new-canvas-open').addEventListener('click', () => openNewCanvasDialog('document'));
-  document.getElementById('canvas-empty-new').addEventListener('click', () => openNewCanvasDialog('project'));
   document.getElementById('new-canvas-kits-change').addEventListener('click', () => {
     returnToNewCanvas = true;
     newCanvasDialog.close();
@@ -1993,6 +2108,9 @@ function wireRenderer({ document, client }) {
     updateSendState();
     try {
       await client.clearChat();
+      clearUnreadMessages();
+      notifiedCanvasInputs.clear();
+      starterSubmitted = false;
       activeChatId = '';
       canvasInputs.clear();
       canvasInputNodes.clear();
@@ -2013,7 +2131,8 @@ function wireRenderer({ document, client }) {
       renderPendingAttachments();
       messagesElement.scrollTop = 0;
       setStatus(statusElement, 'New chat started.');
-      showConversation(false);
+      if (!canvasEmpty.hidden) showStarterComposer();
+      else showConversation(false);
     } catch (error) {
       const message = error?.message || 'Could not start a new chat.';
       setStatus(statusElement, message, true);
@@ -2052,7 +2171,15 @@ function wireRenderer({ document, client }) {
       setStatus(statusElement, `${event.name || 'Media capture'} saved to the library.`);
       return;
     }
-    if (handleCanvasInputEvent(event)) return;
+    if (handleCanvasInputEvent(event)) {
+      if (event.type === 'canvas-input' && event.request?.status === 'pending' && canvasInputs.has(event.request.id) && !notifiedCanvasInputs.has(event.request.id)) {
+        notifiedCanvasInputs.add(event.request.id);
+        receivedMessage();
+      }
+      return;
+    }
+    if (event.type === 'assistant' && typeof event.text === 'string' && event.text) receivedMessage();
+    if (event.type === 'image' && event.assetId) receivedMessage();
     renderAgentEvent({
       document,
       messagesElement,
@@ -2095,12 +2222,22 @@ function wireRenderer({ document, client }) {
   if (typeof window !== 'undefined') {
     window.addEventListener('resize', handleWindowResize);
     window.addEventListener('scroll', updateCanvasBounds, true);
+    window.addEventListener('focus', acknowledgeVisibleConversation);
   }
+  function acknowledgeVisibleConversation() {
+    if (conversationIsReadable() && messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight < 56) clearUnreadMessages();
+  }
+  function conversationIsReadable() {
+    return !conversationPanel.inert && studio.dataset.sidebar !== 'closed' && document.visibilityState !== 'hidden' && document.hasFocus();
+  }
+  document.addEventListener('visibilitychange', acknowledgeVisibleConversation);
+  messagesElement.addEventListener('scroll', acknowledgeVisibleConversation);
   refreshSkillUi();
   refreshInstalledSkillCatalog();
   updateSendState();
   refreshCanvases();
   updateCanvasBounds();
+  showStarterComposer();
 
   return {
     dispose() {
@@ -2109,7 +2246,10 @@ function wireRenderer({ document, client }) {
       if (typeof window !== 'undefined') {
         window.removeEventListener('resize', handleWindowResize);
         window.removeEventListener('scroll', updateCanvasBounds, true);
+        window.removeEventListener('focus', acknowledgeVisibleConversation);
       }
+      document.removeEventListener('visibilitychange', acknowledgeVisibleConversation);
+      messagesElement.removeEventListener('scroll', acknowledgeVisibleConversation);
     },
   };
 }

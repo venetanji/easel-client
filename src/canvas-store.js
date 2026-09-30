@@ -377,12 +377,30 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
       title: project.title,
       documentPath: selected,
       documentTitle: selectedTitle,
+      starterDocument: isStarterDocument(project, selected),
       documents: projectDocuments(project),
       html,
       assembledBytes: Buffer.byteLength(html, 'utf8'),
       updatedAt: project.updatedAt,
       projectRevision: projectRevision(project),
     };
+  }
+
+  function isStarterDocument(project, selected) {
+    const source = project.files[selected];
+    const script = /<script\b[^>]*\bsrc="([^"]+)"[^>]*>\s*<\/script>/i.exec(source)?.[1];
+    const style = /<link\b[^>]*\bhref="([^"]+)"[^>]*>/i.exec(source)?.[1];
+    if (!script || !style) return false;
+    const scriptPath = path.posix.normalize(path.posix.join(path.posix.dirname(selected), script));
+    const stylePath = path.posix.normalize(path.posix.join(path.posix.dirname(selected), style));
+    if (project.files[scriptPath] !== '') return false;
+    const empty = projectFromDocument(buildCanvasDocument({ html: EMPTY_CANVAS_HTML }), {
+      documentPath: selected, scriptPath, stylePath,
+      extractAssets: (text) => text, extractKits: () => [],
+    });
+    // Only recognize Easel's unchanged starter source; a visually blank authored app is still an app.
+    const normalize = (html) => html.replace(/<title\b[^>]*>[\s\S]*?<\/title>/gi, '').replace(/>\s+</g, '><').trim();
+    return normalize(source) === normalize(empty.files[selected]) && project.files[stylePath] === empty.files[stylePath];
   }
 
   function getDocument(id, documentPath) {

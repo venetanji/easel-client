@@ -213,7 +213,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
   }
 
   function documentIdentity(document) {
-    return { id: document.id, projectId: document.id, title: document.projectTitle || document.title, projectTitle: document.projectTitle || document.title, documentPath: document.documentPath || '', documentTitle: document.documentTitle || document.title, ...(document.documents ? { documents: document.documents } : {}) };
+    return { id: document.id, projectId: document.id, title: document.projectTitle || document.title, projectTitle: document.projectTitle || document.title, documentPath: document.documentPath || '', documentTitle: document.documentTitle || document.title, starterDocument: document.starterDocument === true, ...(document.documents ? { documents: document.documents } : {}) };
   }
 
   function mutationIdentity(result) {

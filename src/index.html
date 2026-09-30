@@ -63,6 +63,9 @@
       .activity-button[aria-pressed="true"] { color: var(--green-deep); background: var(--green-wash); }
       .activity-button[aria-pressed="true"]::after { position: absolute; left: -4px; width: 2px; height: 20px; background: var(--green); content: ""; }
       .activity-button svg { width: 19px; height: 19px; }
+      .chat-unread { position: absolute; top: 0; right: -1px; min-width: 17px; height: 17px; display: grid; place-items: center; border-radius: 9px; padding: 0 4px; color: white; background: var(--coral); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; pointer-events: none; }
+      .studio[data-sidebar="closed"] { grid-template-columns: 44px 0 0 minmax(0, 1fr); }
+      .studio[data-sidebar="closed"] .left-column, .studio[data-sidebar="closed"] .workbench-splitter { display: none; }
       .left-column { position: relative; grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
       .workbench-splitter { position: relative; z-index: 5; grid-column: 3; grid-row: 2; width: 9px; margin-left: -4px; cursor: col-resize; touch-action: none; }
       .workbench-splitter::before { position: absolute; inset: 0 4px; background: var(--line); content: ""; transition: background-color 120ms ease; }
@@ -225,12 +228,26 @@
       .canvas-tab-close svg { width: 12px; height: 12px; }
       .canvas-tab-close:hover { color: #953c2b; background: #f4e9e4; }
       .canvas-host { position: relative; flex: 1; min-height: 180px; overflow: hidden; background: #fff; }
-      .canvas-empty { position: absolute; inset: 0; display: grid; align-content: center; justify-items: center; gap: 9px; padding: 24px; color: #607066; text-align: center; pointer-events: none; }
+      .canvas-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; overflow: auto; padding: 32px 24px; color: var(--ink); background: radial-gradient(ellipse at 50% 40%, #fffefa, var(--paper) 75%); }
       .canvas-empty[hidden] { display: none; }
-      .canvas-illustration { width: min(34vw, 250px); min-width: 150px; aspect-ratio: 1.4; color: #62806b; }
-      .canvas-empty strong { color: #263d31; font: 600 23px/1.12 var(--display); letter-spacing: -.02em; }
-      .canvas-empty span { max-width: 38ch; color: #5e6c63; font-size: 12px; line-height: 1.55; }
-      .canvas-empty .button { pointer-events: auto; margin-top: 3px; }
+      .canvas-start-heading { width: min(100%, 600px); text-align: left; }
+      .canvas-start-heading h3 { margin: 0; color: var(--green-deep); font: 500 34px/1.15 var(--display); letter-spacing: -.025em; }
+      .canvas-start-heading p { margin: 10px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+      .canvas-start-composer, .canvas-starters { width: min(100%, 600px); }
+      .canvas-start-composer #chat-form { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; }
+      .canvas-start-composer #chat-form:focus-within { border-color: var(--green); }
+      .canvas-start-composer .composer-topline { padding: 10px 14px 5px; }
+      .canvas-start-composer #message { min-height: 110px; padding: 13px 15px; font-size: 14px; line-height: 1.6; }
+      .canvas-start-composer .composer-footer { padding: 7px 14px 13px; }
+      .canvas-start-composer #status { margin: 9px 0 0; padding: 0; text-align: left; }
+      .canvas-starters > p { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .canvas-starter-list { display: flex; flex-wrap: wrap; gap: 8px; }
+      .canvas-starter { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; border: 0; border-radius: 6px; padding: 8px 11px; color: var(--green-deep); background: var(--green-wash); font-size: 12px; text-align: left; }
+      .canvas-starter:hover:not(:disabled) { background: #d9e5d9; }
+      .canvas-starter svg { width: 16px; height: 16px; flex: 0 0 auto; }
+      .canvas-empty[data-composing="false"] { gap: 20px; }
+      .canvas-empty[data-composing="false"] .canvas-start-heading h3 { font-size: 28px; }
+      .canvas-start-composer:empty { display: none; }
       dialog { width: min(520px, calc(100% - 28px)); max-height: calc(100% - 28px); overflow: auto; border: 0; border-radius: 13px; padding: 0; color: var(--ink); background: var(--paper); box-shadow: 0 18px 60px #17251f38; }
       dialog::backdrop { background: #17251f75; }
       dialog.settings-dialog { width: min(980px, calc(100% - 28px)); height: min(720px, calc(100% - 28px)); max-height: calc(100% - 28px); overflow: hidden; }
@@ -418,6 +435,8 @@
         .left-column { grid-column: 1; grid-row: 3; height: 580px; }
         .workbench-splitter { display: none; }
         .canvas-panel { grid-column: 1; grid-row: 4; min-height: 470px; }
+        .studio[data-sidebar="closed"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 42px minmax(0, 1fr); }
+        .studio[data-sidebar="closed"] .canvas-panel { grid-column: 1; grid-row: 3; min-height: 520px; }
         .settings-shell { grid-template-columns: 140px minmax(0, 1fr); }
       }
       @media (max-width: 620px) {
@@ -445,7 +464,8 @@
         .skills-layout { grid-template-columns: 1fr; }
         .skills-inventory { border-right: 0; border-bottom: 1px solid var(--line); }
         .skill-editor { padding-top: 13px; }
-        .canvas-illustration { width: 190px; }
+        .canvas-empty { justify-content: flex-start; padding: 36px 18px; }
+        .canvas-start-heading h3 { font-size: 28px; }
       }
       @media (prefers-reduced-motion: reduce) {
         *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
@@ -464,6 +484,7 @@
       <nav class="activity-bar" aria-label="Activity bar">
         <button id="nav-chat" class="activity-button" type="button" aria-label="Show conversation" title="Conversation" aria-pressed="true" aria-controls="conversation-panel">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3v-15a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h7"/></svg>
+          <span id="chat-unread" class="chat-unread" aria-hidden="true" hidden></span>
         </button>
         <button id="chat-history-open" class="activity-button" type="button" aria-label="Show chat history" title="Chat history" aria-pressed="false" aria-expanded="false" aria-controls="chat-history-panel">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 10a8.5 8.5 0 1 1 1 7M3.5 5v5H8"/><path d="M12 7v5l3 2"/></svg>
@@ -492,7 +513,7 @@
         <section id="conversation-panel" class="panel conversation" aria-label="Conversation">
           <div class="conversation-head">
             <div class="conversation-title"><h2>Chat</h2></div>
-            <div class="conversation-actions"><button id="new-chat" class="button quiet small" type="button" title="Start a new chat">New chat</button></div>
+            <div class="conversation-actions"><button id="new-chat" class="button quiet small" type="button" title="Start a new chat">New chat</button><button id="chat-hide" class="fold-button" type="button" aria-label="Hide conversation" title="Hide conversation"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
           </div>
           <div id="conversation-content" class="conversation-content">
           <div id="messages" aria-live="polite">
@@ -537,11 +558,14 @@
           <div class="canvas-toolbar-actions"><button id="new-canvas-open" class="button quiet small" type="button">New HTML</button><button id="canvas-files-open" class="button quiet small" type="button" aria-haspopup="dialog" disabled>Files</button><button id="canvas-devices-open" class="button quiet small" type="button" title="Camera and microphone access" disabled>Devices</button><button id="canvas-undo" class="button quiet small" type="button" disabled>Undo</button><button id="export-current" class="button quiet small" type="button" disabled>Export project</button></div>
         </div>
         <div id="canvas-host" class="canvas-host">
-          <div id="canvas-empty" class="canvas-empty">
-            <svg class="canvas-illustration" viewBox="0 0 280 200" fill="none" aria-hidden="true"><rect x="48" y="30" width="184" height="140" rx="4" stroke="currentColor" stroke-width="1.5"/><path d="M49 49h182" stroke="currentColor" stroke-width="1.5"/><circle cx="62" cy="39.5" r="2.5" fill="#b84e38"/><circle cx="72" cy="39.5" r="2.5" fill="#ad7930"/><rect x="72" y="72" width="79" height="76" rx="2" fill="#e9eee7" stroke="currentColor"/><path d="m82 135 21-27 15 16 10-10 13 21H82Z" fill="#c8d5c7" stroke="currentColor" stroke-width="1.2"/><circle cx="127" cy="88" r="7" fill="#d9a65f"/><path d="M169 79h43M169 92h34M169 105h39M169 124h43M169 137h27" stroke="#b7c3b8" stroke-width="2" stroke-linecap="round"/><path d="M117 18h46" stroke="#b84e38" stroke-width="2" stroke-linecap="round"/><path d="M140 7v22" stroke="#b84e38" stroke-width="2" stroke-linecap="round"/></svg>
-            <strong>Your next idea goes here</strong>
-            <span>Open a project file or image from the drawer, or create a project to begin.</span>
-            <button id="canvas-empty-new" class="button primary" type="button">Create a project</button>
+          <div id="canvas-empty" class="canvas-empty" aria-labelledby="canvas-start-title">
+            <div class="canvas-start-heading"><h3 id="canvas-start-title">Your next idea goes here</h3><p>Describe what you want to make. We can shape it together.</p></div>
+            <div id="canvas-start-composer" class="canvas-start-composer"></div>
+            <div class="canvas-starters"><p>Don't know where to start? Try one of these.</p><div class="canvas-starter-list" aria-label="Starter templates">
+              <button class="canvas-starter" type="button" data-starter="ink"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 14c3-13 6 13 9-7s3 9 5-1"/></svg>Generative ink</button>
+              <button class="canvas-starter" type="button" data-starter="audio"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 8v4M6.5 5v10M10 3v14M13.5 6v8M17 8v4"/></svg>A playable soundscape</button>
+              <button class="canvas-starter" type="button" data-starter="image"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="1"/><path d="m4 14 4-5 4 4 2-2 3 3"/><circle cx="13.5" cy="6.5" r="1"/></svg>An image study</button>
+            </div></div>
           </div>
           <section id="image-viewer" class="image-viewer" aria-label="Full media preview" data-zoom="fit" hidden><div class="image-viewer-stage"><img id="image-viewer-image" alt="" /><video id="media-viewer-video" controls preload="metadata" playsinline hidden></video><audio id="media-viewer-audio" controls preload="metadata" hidden></audio></div><div class="image-viewer-footer"><span id="image-viewer-info" role="status"></span><div class="button-row"><button id="image-size-toggle" class="button quiet small" type="button">Actual size</button><button id="image-use-chat" class="button quiet small" type="button">Use in chat</button></div></div></section>
         </div>

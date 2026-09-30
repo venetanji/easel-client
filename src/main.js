@@ -128,6 +128,7 @@ function emitCanvasSaved(canvas) {
       projectTitle: document.projectTitle || document.title,
       documentPath: document.documentPath,
       documentTitle: document.documentTitle,
+      starterDocument: document.starterDocument === true,
       previewHidden: Boolean(current?.previewHidden),
       undoAvailable: Boolean(canvasId && CANVAS_HISTORY.canUndo(canvasId)),
     });
