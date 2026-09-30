@@ -50,7 +50,7 @@ const ImageVariationInput = GenerateImageInput.omit({ prompt: true }).extend({
 const GenerateVideoInput = z.object({
   prompt: GenerateImageInput.shape.prompt,
   model: z.string().trim().min(1).max(320),
-  seconds: z.number().int().min(1).max(60).optional(),
+  seconds: z.number().int().min(1).max(60).describe('Duration depends on the endpoint. Easel accepts 4, 8, or 12 seconds; use the 4-second default for its shortest video and explain any adjustment from the user request.').optional(),
   size: GenerateImageInput.shape.size,
   inputReference: ImageUploadInput.optional(),
 }).strict();
@@ -152,7 +152,7 @@ export function registerMediaTools(
   if (!videoModels || videoModels.length) {
     const model = videoModels ? z.enum(videoModels.map((model) => model.id)) : GenerateVideoInput.shape.model;
     if (easel.generateVideo) server.registerTool('generate_video', {
-      description: 'Submit one video generation job using a video Media model. Optional inputReference is a PNG/JPEG/WebP upload. Defaults: 4 seconds, 1280x720; supported values depend on the model. Returns a job ID, not video bytes. Keep that ID and use get_video with the same model; never resubmit merely because a job is pending. Stopping local work does not cancel an accepted server job.',
+      description: 'Submit one video generation job using a video Media model. Optional inputReference is a PNG/JPEG/WebP upload; omit it for text-only video. Defaults: 4 seconds, 1280x720. Easel durations are 4, 8, or 12 seconds; other endpoint limits depend on the model. Returns a job ID, not video bytes. Keep that ID and use get_video with the same model; never resubmit merely because a job is pending. Stopping local work does not cancel an accepted server job.',
       inputSchema: GenerateVideoInput.extend({ model }).strict(),
     }, async (input, extra) => videoToolResult({ job: await easel.generateVideo!({ ...input, signal: extra?.signal }) }, input.model));
     if (easel.getVideo) server.registerTool('get_video', {

@@ -1,4 +1,4 @@
-const ASSET_ID = { type: 'string', pattern: '^(?:[a-f0-9]{32}|[a-f0-9]{64})$' };
+const ASSET_ID = { type: 'string', pattern: '^(?!0+$)(?:[a-f0-9]{32}|[a-f0-9]{64})$' };
 const PROJECT_ID = { type: 'string', pattern: '^[a-f0-9]{32}$', description: 'Optional project containing digest asset IDs. Omit for shared library assets or the active project.' };
 const IMAGE_OUTPUT_TOOLS = new Set(['generate_image', 'edit_image', 'create_image_variation']);
 const MEDIA_OUTPUT_TOOLS = new Set([...IMAGE_OUTPUT_TOOLS, 'get_video']);
@@ -27,7 +27,7 @@ const MEDIA_REFERENCE_TOOLS = Object.freeze([
 function mediaToolSchema(tool) {
   const schema = tool.inputSchema || { type: 'object', properties: {}, additionalProperties: false };
   if (!['edit_image', 'create_image_variation', 'generate_video'].includes(tool.name)) return schema;
-  const properties = { ...schema.properties, projectId: PROJECT_ID };
+  const properties = { ...schema.properties, projectId: { ...PROJECT_ID, type: ['string', 'null'] } };
   const required = (schema.required || []).filter((key) => !['images', 'mask', 'image'].includes(key));
   delete properties.images;
   delete properties.mask;
@@ -41,7 +41,7 @@ function mediaToolSchema(tool) {
     properties.imageAssetId = { ...ASSET_ID, description: 'A saved image to upload for a variation. Model/endpoint support is required; DALL-E 2 requires a square PNG under 4 MiB.' };
     required.push('imageAssetId');
   } else {
-    properties.inputReferenceAssetId = { ...ASSET_ID, description: 'Optional saved PNG/JPEG/WebP image to upload as the video reference. Use a generated image or canvas screenshot ID; the host resolves bytes.' };
+    properties.inputReferenceAssetId = { ...ASSET_ID, type: ['string', 'null'], description: 'Optional saved PNG/JPEG/WebP reference. For text-only video OMIT this field or use null. Never use a placeholder or an all-zero ID. If the user requests a reference, copy a real ID from list_media_assets or a capture result.' };
   }
   return { ...schema, properties, required, additionalProperties: false };
 }
@@ -50,14 +50,24 @@ async function resolveMediaToolArguments(name, args, readAsset, signal) {
   if (!['edit_image', 'create_image_variation', 'generate_video'].includes(name)) return args;
   const { projectId, imageAssetIds, imageAssetId, maskAssetId, inputReferenceAssetId, ...wire } = args;
   let totalBytes = 0;
+  function invalidReference(message) {
+    const error = new Error(`${message} The media API was not called. Use list_media_assets to choose an existing image${name === 'generate_video' ? ', or omit inputReferenceAssetId/use null for text-only video' : ''}.`);
+    Object.assign(error, { code: 'INVALID_MEDIA_REFERENCE', stage: 'reference_resolution', requestSent: false });
+    throw error;
+  }
   async function image(assetId, pngOnly = false) {
     signal?.throwIfAborted();
-    const asset = await readAsset({ assetId, projectId });
+    let asset;
+    try { asset = await readAsset({ assetId, projectId: projectId ?? undefined }); }
+    catch (cause) {
+      signal?.throwIfAborted();
+      invalidReference(`Saved image reference ${assetId} could not be resolved locally: ${cause instanceof Error ? cause.message : String(cause)}.`);
+    }
     signal?.throwIfAborted();
-    if (!asset || !['image/png', 'image/jpeg', 'image/webp'].includes(asset.mimeType) || (pngOnly && asset.mimeType !== 'image/png')) throw new Error(pngOnly ? 'This reference must be a saved PNG image.' : 'Media references must be saved PNG, JPEG or WebP images.');
-    if (typeof asset.data !== 'string' || !asset.data) throw new Error('Saved image reference is missing.');
+    if (!asset || !['image/png', 'image/jpeg', 'image/webp'].includes(asset.mimeType) || (pngOnly && asset.mimeType !== 'image/png')) invalidReference(pngOnly ? 'This reference must be a saved PNG image.' : 'Media references must be saved PNG, JPEG or WebP images.');
+    if (typeof asset.data !== 'string' || !asset.data) invalidReference('Saved image reference is missing.');
     totalBytes += Buffer.byteLength(asset.data, 'base64');
-    if (totalBytes > 32 * 1024 * 1024) throw new Error('Saved image references exceed 32 MiB combined.');
+    if (totalBytes > 32 * 1024 * 1024) invalidReference('Saved image references exceed 32 MiB combined.');
     const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }[asset.mimeType];
     return { data: asset.data, mimeType: asset.mimeType, name: `${assetId}.${extension}` };
   }

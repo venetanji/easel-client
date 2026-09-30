@@ -49,7 +49,7 @@ test('uses streamed Responses API with configured model, tools, history, and key
     { type: 'function_call_output', call_id: 'call_1', output: 'Available models: flux2.' },
   ]);
   assert.deepEqual(payload.tools[0], {
-    type: 'function', name: 'list_models', description: 'List image models', parameters: { type: 'object' },
+    type: 'function', name: 'list_models', description: 'List image models', parameters: { type: 'object' }, strict: false,
   });
 });
 

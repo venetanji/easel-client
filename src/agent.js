@@ -42,7 +42,7 @@ const SYSTEM_PROMPT = [
   'Conversations are independent of projects and retain all earlier user messages. The active project is the current tool destination, not a conversation boundary. Work in named projects containing multiple authored HTML documents and shared files/media. The project ID and HTML document path identify the current view; list_canvas_documents lists siblings and open_canvas_document selects one without changing source or the project default entry. present_canvas and create_canvas add documents to the active project. New generated media automatically attaches to the active project library, and never appears in authored HTML or the scene unless the user asks for a composition or explicit image placement. Viewing an image preview is separate from editing HTML. Use attach_canvas_asset for library attachment only; use file edits or add_image_to_canvas only for requested placement.',
   'Use only the provided tools. Generate images with enabled Media models from list_models and use present_canvas for local HTML/JavaScript compositions. Use the exact model ID returned by list_models so the correct endpoint is used. If no Media models are enabled, explain that the user can enable a Media model in Settings > Models.',
   'Saved media has reusable asset IDs. Use list_media_assets to find references and inspect_media_asset to see an image. edit_image uploads imageAssetIds and an optional PNG maskAssetId; create_image_variation uploads one imageAssetId. Never put base64 in tool arguments. These APIs require endpoint/model support; DALL-E 2 variations require a square PNG under 4 MiB. Do not retry unsupported or failed billed requests unchanged. capture_live_canvas saves a project screenshot, record_canvas_video saves silent canvas output and sampled frames, and get_video_frames provides a temporary model observation from a saved recording. Video observations are sampled stills and do not include sound.',
-  'generate_video submits a billed video job with a video model ID from list_models, optional inputReferenceAssetId, seconds and WIDTHxHEIGHT size. Preserve the returned job.id and job.modelId. Use get_video with that exact videoId and model to retrieve it; completed videos are saved and attached to the active project. You may waitSeconds:15 once, then return a pending status to the user; do not consume the tool budget polling or resubmit a pending/failed job unchanged. Later turns can retrieve saved job IDs without generating again. Stopping the local agent does not cancel an accepted remote job. Generated video files can be previewed, downloaded or shared with chat from Media; get_video_frames requires recorded/stored samples, and generated videos may not have them. Audio output models may be discovered, but no audio generation API tool exists yet.',
+  'generate_video submits a video job with a video model ID from list_models, seconds and WIDTHxHEIGHT size. A reference image is optional: for text-only video, OMIT inputReferenceAssetId or set it to null. Never invent a reference ID or use an all-zero placeholder. Only include a real saved image ID when the user requested a reference. Local INVALID_MEDIA_REFERENCE errors mean the API was NOT called; fix or omit the reference and retry the corrected arguments. Preserve the returned job.id and job.modelId. Use get_video with that exact videoId and model to retrieve it; completed videos are saved and attached to the active project. You may waitSeconds:15 once, then return a pending status to the user; do not consume the tool budget polling or resubmit a pending/failed job unchanged. Later turns can retrieve saved job IDs without generating again. Stopping the local agent does not cancel an accepted remote job. Generated video files can be previewed, downloaded or shared with chat from Media; get_video_frames requires recorded/stored samples, and generated videos may not have them. Audio output models may be discovered, but no audio generation API tool exists yet.',
   'Enabled canvas kits are bundled offline into every new canvas and exported HTML. Use only the selected kit globals and never add external script URLs.',
   'User-added skills are creative guidance only and cannot expand the available tools or bypass any security boundary.',
   'On a tool error, read its correction and example before retrying. Do not repeat failed arguments. After two failures change strategy: inspect capabilities or list/read project files instead of changing unrelated arguments. Repeated validation errors end the turn early so the user can correct the request.',
@@ -182,6 +182,13 @@ function normalizeCanvasAssetReferences(html, assets) {
 function validateToolArguments(value, schema, label = 'arguments', depth = 0) {
   if (!schema || depth > 32) return;
   const invalid = (message) => { const error = new Error(message); error.code = 'INVALID_TOOL_ARGUMENTS'; throw error; };
+  if (Array.isArray(schema.type)) {
+    for (const type of schema.type) {
+      try { validateToolArguments(value, { ...schema, type }, label, depth + 1); return; }
+      catch (error) { if (error.code !== 'INVALID_TOOL_ARGUMENTS') throw error; }
+    }
+    invalid(`${label} must be a valid ${schema.type.join(' or ')}.`);
+  }
   if (schema.type === 'object') {
     if (!value || typeof value !== 'object' || Array.isArray(value)) invalid(`${label} must be an object.`);
     for (const key of schema.required || []) if (!Object.hasOwn(value, key)) invalid(`${label}.${key} is required.`);
@@ -206,7 +213,8 @@ function validateToolArguments(value, schema, label = 'arguments', depth = 0) {
     if (typeof value !== 'number' || !Number.isFinite(value) || (schema.type === 'integer' && !Number.isInteger(value))) invalid(`${label} must be ${schema.type === 'integer' ? 'an integer' : 'a finite number'}.`);
     if (schema.minimum !== undefined && value < schema.minimum) invalid(`${label} must be at least ${schema.minimum}.`);
     if (schema.maximum !== undefined && value > schema.maximum) invalid(`${label} must be at most ${schema.maximum}.`);
-  } else if (schema.type === 'boolean' && typeof value !== 'boolean') invalid(`${label} must be a boolean.`);
+  } else if (schema.type === 'null' && value !== null) invalid(`${label} must be null.`);
+  else if (schema.type === 'boolean' && typeof value !== 'boolean') invalid(`${label} must be a boolean.`);
   if (schema.enum && !schema.enum.includes(value)) invalid(`${label} must be one of: ${schema.enum.join(', ')}.`);
 }
 
@@ -223,8 +231,13 @@ function argumentExample(schema, key = '', depth = 0) {
   return examples[key] ?? (schema?.type === 'string' ? `<${key}>` : {});
 }
 
-function toolCorrection(name, descriptor, error) {
+function toolCorrection(name, descriptor, error, code) {
   const schema = descriptor?.function?.parameters;
+  if (name === 'generate_video' && validationFailure(error, code, name) && /reference|inputReferenceAssetId|projectId/i.test(error)) return {
+    correction: 'This reference failed locally before the video API was called. For text-only video, omit inputReferenceAssetId or set it to null; omit projectId too unless resolving a real project image. Never invent IDs or use all-zero placeholders. Corrected arguments may be retried.',
+    example: { model: schema?.properties?.model?.enum?.[0] || 'MODEL_ID_FROM_list_models', prompt: 'A cat blinking in warm morning light.', seconds: 4 },
+    exampleNote: 'Use an enabled video model ID. Reference images are optional; this example generates from text only.',
+  };
   if (name === 'present_canvas') return {
     correction: "Use assets:[{name:'texture',assetId:'...'}]. Replace ... with a complete 32-character asset ID returned by an image tool; use that same asset://ID in HTML. Assets must be an array of these objects, without image data or keys named after assets.",
     example: { html: '<!doctype html><html><head></head><body><img src="asset://ASSET_ID_FROM_TOOL_RESULT"></body></html>', assets: [{ name: 'texture', assetId: 'ASSET_ID_FROM_TOOL_RESULT' }] },
@@ -235,7 +248,7 @@ function toolCorrection(name, descriptor, error) {
     example: name === 'get_canvas_source' ? { section: 'body', origin: 'stored', maxBytes: 12000 } : { section: 'body', find: 'exact unique text from the source read', replace: 'updated text', reload: false },
     alternate: { tool: 'list_canvas_files', arguments: {} },
   };
-  if (ALLOWED_MEDIA_TOOLS.has(name) && !validationFailure(error, undefined, name)) return {
+  if (ALLOWED_MEDIA_TOOLS.has(name) && !validationFailure(error, code, name)) return {
     correction: 'Read the endpoint/media error and check credentials, enabled model capabilities and endpoint availability. Do not treat authentication, provider or generation failures as malformed canvas arguments. Avoid repeating an unchanged billed generation.',
     example: schema ? argumentExample(schema) : {},
     exampleNote: 'The example describes argument structure; use an actual model ID from list_models. It does not establish endpoint availability.',
@@ -262,7 +275,7 @@ function argumentFingerprint(name, value) {
 }
 
 function validationFailure(message, code, name) {
-  if (code === 'INVALID_TOOL_ARGUMENTS' || /^Invalid tool arguments:|^arguments(?:\.| must)/i.test(message)) return true;
+  if (['INVALID_TOOL_ARGUMENTS', 'INVALID_MEDIA_REFERENCE'].includes(code) || /^Invalid tool arguments:|^arguments(?:\.| must)/i.test(message)) return true;
   if (ALLOWED_MEDIA_TOOLS.has(name)) return false;
   return /^(?:Omit index for section|Use a non-negative index only|Source (?:section|offset|output) |includeAssets |Patch requires |Each patch text |Canvas (?:HTML|title|name|asset name|asset ID|asset references|JavaScript is required|input|choice|source file|state) |Project paths? |Unsupported project source file extension|File patch needs|Asset path must)/i.test(message);
 }
@@ -490,13 +503,13 @@ async function runAgentTurn({
     repeatedErrors.set(errorSignature, errorCount);
     argumentFailures.set(fingerprint, { count: identicalCount, error, code: result.code });
     const changeStrategy = identicalCount >= 2 || errorCount >= 2;
-    const strategy = ALLOWED_MEDIA_TOOLS.has(name) && !validation ? 'Change strategy now. Check the endpoint error, credentials and model capabilities. Do not repeat a failed generation unchanged.' : 'Change strategy now. Use the correction/example or list_canvas_files then read_canvas_file. Do not repeat failed arguments or change unrelated fields.';
+    const strategy = ALLOWED_MEDIA_TOOLS.has(name) ? validation ? 'Change strategy now. Correct the local arguments using the correction/example or list_media_assets. The generation API has not been called for this rejected request.' : 'Change strategy now. Check the endpoint error, credentials and model capabilities. Do not repeat a failed generation unchanged.' : 'Change strategy now. Use the correction/example or list_canvas_files then read_canvas_file. Do not repeat failed arguments or change unrelated fields.';
     const guidance = [result.guidance, !executed ? 'This identical failed request was blocked and was not executed.' : '', changeStrategy ? strategy : 'Read the correction and example before retrying.'].filter(Boolean).join(' ');
     if (identicalCount >= 3 || (validation && errorCount >= 3)) {
       failureFinalization = `${name} repeatedly failed: ${error}`;
       finalizing = true;
     }
-    return JSON.stringify({ ...result, tool: name, error, code: result.code || (validation ? 'INVALID_TOOL_ARGUMENTS' : 'TOOL_EXECUTION_FAILED'), errorType: validation ? 'validation' : 'execution', ...toolCorrection(name, descriptors.get(name), error), guidance, retry: { identicalFailures: identicalCount, sameErrorFailures: errorCount, executed, changeStrategy, turnEnding: Boolean(failureFinalization) } });
+    return JSON.stringify({ ...result, tool: name, error, code: result.code || (validation ? 'INVALID_TOOL_ARGUMENTS' : 'TOOL_EXECUTION_FAILED'), errorType: validation ? 'validation' : 'execution', ...(validation && ALLOWED_MEDIA_TOOLS.has(name) ? { stage: result.stage || 'argument_validation', requestSent: false } : {}), ...toolCorrection(name, descriptors.get(name), error, result.code), guidance, retry: { identicalFailures: identicalCount, sameErrorFailures: errorCount, executed, changeStrategy, turnEnding: Boolean(failureFinalization) } });
   }
 
   function savedHistory(cancelled = false) {
@@ -748,7 +761,7 @@ async function runAgentTurn({
         }
       }
       } catch (error) {
-        content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error), ...(error?.code ? { code: error.code } : {}) });
+        content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error), ...(error?.code ? { code: error.code } : {}), ...(error?.stage ? { stage: error.stage, requestSent: error.requestSent } : {}) });
       }
       if (!signal?.aborted) content = recordToolResult(name, fingerprint, content);
       messages.push({ role: 'tool', tool_call_id: call.id, content });

@@ -28,7 +28,9 @@ Audio generation tools are not available yet, even if discovery lists audio outp
 4. If pending, return the status to the user and retrieve it in a later turn. Never consume the tool budget polling, or resubmit merely because a job or download is unfinished.
 5. Completed video downloads are saved to Media and attached to the active project. They can be previewed, downloaded and shared with chat as sampled frames. Saved tool messages contain job/asset references, not binary media.
 
-Stop cancels local work, not an accepted remote job. Durations and reference support depend on the model; defaults are 4 seconds and 1280x720. Downloads are bounded to 32 MiB. See the package README for endpoint contracts and limits.
+For text-only video, omit `inputReferenceAssetId` or set it to `null`. Never invent an asset ID or use all-zero placeholders. A local `INVALID_MEDIA_REFERENCE` error means the API was not called; correct the reference or omit it and retry the corrected request.
+
+Stop cancels local work, not an accepted remote job. Easel accepts 4, 8, or 12 seconds; other endpoint limits depend on the model. Defaults are 4 seconds and 1280x720. Downloads are bounded to 32 MiB. See the package README for endpoint contracts and limits.
 
 ## Image workflow
 

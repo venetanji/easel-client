@@ -80,6 +80,8 @@ function toResponsesTools(tools = []) {
       name: tool.function.name,
       description: tool.function.description || '',
       parameters: tool.function.parameters || { type: 'object', properties: {}, additionalProperties: false },
+      // These schemas allow omitted optional fields; do not require fabricated values.
+      strict: false,
     }));
 }
 

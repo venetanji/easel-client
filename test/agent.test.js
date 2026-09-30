@@ -245,3 +245,140 @@ test('returns JavaScript errors to the agent so it can repair the canvas in the 
   assert.equal(attempts, 2);
   assert.equal(result.text, 'Canvas fixed.');
 });
+
+const videoTools = [
+  { name: 'generate_video', inputSchema: {
+    type: 'object', additionalProperties: false, required: ['model', 'prompt'], properties: {
+      model: { type: 'string', enum: ['gpu:video'] }, prompt: { type: 'string' },
+      seconds: { type: 'integer', minimum: 1, maximum: 60 }, inputReference: { type: 'object' },
+    },
+  } },
+  { name: 'get_video', inputSchema: {
+    type: 'object', additionalProperties: false, required: ['model', 'videoId'], properties: {
+      model: { type: 'string', enum: ['gpu:video'] }, videoId: { type: 'string' },
+    },
+  } },
+];
+
+test('text-only video accepts omitted or null references without reading an asset', async () => {
+  for (const optional of [{}, { inputReferenceAssetId: null, projectId: null }]) {
+    let requests = 0;
+    let calls = 0;
+    await runAgentTurn({
+      userMessage: 'Make a cat video',
+      llm: { async createCompletion({ tools }) {
+        if (requests++ === 0) {
+          const schema = tools.find((tool) => tool.function.name === 'generate_video').function.parameters;
+          assert.equal(schema.required.includes('inputReferenceAssetId'), false);
+          return response(toolCall('generate_video', { model: 'gpu:video', prompt: 'A cat', ...optional }));
+        }
+        return response({ role: 'assistant', content: 'Video queued.' });
+      } },
+      mcp: { async listTools() { return videoTools; }, async callTool(name, args) {
+        calls += 1;
+        assert.equal(name, 'generate_video');
+        assert.deepEqual(args, { model: 'gpu:video', prompt: 'A cat' });
+        return { content: [], structuredContent: { job: { id: 'video_cat', modelId: args.model, status: 'queued' } } };
+      } },
+      assetStore: { async get() { assert.fail('Text-only video must not resolve a reference.'); } },
+    });
+    assert.equal(calls, 1);
+  }
+});
+
+test('placeholder and missing video references fail locally and permit a corrected request', async () => {
+  for (const [reference, expectedCode, expectedStage] of [
+    ['0'.repeat(32), 'INVALID_TOOL_ARGUMENTS', 'argument_validation'],
+    ['a'.repeat(32), 'INVALID_MEDIA_REFERENCE', 'reference_resolution'],
+  ]) {
+    let requests = 0;
+    let calls = 0;
+    const result = await runAgentTurn({
+      userMessage: 'Make a cat video without a reference',
+      llm: { async createCompletion({ messages }) {
+        if (requests++ === 0) return response(toolCall('generate_video', { model: 'gpu:video', prompt: 'A cat', inputReferenceAssetId: reference }));
+        if (requests === 2) {
+          const failure = JSON.parse(messages.at(-1).content);
+          assert.equal(calls, 0);
+          assert.equal(failure.code, expectedCode);
+          assert.equal(failure.errorType, 'validation');
+          assert.equal(failure.requestSent, false);
+          assert.equal(failure.stage, expectedStage);
+          assert.match(failure.correction, /omit inputReferenceAssetId or set it to null/);
+          return response(toolCall('generate_video', { model: 'gpu:video', prompt: 'A cat' }, 'corrected'));
+        }
+        return response({ role: 'assistant', content: 'Video queued.' });
+      } },
+      mcp: { async listTools() { return videoTools; }, async callTool(name, args) {
+        calls += 1;
+        assert.equal(name, 'generate_video');
+        assert.equal(Object.hasOwn(args, 'inputReference'), false);
+        return { content: [], structuredContent: { job: { id: 'video_cat', status: 'queued' } } };
+      } },
+      canvasController: { async readMediaAsset() { throw new Error('This media asset is not attached to the selected project.'); } },
+    });
+    assert.equal(calls, 1);
+    assert.equal(result.text, 'Video queued.');
+  }
+});
+
+test('remote video reference errors retain execution provenance', async () => {
+  let requests = 0;
+  await runAgentTurn({
+    userMessage: 'Animate my reference',
+    llm: { async createCompletion({ messages }) {
+      if (requests++ === 0) return response(toolCall('generate_video', { model: 'gpu:video', prompt: 'A cat' }));
+      const failure = JSON.parse(messages.at(-1).content);
+      assert.equal(failure.errorType, 'execution');
+      assert.notEqual(failure.requestSent, false);
+      assert.doesNotMatch(failure.correction, /failed locally|API was not called/);
+      assert.match(failure.error, /provider rejected/);
+      return response({ role: 'assistant', content: 'The provider rejected the request.' });
+    } },
+    mcp: { async listTools() { return videoTools; }, async callTool() {
+      return { isError: true, content: [{ type: 'text', text: 'The provider rejected the input reference.' }] };
+    } },
+  });
+});
+
+test('completed video is stored and attached once, then reused without binary history', async () => {
+  let requests = 0;
+  let calls = 0;
+  let saves = 0;
+  let attachments = 0;
+  const events = [];
+  const assetId = 'b'.repeat(32);
+  const data = Buffer.from([0, 0, 0, 16, 102, 116, 121, 112, 105, 115, 111, 109]).toString('base64');
+  const result = await runAgentTurn({
+    userMessage: 'Retrieve my video',
+    llm: { async createCompletion() {
+      if (requests++ < 2) return response(toolCall('get_video', { model: 'gpu:video', videoId: 'video_cat' }, `get_${requests}`));
+      return response({ role: 'assistant', content: 'Video ready.' });
+    } },
+    mcp: { async listTools() { return videoTools; }, async callTool() {
+      calls += 1;
+      return { content: [{ type: 'resource', resource: { uri: 'easel-media://videos/video_cat', mimeType: 'video/mp4', blob: data } }],
+        structuredContent: { job: { id: 'video_cat', modelId: 'gpu:video', status: 'completed', seconds: 4 } } };
+    } },
+    mediaAssetStore: { async save(media) {
+      saves += 1;
+      assert.equal(media.data, data);
+      assert.equal(media.duration, 4);
+      return assetId;
+    }, async get(id) { assert.equal(id, assetId); return { data, mimeType: 'video/mp4' }; } },
+    canvasController: { getCurrentCanvasId() { return 'c'.repeat(32); }, async attachGeneratedAssets(input) {
+      attachments += 1;
+      assert.deepEqual(input.assetIds, [assetId]);
+      return { projectId: input.projectId };
+    } },
+    onEvent(event) { events.push(event); },
+  });
+  assert.equal(calls, 1);
+  assert.equal(saves, 1);
+  assert.equal(attachments, 1);
+  assert.ok(events.some((event) => event.type === 'media' && event.assetId === assetId && event.attachedToProject));
+  assert.equal(JSON.stringify(result.history).includes(data), false);
+  const results = result.history.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
+  assert.equal(results[1].cached, true);
+  assert.deepEqual(results[1].assets, results[0].assets);
+});
