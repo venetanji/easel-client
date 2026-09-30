@@ -64,6 +64,7 @@ function createChatService({
   let activeTurn = null;
   let shuttingDown = false;
   let inputQueuePaused = false;
+  let chatRestorePending = false;
   let lastTurnOptions = { mode: 'chat', size: '1024x1024', skills: [], kits: [] };
   const pendingSubmissions = new Set();
   try {
@@ -95,7 +96,7 @@ function createChatService({
   }
 
   function scheduleCanvasInputs() {
-    if ((!inputStore && !mediaJobStore) || inputDrainScheduled || shuttingDown || inputQueuePaused) return;
+    if ((!inputStore && !mediaJobStore) || inputDrainScheduled || shuttingDown || inputQueuePaused || chatRestorePending) return;
     inputDrainScheduled = true;
     queueMicrotask(() => {
       inputDrainScheduled = false;
@@ -208,6 +209,8 @@ function createChatService({
       // Save the actual prompt through checkpoint, which retains it in memory on disk errors.
       ensureChatId(userMessage.replace(/\s+/g, ' ').slice(0, 120) || 'Attached media', { persist: false });
       const turnChatId = chatId;
+      const projectKits = await canvasController?.getCurrentKits?.();
+      if (Array.isArray(projectKits)) kits = [...projectKits];
       const turnOptions = { mode, size, skills, kits };
       lastTurnOptions = turnOptions;
       if (!canvasResume) {
@@ -384,7 +387,7 @@ function createChatService({
   }
 
   async function drainCanvasInputs() {
-    if (!inputStore || busy || drainingInputs || drainingMedia || !chatId || shuttingDown || inputQueuePaused) return;
+    if (!inputStore || busy || drainingInputs || drainingMedia || !chatId || shuttingDown || inputQueuePaused || chatRestorePending) return;
     drainingInputs = true;
     try {
       const queue = inputStore.list({ chatId, status: ['answered', 'queued'], limit: 200, raw: true }).reverse();
@@ -425,12 +428,12 @@ function createChatService({
     if (!chatId || !mediaJobStore) return [];
     const entries = completedMediaJobs().reverse();
     for (const entry of entries) {
-      const result = { jobId: entry.remoteId, modelId: entry.modelId, projectId: entry.projectId, status: entry.status, assets: entry.assets, ...(entry.error ? { error: entry.error } : {}) };
+      const result = { jobId: entry.remoteId, localJobId: entry.id, name: entry.name, mediaType: entry.mediaType, modelId: entry.modelId, projectId: entry.projectId, status: entry.status, assets: entry.assets, ...(entry.error ? { error: entry.error } : {}) };
       if (!history.some((message) => message.mediaJobId === entry.id)) {
         history.push({ role: 'user', content: `Background ${entry.mediaType} job ${entry.status === 'ready' ? 'is ready' : 'failed'}. This is an automatic host notification, not a new user request.\n${JSON.stringify(result)}\nContinue the original request using the saved output when useful. Do not generate a replacement or retrieve this completed output again. The output belongs to the listed project; do not edit a different project.`, mediaJobId: entry.id, mediaJobResult: result });
         pendingSave = true;
         saveHistory();
-        onEvent?.({ type: 'media-job-notification', chatId, job: entry, text: entry.status === 'ready' ? `Your ${entry.mediaType} is ready.` : `${entry.mediaType[0].toUpperCase() + entry.mediaType.slice(1)} generation failed: ${entry.error}` });
+        onEvent?.({ type: 'media-job-notification', chatId, projectId: entry.projectId, jobId: entry.id, assets: entry.assets, job: entry, text: entry.status === 'ready' ? `Your ${entry.mediaType} is ready.` : `${entry.mediaType[0].toUpperCase() + entry.mediaType.slice(1)} generation failed: ${entry.error}` });
       }
       mediaJobStore.update(entry.id, { notification: consume ? 'responded' : 'delivered' });
     }
@@ -438,7 +441,7 @@ function createChatService({
   }
 
   async function drainMediaJobs() {
-    if (!mediaJobStore || busy || drainingInputs || drainingMedia || !chatId || shuttingDown || inputQueuePaused) return;
+    if (!mediaJobStore || busy || drainingInputs || drainingMedia || !chatId || shuttingDown || inputQueuePaused || chatRestorePending) return;
     drainingMedia = true;
     try {
       const settings = settingsStore.loadPublic();
@@ -463,8 +466,14 @@ function createChatService({
     } finally { drainingMedia = false; }
   }
 
-  function notifyMediaJob(job) {
-    onEvent?.({ type: 'media-job-ready', job, chatId: job.chatId });
+  async function notifyMediaJob(job) {
+    const assets = await Promise.all((job.assets || []).map(async (asset) => {
+      try {
+        const metadata = await mediaAssetStore?.getMetadata?.(asset.assetId);
+        return { ...asset, ...Object.fromEntries(['name', 'mimeType', 'thumbnail', 'width', 'height', 'duration'].filter((key) => metadata?.[key] !== undefined).map((key) => [key, metadata[key]])) };
+      } catch { return asset; }
+    }));
+    onEvent?.({ type: 'media-job-ready', job, jobId: job.id, assets, projectId: job.projectId, chatId: job.chatId });
     scheduleCanvasInputs();
   }
 
@@ -567,6 +576,7 @@ function createChatService({
     chatId = '';
     chatTitle = '';
     loadError = '';
+    chatRestorePending = false;
   }
 
   function openChat(id) {
@@ -579,11 +589,20 @@ function createChatService({
     chatId = saved.id;
     chatTitle = saved.title;
     loadError = '';
+    chatRestorePending = true;
     recoverCanvasInputs();
-    return getCurrentChat();
+    return getCurrentChat({ deferResume: true });
   }
 
-  async function getCurrentChat() {
+  function acknowledgeChat(id) {
+    if (id !== chatId) return { ok: false, stale: true };
+    chatRestorePending = false;
+    scheduleCanvasInputs();
+    return { ok: true };
+  }
+
+  async function getCurrentChat({ deferResume = false } = {}) {
+    if (deferResume) chatRestorePending = true;
     if (!busy && !drainingMedia && mediaJobStore) {
       for (const entry of mediaJobStore.list({ chatId, raw: true }).filter((job) => job.notification === 'dispatching')) {
         mediaJobStore.update(entry.id, { notification: history.some((message) => message.mediaJobCompletedId === entry.id) ? 'responded' : 'interrupted' });
@@ -606,6 +625,11 @@ function createChatService({
         seenMedia.add(reference.assetId);
         if (media.length >= 20) { mediaTruncated = true; continue; }
         try {
+          const metadata = /^image\//.test(reference.mimeType) ? null : await mediaAssetStore.getMetadata?.(reference.assetId);
+          if (metadata && /^(video|audio)\//.test(metadata.mimeType) && metadata.mimeType === reference.mimeType) {
+            media.push({ ...metadata, ...reference, requestId: message.canvasInputRequestId });
+            continue;
+          }
           const saved = await mediaAssetStore.get(reference.assetId);
           if (saved.mimeType !== reference.mimeType || typeof saved.data !== 'string') continue;
           const bytes = Buffer.byteLength(saved.data, 'base64');
@@ -623,7 +647,15 @@ function createChatService({
         const result = message.mediaJobResult || JSON.parse(message.content);
         const references = [...(Array.isArray(result.assets) ? result.assets : []), ...(result.assetId ? [{ assetId: result.assetId }] : [])];
         for (const asset of references) {
-          if (!/^[a-f0-9]{32}$/.test(asset.assetId || '') || images.has(asset.assetId)) continue;
+          if (!/^(?:[a-f0-9]{32}|[a-f0-9]{64})$/.test(asset.assetId || '') || images.has(asset.assetId)) continue;
+          const metadata = /^image\//.test(asset.mimeType) ? null : await mediaAssetStore.getMetadata?.(asset.assetId);
+          if (metadata && /^(video|audio)\//.test(metadata.mimeType)) {
+            if (seenMedia.has(asset.assetId)) continue;
+            seenMedia.add(asset.assetId);
+            if (media.length >= 20) { mediaTruncated = true; continue; }
+            media.push({ ...asset, ...metadata, assetId: asset.assetId, projectId: result.projectId, generated: Boolean(result.job || message.mediaJobResult) });
+            continue;
+          }
           const saved = await mediaAssetStore.get(asset.assetId);
           if (/^image\//.test(saved.mimeType)) {
             images.set(asset.assetId, { ...saved, assetId: saved.id });
@@ -633,7 +665,7 @@ function createChatService({
             if (!bytes) continue;
             if (media.length >= 20 || mediaBytes + bytes > 64 * 1024 * 1024) { mediaTruncated = true; continue; }
             mediaBytes += bytes;
-            media.push({ ...saved, assetId: saved.id, generated: Boolean(result.job) });
+            media.push({ ...saved, assetId: saved.id, projectId: result.projectId, generated: Boolean(result.job || message.mediaJobResult) });
           }
         }
       } catch {
@@ -643,7 +675,7 @@ function createChatService({
     return { id: currentId, title: currentTitle, history: currentHistory, images: [...images.values()], media, mediaTruncated, canvasInputs: inputStore && currentId ? inputStore.list({ chatId: currentId, limit: 50 }) : [], ...(loadError ? { error: loadError } : {}) };
   }
 
-  return { sendMessage, stopAgent, shutdown, cancelShutdown, notifyMediaJob, submitCanvasInput, submitCanvasMedia, cancelCanvasInput, retryCanvasInput, recoverCanvasInputs, getCanvasInputs: (query) => inputStore?.list(query) || [], clearHistory, openChat, getCurrentChat, getActiveChatId: () => chatId, listChats: () => chatStore?.list() || [], isBusy: () => busy || drainingInputs || drainingMedia };
+  return { sendMessage, stopAgent, shutdown, cancelShutdown, notifyMediaJob, submitCanvasInput, submitCanvasMedia, cancelCanvasInput, retryCanvasInput, recoverCanvasInputs, getCanvasInputs: (query) => inputStore?.list(query) || [], clearHistory, openChat, getCurrentChat, acknowledgeChat, getActiveChatId: () => chatId, listChats: () => chatStore?.list() || [], isBusy: () => busy || drainingInputs || drainingMedia };
 }
 
 module.exports = { createChatService, defaultMcpLaunchOptions };

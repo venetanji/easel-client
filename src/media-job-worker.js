@@ -4,6 +4,7 @@ const { createMediaMcpClient } = require('./media-mcp-client');
 const { createAssetStore } = require('./asset-store');
 const { createCanvasMediaStore } = require('./canvas-media-store');
 const { handleMcpResult } = require('./agent');
+const { generatedMediaName } = require('./media-names');
 
 function createMediaJobWorkerRuntime({ userDataPath, mcpFactory = createMediaMcpClient, mediaAssetStore, checkpoint, isRemoved = () => false }) {
   const images = mediaAssetStore ? undefined : createAssetStore({ userDataPath });
@@ -47,6 +48,7 @@ function createMediaJobWorkerRuntime({ userDataPath, mcpFactory = createMediaMcp
     if (job.status !== 'completed') return { structuredContent: { job }, content: [] };
     let index = 0;
     let saveFailure;
+    const names = [];
     const resumableStore = {
       get: assets.get,
       async save(media) {
@@ -55,9 +57,11 @@ function createMediaJobWorkerRuntime({ userDataPath, mcpFactory = createMediaMcp
         try {
           checkRemoved();
           const existing = entry.assets[index++];
+          const name = existing?.name || generatedMediaName(entry.prompt || entry.name, media.mimeType, index - 1) || media.name;
+          names.push(name);
           if (existing) { await assets.get(existing.assetId); return existing.assetId; }
-          const assetId = await assets.save(media);
-          await checkpoint({ assetId, mimeType: media.mimeType, ...(media.name ? { name: media.name } : {}), ...(media.duration ? { duration: media.duration } : {}) });
+          const assetId = await assets.save({ ...media, ...(name ? { name } : {}) });
+          await checkpoint({ assetId, mimeType: media.mimeType, ...(name ? { name } : {}), ...(media.duration ? { duration: media.duration } : {}) });
           return assetId;
         } catch (error) { saveFailure = error; throw error; }
       },
@@ -65,7 +69,7 @@ function createMediaJobWorkerRuntime({ userDataPath, mcpFactory = createMediaMcp
     // Decode, validate and write media here; only compact references cross to Electron.
     const saved = JSON.parse(await handleMcpResult(result, resumableStore));
     if (saved.saveErrors?.length || !saved.assets.length) throw new Error(saved.saveErrors?.join(' ') || 'The completed job returned no downloadable media. Its ID is retained.');
-    return { structuredContent: { job, assets: saved.assets }, content: [] };
+    return { structuredContent: { job, assets: saved.assets.map((asset, item) => ({ ...asset, ...(names[item] ? { name: names[item] } : {}) })) }, content: [] };
   }
   async function close() {
     await Promise.allSettled([...connections.values()].map((client) => client.close()));

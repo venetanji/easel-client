@@ -134,23 +134,24 @@ test('endpoint changes preserve IDs without sending them to a different endpoint
   assert.match(store.get(job.id).error, /endpoint is missing or changed/);
 });
 
-function chatFixture(t, { currentProject = projectId } = {}) {
+function chatFixture(t, { currentProject = projectId, getMetadata, currentKits } = {}) {
   const state = fixture(t);
   const chatStore = createChatStore({ userDataPath: state.root });
   const chatId = 'd'.repeat(32);
   chatStore.save({ id: chatId, title: 'Cat', history: [{ role: 'user', content: 'Make a cat video' }, { role: 'assistant', content: 'Queued.' }] });
   const requests = [];
+  const instructions = [];
   const events = [];
   const service = createChatService({ settingsStore, chatStore, mediaJobStore: state.store,
-    assetStore: {}, mediaAssetStore: { async get(id) { return { id, data: 'YWJj', mimeType: 'video/mp4' }; } },
-    canvasController: { getCurrentCanvasId: () => currentProject },
-    llmFactory: () => ({ async createCompletion({ messages }) { requests.push(messages.map((message) => ({ ...message }))); return { choices: [{ message: { role: 'assistant', content: 'The cat video is ready.' } }] }; } }),
+    assetStore: {}, mediaAssetStore: { getMetadata, async get(id) { return { id, data: 'YWJj', mimeType: 'video/mp4' }; } },
+    canvasController: { getCurrentCanvasId: () => currentProject, getCurrentKits: () => currentKits },
+    llmFactory: () => ({ async createCompletion({ messages, instructions: guidance }) { instructions.push(guidance); requests.push(messages.map((message) => ({ ...message }))); return { choices: [{ message: { role: 'assistant', content: 'The cat video is ready.' } }] }; } }),
     mcpFactory: async () => ({ async listTools() { return []; }, async close() {} }),
     mcpLaunchOptions: () => ({ command: 'node' }), onEvent: (event) => events.push(event),
   });
   const job = state.store.track({ ...input, chatId, approvedAgent: { connectionId, model: 'agent', baseUrl } });
   state.store.update(job.id, { status: 'ready', assets: [{ assetId: 'a'.repeat(32), mimeType: 'video/mp4' }] });
-  return { ...state, service, job, requests, events, chatStore, chatId };
+  return { ...state, service, job, requests, instructions, events, chatStore, chatId };
 }
 
 test('ready output resumes the original idle chat exactly once with saved asset references', async (t) => {
@@ -165,6 +166,40 @@ test('ready output resumes the original idle chat exactly once with saved asset 
   await new Promise((finish) => setImmediate(finish));
   assert.equal(requests.length, 1);
   assert.ok(events.some((event) => event.type === 'media-job-resume-end'));
+});
+
+test('chat restoration waits for renderer acknowledgement before a ready job continues', async (t) => {
+  let release;
+  const metadataWait = new Promise((resolve) => { release = resolve; });
+  const { service, requests, events, chatId } = chatFixture(t, { getMetadata: async (id) => {
+    await metadataWait;
+    return { id, mimeType: 'video/mp4', name: 'Cat.mp4' };
+  } });
+  const restoration = service.getCurrentChat({ deferResume: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests.length, 0);
+  release();
+  const snapshot = await restoration;
+  assert.ok(snapshot.history.some((message) => message.mediaJobResult));
+  assert.equal(events.some((event) => event.type === 'media-job-resume-start'), false);
+  assert.deepEqual(service.acknowledgeChat('e'.repeat(32)), { ok: false, stale: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests.length, 0);
+  service.acknowledgeChat(chatId);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests.length, 1);
+  assert.ok(events.some((event) => event.type === 'media-job-resume-end'));
+});
+
+test('background continuation resolves current project kits instead of stale submission options', async (t) => {
+  const { service, store, job, instructions } = chatFixture(t, { currentKits: ['canvas-2d', 'p5'] });
+  store.update(job.id, { turnOptions: { kits: ['tone', 'three'] } });
+  await service.notifyMediaJob(store.get(job.id));
+  await new Promise((resolve) => setImmediate(resolve));
+  const kitGuidance = instructions[0].split('ACTIVE OFFLINE CANVAS KITS')[1];
+  assert.match(kitGuidance, /p5/);
+  assert.equal(kitGuidance.includes('- Tone.js'), false);
+  assert.equal(kitGuidance.includes('- Three.js'), false);
 });
 
 test('a different project defers automatic resumption but the next message sees completion', async (t) => {

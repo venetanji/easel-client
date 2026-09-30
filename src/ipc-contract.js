@@ -20,6 +20,9 @@ const IPC_CHANNELS = Object.freeze({
   LIST_PROJECT_DOCUMENTS: 'projects:documents:list',
   CREATE_PROJECT_DOCUMENT: 'projects:documents:create',
   OPEN_PROJECT_DOCUMENT: 'projects:documents:open',
+  GET_AVAILABLE_KITS: 'kits:available',
+  GET_PROJECT_KITS: 'projects:kits:get',
+  UPDATE_PROJECT_KITS: 'projects:kits:update',
   GET_PROJECT_ASSETS: 'projects:assets:list',
   GET_PROJECT_ASSET: 'projects:assets:get',
   GET_LIBRARY_ASSET: 'assets:get',
@@ -35,6 +38,7 @@ const IPC_CHANNELS = Object.freeze({
   STOP_AGENT: 'chat:stop',
   CLEAR_CHAT: 'chat:clear',
   GET_CHAT: 'chat:get',
+  ACKNOWLEDGE_CHAT: 'chat:ready',
   LIST_CHATS: 'chat:list',
   OPEN_CHAT: 'chat:open',
   AGENT_EVENT: 'agent:event',
@@ -293,6 +297,12 @@ function validateCanvasKits(value = []) {
   }))];
 }
 
+function validateProjectKits(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['kits', 'expectedProjectRevision'].includes(key)) || !Object.hasOwn(input, 'kits')) throw new Error('Project kit settings are invalid.');
+  if (typeof input.expectedProjectRevision !== 'string' || !/^[a-f0-9]{64}$/.test(input.expectedProjectRevision)) throw new Error('Read the project kit settings before changing them.');
+  return { kits: validateCanvasKits(input.kits), expectedProjectRevision: input.expectedProjectRevision };
+}
+
 function validateCanvasBounds(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Canvas bounds are required.');
   const bounds = {};
@@ -320,6 +330,7 @@ module.exports = {
   validateProjectAssetId,
   validateDocumentPath,
   validateProjectInput,
+  validateProjectKits,
   validateSettingsInput,
   validateConnectionInput,
   validateModelSelection,

@@ -124,3 +124,35 @@ test('keeps unsaved chat context and prevents losing it when disk writes fail', 
   assert.throws(() => service.clearHistory(), /Disk full/);
   assert.equal((await service.getCurrentChat()).history.length, 2);
 });
+
+test('completed video notifications expose compact previews and reopen chats without loading video bytes', async () => {
+  const assetId = 'a'.repeat(32);
+  const chatId = 'b'.repeat(32);
+  const projectId = 'c'.repeat(32);
+  const poster = 'data:image/jpeg;base64,cG9zdGVy';
+  const events = [];
+  const job = { id: 'd'.repeat(32), chatId, projectId, name: 'A cat in the rain', mediaType: 'video', assets: [{ assetId, mimeType: 'video/mp4' }] };
+  const service = createChatService({
+    settingsStore: settingsStore(),
+    chatStore: { getActive: () => ({ id: chatId, title: 'Cat', history: [
+      { role: 'user', content: 'Make a cat video' },
+      { role: 'user', content: 'Completed', mediaJobId: job.id, mediaJobResult: { projectId, assets: job.assets } },
+    ] }) },
+    mediaAssetStore: {
+      getMetadata: async (id) => ({ id, mimeType: 'video/mp4', name: 'Cat in the rain.mp4', thumbnail: poster, duration: 3 }),
+      get() { throw new Error('Video bytes should remain lazy.'); },
+    },
+    onEvent: (event) => events.push(event),
+  });
+  await service.notifyMediaJob(job);
+  assert.equal(events[0].assets[0].thumbnail, poster);
+  assert.equal(events[0].projectId, projectId);
+  assert.equal(events[0].jobId, job.id);
+  assert.equal(events[0].assets[0].data, undefined);
+  const restored = await service.getCurrentChat();
+  assert.equal(restored.history[0].content, 'Make a cat video');
+  assert.equal(restored.media[0].thumbnail, poster);
+  assert.equal(restored.media[0].generated, true);
+  assert.equal(restored.media[0].projectId, projectId);
+  assert.equal(restored.media[0].data, undefined);
+});

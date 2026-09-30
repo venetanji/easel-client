@@ -39,11 +39,12 @@ function fixture() {
     'image-viewer-image', 'media-viewer-video', 'media-viewer-audio', 'image-viewer-info', 'image-size-toggle', 'media-empty',
     'project-image-count', 'canvases-empty', 'project-rename', 'project-delete', 'project-source-files', 'image-use-chat', 'library-collapse',
     'project-new', 'drawer-new-document',
+    'media-unread', 'project-kit-list', 'project-kit-status',
   ];
   const nodes = new Map(ids.map((id) => [id, element('div', id)]));
   const drawer = nodes.get('project-drawer');
   drawer.className = 'library';
-  drawer.append(nodes.get('canvases-list'), nodes.get('project-source-files'));
+  drawer.append(nodes.get('canvases-list'), nodes.get('project-source-files'), nodes.get('project-kit-list'));
   const mediaDrawer = nodes.get('media-drawer');
   mediaDrawer.className = 'media-drawer';
   mediaDrawer.append(nodes.get('media-collapse'), nodes.get('media-list'), nodes.get('all-media-list'));
@@ -69,6 +70,10 @@ function fixture() {
   const statuses = [];
   const calls = [];
   const drawerChanges = [];
+  const kitRequests = [];
+  let selectedKits = ['canvas-2d', 'tone'];
+  let projectRevision = 'project-v1';
+  const catalog = [{ id: 'canvas-2d', name: 'HTML + Canvas 2D', installed: true }, { id: 'tone', name: 'Tone.js', installed: true }, { id: 'three', name: 'Three.js', installed: true }, { id: 'p5', name: 'p5.js', installed: false }];
   let busy = false;
   let confirm = false;
   const opened = (path) => ({ id: projectId, documentPath: path, documentTitle: documents.find((entry) => entry.path === path)?.title || path });
@@ -81,6 +86,14 @@ function fixture() {
     async listAssets() { return [...libraryAssets]; },
     async getProjectAsset() { return asset; },
     async getLibraryAsset() { return asset; },
+    async getAvailableKits() { return catalog; },
+    async getProjectKits() { return { kits: [...selectedKits], projectRevision }; },
+    async updateProjectKits(id, input) {
+      kitRequests.push([id, input]);
+      selectedKits = [...input.kits];
+      projectRevision = 'project-v2';
+      return { kits: selectedKits, projectRevision };
+    },
     async attachProjectAsset(id, reference) {
       calls.push(['attach', id, reference]);
       if (!projectAssets.some((entry) => entry.id === reference)) projectAssets.push(libraryAssets.find((entry) => entry.id === reference));
@@ -122,7 +135,7 @@ function fixture() {
     onDrawerChange: (...args) => drawerChanges.push(args),
     isBusy: () => busy,
   });
-  return { workspace, nodes, projectId, assetId, asset, client, calls, selections, statuses, stored, projectAssets, libraryAssets, projects, drawerChanges,
+  return { workspace, nodes, projectId, assetId, asset, client, calls, selections, statuses, stored, projectAssets, libraryAssets, projects, drawerChanges, kitRequests,
     confirm: (value) => { confirm = value; }, busy: (value) => { busy = value; } };
 }
 
@@ -364,4 +377,94 @@ test('poll updates change only job status in both media sections without IPC or 
   assert.equal(state.workspace.updateMediaJob({ ...job, id: 'e'.repeat(32) }), false);
   assert.equal(state.workspace.updateMediaJob({ ...job, status: 'failed', error: 'Service failed.' }), true);
   assert.equal(projectJob.querySelector('.media-job-cog').attributes.hidden, '');
+});
+
+test('project kit selection uses the project revision and keeps unavailable kits disabled', async () => {
+  const state = fixture();
+  await state.workspace.openProject(state.projectId);
+  const inputs = state.nodes.get('project-kit-list').querySelectorAll('input');
+  const native = inputs.find((input) => input.dataset.projectKit === 'canvas-2d');
+  const three = inputs.find((input) => input.dataset.projectKit === 'three');
+  const missing = inputs.find((input) => input.dataset.projectKit === 'p5');
+  assert.equal(native.disabled, false);
+  assert.equal(missing.disabled, true);
+  three.checked = true;
+  await three.listeners.change();
+  assert.deepEqual(state.kitRequests[0], [state.projectId, { kits: ['canvas-2d', 'tone', 'three'], expectedProjectRevision: 'project-v1' }]);
+  assert.deepEqual(state.workspace.getKits(), ['canvas-2d', 'tone', 'three']);
+  state.busy(true);
+  state.workspace.updateBusy();
+  assert.equal(state.nodes.get('project-kit-list').querySelectorAll('input').every((input) => input.disabled), true);
+  state.busy(false);
+  state.workspace.updateBusy();
+  assert.equal(state.nodes.get('project-kit-list').querySelectorAll('input').find((input) => input.dataset.projectKit === 'p5').disabled, true);
+});
+
+test('project kits allow an explicit empty selection and recover saved state after a conflict', async () => {
+  const state = fixture();
+  await state.workspace.openProject(state.projectId);
+  const inputs = state.nodes.get('project-kit-list').querySelectorAll('input');
+  for (const input of inputs) input.checked = false;
+  await inputs[0].listeners.change();
+  assert.deepEqual(state.workspace.getKits(), []);
+  state.client.updateProjectKits = async () => { throw new Error('Project revision changed. Try again.'); };
+  const tone = state.nodes.get('project-kit-list').querySelectorAll('input').find((input) => input.dataset.projectKit === 'tone');
+  tone.checked = true;
+  await tone.listeners.change();
+  assert.deepEqual(state.workspace.getKits(), []);
+  assert.equal(state.nodes.get('project-kit-list').querySelectorAll('input').find((input) => input.dataset.projectKit === 'tone').checked, false);
+  assert.match(state.nodes.get('project-kit-status').textContent, /revision changed/);
+});
+
+test('media completion badges survive drawer acknowledgement and duplicate delivery without rereading assets', async () => {
+  const state = fixture();
+  const video = { assetId: 'b'.repeat(32), mimeType: 'video/mp4', name: 'Sunlit cat.mp4' };
+  state.libraryAssets.push({ ...video, id: video.assetId });
+  await state.workspace.openProject(state.projectId);
+  const event = { job: { status: 'ready' }, assets: [video] };
+  state.workspace.announceMediaReady(event);
+  state.workspace.announceMediaReady(event);
+  assert.equal(state.nodes.get('media-unread').textContent, '1');
+  assert.equal(state.workspace.isMediaNew(video.assetId), true);
+  await state.workspace.refreshAssets();
+  const card = state.nodes.get('all-media-list').children[1];
+  assert.equal(card.querySelector('.project-thumbnail-new').hidden, false);
+  state.workspace.setMediaDrawer(true, false);
+  assert.equal(state.nodes.get('media-unread').hidden, true);
+  assert.equal(card.querySelector('.project-thumbnail-new').hidden, false);
+  state.workspace.markMediaSeen(video.assetId);
+  assert.equal(card.querySelector('.project-thumbnail-new').hidden, true);
+  state.workspace.announceMediaReady(event);
+  assert.equal(state.nodes.get('media-unread').hidden, true);
+  assert.equal(state.workspace.isMediaNew(video.assetId), false);
+});
+
+test('automatic media preview never replaces content and rechecks permission after a lazy read', async () => {
+  const state = fixture();
+  await state.workspace.openProject(state.projectId);
+  assert.equal(await state.workspace.openMediaReference(state.asset, { onlyWhenEmpty: true }), false);
+  assert.equal(state.workspace.getPreviewKind(), 'document');
+  const empty = fixture();
+  let resolveAsset;
+  let allowed = true;
+  empty.client.getLibraryAsset = () => new Promise((resolve) => { resolveAsset = resolve; });
+  const pending = empty.workspace.openMediaReference(empty.asset, { onlyWhenEmpty: true, canOpen: () => allowed });
+  allowed = false;
+  resolveAsset(empty.asset);
+  assert.equal(await pending, false);
+  assert.equal(empty.workspace.getPreviewKind(), 'empty');
+  assert.equal(empty.calls.some(([action]) => action === 'hide'), false);
+});
+
+test('an unavailable kit already saved in a legacy project can be unchecked', async () => {
+  const state = fixture();
+  state.client.getProjectKits = async () => ({ kits: ['canvas-2d', 'p5'], projectRevision: 'legacy-revision' });
+  await state.workspace.openProject(state.projectId);
+  const cached = state.nodes.get('project-kit-list').querySelectorAll('input').find((input) => input.dataset.projectKit === 'p5');
+  assert.equal(cached.checked, true);
+  assert.equal(cached.disabled, false);
+  cached.checked = false;
+  await cached.listeners.change();
+  assert.deepEqual(state.kitRequests[0], [state.projectId, { kits: ['canvas-2d'], expectedProjectRevision: 'legacy-revision' }]);
+  assert.equal(state.nodes.get('project-kit-list').querySelectorAll('input').find((input) => input.dataset.projectKit === 'p5').disabled, true);
 });

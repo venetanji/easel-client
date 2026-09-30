@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { isGenericGeneratedName } = require('./media-names');
 
 const MAX_MEDIA_BYTES = 32 * 1_048_576;
 const MAX_VIDEO_FRAMES = 6;
@@ -32,6 +33,7 @@ function jpegBytes(data, limit = MAX_FRAME_BYTES) {
 
 function createCanvasMediaStore({ userDataPath, fileSystem = fs, idFactory = () => crypto.randomUUID().replaceAll('-', '') }) {
   const directory = path.join(userDataPath, 'canvas-media');
+  const metadataUpdates = new Map();
 
   function checkId(id) {
     if (typeof id !== 'string' || !ID_PATTERN.test(id)) throw new Error('Capture ID is invalid.');
@@ -109,6 +111,86 @@ function createCanvasMediaStore({ userDataPath, fileSystem = fs, idFactory = () 
 
   async function getMetadata(id) { return publicMetadata(record(checkId(id)).metadata); }
 
+  async function getPlaybackSource(id) {
+    checkId(id);
+    const root = path.resolve(directory);
+    const rootStat = await fileSystem.promises.lstat(root);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('Capture library directory is invalid.');
+    const folder = path.resolve(capturePath(id));
+    let folderStat;
+    try { folderStat = await fileSystem.promises.lstat(folder); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (folderStat && (!folderStat.isDirectory() || folderStat.isSymbolicLink())) throw new Error('Capture library directory is invalid.');
+    const saved = record(id);
+    const filename = path.resolve(saved.filename);
+    if (path.dirname(filename) !== (saved.folder ? folder : root)) throw new Error('Capture path is outside the media library.');
+    const stat = await fileSystem.promises.lstat(filename);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== saved.metadata.bytes || stat.size > MAX_MEDIA_BYTES) throw new Error('Saved capture media size is inconsistent.');
+    const hash = crypto.createHash('sha256');
+    let count = 0;
+    let header = Buffer.alloc(0);
+    // Stream integrity checks so decoding a poster never reads/base64-encodes a full video on main.
+    for await (const chunk of fileSystem.createReadStream(filename, { highWaterMark: 64 * 1024 })) {
+      count += chunk.length;
+      if (count > MAX_MEDIA_BYTES) throw new Error('Saved capture exceeds its media limit.');
+      if (header.length < 44) header = Buffer.concat([header, chunk.subarray(0, 44 - header.length)]);
+      hash.update(chunk);
+    }
+    const digest = hash.digest('hex');
+    if (count !== saved.metadata.bytes || saved.metadata.digest && digest !== saved.metadata.digest) throw new Error('Saved capture media is missing or corrupted.');
+    validateMediaBytes(header, saved.metadata.mimeType);
+    return { ...publicMetadata(saved.metadata), filename, digest };
+  }
+
+  async function updateMetadata(id, changes, { onlyGenericName = false, expectedDigest } = {}) {
+    checkId(id);
+    if (!changes || typeof changes !== 'object' || Array.isArray(changes) || Object.keys(changes).some((key) => !['name', 'width', 'height', 'duration', 'thumbnail'].includes(key))) return Promise.reject(new Error('Capture metadata update contains unsupported fields.'));
+    const operation = (metadataUpdates.get(id) || Promise.resolve()).catch(() => {}).then(async () => {
+      const source = await getPlaybackSource(id);
+      if (expectedDigest && source.digest !== expectedDigest) throw new Error('Capture changed while its poster was being decoded.');
+      const saved = record(id);
+      const fields = { ...changes };
+      if (fields.name !== undefined) {
+        if (typeof fields.name !== 'string' || !fields.name.trim() || fields.name.length > 160 || /[\u0000-\u001f\u007f]/.test(fields.name)) throw new Error('Capture name is invalid.');
+        fields.name = fields.name.trim();
+        if (onlyGenericName && !isGenericGeneratedName(saved.metadata.name)) delete fields.name;
+      }
+      for (const key of ['width', 'height']) if (fields[key] !== undefined && (!Number.isInteger(fields[key]) || fields[key] < 1 || fields[key] > 16_384)) throw new Error('Capture ' + key + ' is invalid.');
+      if (fields.duration !== undefined && (!Number.isFinite(fields.duration) || fields.duration <= 0 || fields.duration > 3_600)) throw new Error('Capture duration is invalid.');
+      if (fields.thumbnail !== undefined) {
+        if (typeof fields.thumbnail !== 'string' || fields.thumbnail.length > MAX_POSTER_CHARACTERS || (fields.thumbnail && !fields.thumbnail.startsWith('data:image/jpeg;base64,'))) throw new Error('Capture poster must be a JPEG data URL no larger than 64 KiB.');
+        if (fields.thumbnail) jpegBytes(fields.thumbnail.slice('data:image/jpeg;base64,'.length), 49_152);
+      }
+      const metadata = { ...saved.metadata, digest: source.digest, ...fields };
+      const text = JSON.stringify(metadata);
+      if (Buffer.byteLength(text) > 128_000) throw new Error('Saved capture metadata exceeds its limit.');
+      if (saved.folder) {
+        const filename = path.join(saved.folder, 'metadata.json');
+        const temporary = `${filename}.${crypto.randomUUID()}.tmp`;
+        await fileSystem.promises.writeFile(temporary, text, { flag: 'wx', mode: 0o600 });
+        try { await fileSystem.promises.rename(temporary, filename); }
+        catch (error) { await fileSystem.promises.rm(temporary, { force: true }); throw error; }
+      } else {
+        const temporary = path.join(directory, `${id}.${crypto.randomUUID()}.tmp`);
+        await fileSystem.promises.mkdir(temporary, { mode: 0o700 });
+        try {
+          await fileSystem.promises.copyFile(source.filename, path.join(temporary, 'media.' + FORMATS[source.mimeType]));
+          await fileSystem.promises.writeFile(path.join(temporary, 'metadata.json'), JSON.stringify({ ...metadata, frames: [] }), { flag: 'wx', mode: 0o600 });
+          await fileSystem.promises.rename(temporary, capturePath(id));
+        } catch (error) {
+          const target = path.resolve(temporary);
+          if (path.dirname(target) === path.resolve(directory)) await fileSystem.promises.rm(target, { recursive: true, force: true });
+          throw error;
+        }
+        await fileSystem.promises.unlink(source.filename);
+      }
+      return publicMetadata(metadata);
+    });
+    metadataUpdates.set(id, operation);
+    operation.finally(() => { if (metadataUpdates.get(id) === operation) metadataUpdates.delete(id); }).catch(() => {});
+    return operation;
+  }
+
   async function remove(id) {
     checkId(id);
     const root = path.resolve(directory);
@@ -174,7 +256,7 @@ function createCanvasMediaStore({ userDataPath, fileSystem = fs, idFactory = () 
     return result.sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 200);
   }
 
-  return { save, get, getMetadata, list, getFrames, getVideoFrames: getFrames, remove };
+  return { save, get, getMetadata, getPlaybackSource, updateMetadata, list, getFrames, getVideoFrames: getFrames, remove };
 }
 
 module.exports = { MAX_FRAME_BYTES, MAX_MEDIA_BYTES, MAX_VIDEO_FRAMES, createCanvasMediaStore };

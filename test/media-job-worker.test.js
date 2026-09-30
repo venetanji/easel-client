@@ -28,7 +28,7 @@ test('worker reuses its MCP process and returns compact asset references after a
   let closes = 0;
   let completed = false;
   const checkpoints = [];
-  const runtime = createMediaJobWorkerRuntime({ mediaAssetStore: { async save() { return 'a'.repeat(32); } },
+  const runtime = createMediaJobWorkerRuntime({ mediaAssetStore: { async save(media) { assert.equal(media.name, 'A cat crossing a sunlit bridge.mp4'); return 'a'.repeat(32); } },
     checkpoint: async (asset) => checkpoints.push(asset),
     mcpFactory: async () => {
       launches++;
@@ -42,10 +42,12 @@ test('worker reuses its MCP process and returns compact asset references after a
   const options = { command: 'node' };
   assert.equal((await runtime.poll(entry, options)).structuredContent.job.estimatedWaitSeconds, 18);
   completed = true;
-  const result = await runtime.poll(entry, options);
+  const result = await runtime.poll({ ...entry, prompt: 'A cat crossing a sunlit bridge' }, options);
   assert.equal(launches, 1);
   assert.equal(result.structuredContent.assets[0].duration, 12);
   assert.equal(checkpoints[0].assetId, 'a'.repeat(32));
+  assert.equal(checkpoints[0].name, 'A cat crossing a sunlit bridge.mp4');
+  assert.equal(result.structuredContent.assets[0].name, 'A cat crossing a sunlit bridge.mp4');
   assert.equal(JSON.stringify(result).includes('YWJj'), false);
   await runtime.close();
   assert.equal(closes, 1);
@@ -188,6 +190,7 @@ test('isolated monitor waits for its poll and worker shutdown, then reuses check
     async attachAssets(owner, ids) { attached++; assert.equal(owner, projectId); assert.deepEqual(ids, ['a'.repeat(32)]); },
     workerFactory: () => ({ async poll(saved, options, onSaved) {
       polls++;
+      assert.equal(JSON.parse(options.env.EASEL_MEDIA_MODELS)[0].name, 'video');
       await polling;
       await onSaved({ assetId: 'a'.repeat(32), mimeType: 'video/mp4' });
       return { content: [], structuredContent: { job: { id: saved.remoteId, status: 'completed' }, assets: [{ assetId: 'a'.repeat(32), mimeType: 'video/mp4' }] } };
@@ -229,6 +232,44 @@ test('a project deleted during download leaves completed output in the media lib
   assert.equal(store.get(job.id).status, 'ready');
   assert.equal(store.get(job.id).projectId, '');
   assert.equal(store.get(job.id).notification, 'interrupted');
+});
+
+test('completed media is enriched before attachment and ready notifications, with metadata persisted', async (t) => {
+  const root = fixture(t);
+  const store = createMediaJobStore({ userDataPath: root, now: () => 1000 });
+  const calls = [];
+  const monitor = createMediaJobMonitor({ store,
+    settingsStore: { loadPublic: () => ({ connections: [{ id: connectionId, baseUrl }] }), loadSecrets: () => ({}) },
+    runtime: { userDataPath: root }, now: () => 1000, mediaAssetStore: {},
+    workerFactory: () => ({ async poll(saved, options, onSaved) {
+      assert.equal(saved.prompt, 'A cat crossing a sunlit bridge');
+      await onSaved({ assetId: 'a'.repeat(32), mimeType: 'video/mp4' });
+      return { content: [], structuredContent: { job: { id: saved.remoteId, status: 'completed' }, assets: [{ assetId: 'a'.repeat(32), mimeType: 'video/mp4' }] } };
+    }, async close() {} }),
+    enrichAssets: async (refs, job) => { calls.push('enrich'); assert.equal(job.prompt, 'A cat crossing a sunlit bridge'); return refs.map((asset) => ({ ...asset, name: 'Bridge.mp4', width: 1280, height: 704, duration: 12.04 })); },
+    attachAssets: async () => calls.push('attach'),
+    onReady: (job) => { calls.push('ready'); assert.equal(job.assets[0].name, 'Bridge.mp4'); },
+  });
+  const job = monitor.track({ job: { id: entry.remoteId, status: 'queued' }, modelId, baseUrl, mediaType: 'video', projectId, prompt: 'A cat crossing a sunlit bridge' });
+  monitor.start();
+  await monitor.stop();
+  assert.deepEqual(calls, ['enrich', 'attach', 'ready']);
+  assert.equal(store.get(job.id).assets[0].duration, 12.04);
+  assert.equal(store.get(job.id).metadataEnriched, true);
+});
+
+test('a thumbnail enrichment failure does not strand completed media', async (t) => {
+  const root = fixture(t);
+  const store = createMediaJobStore({ userDataPath: root, now: () => 1000 });
+  const job = store.track({ job: { id: entry.remoteId, status: 'completed' }, modelId, baseUrl, mediaType: 'video', projectId });
+  store.update(job.id, { assets: [{ assetId: 'a'.repeat(32), mimeType: 'video/mp4' }] });
+  const monitor = createMediaJobMonitor({ store, settingsStore: {}, mediaAssetStore: {},
+    enrichAssets: async () => { throw new Error('Unsupported codec'); },
+    attachAssets: async () => {},
+  });
+  monitor.start();
+  await monitor.stop();
+  assert.equal(store.get(job.id).status, 'ready');
 });
 
 test('real worker downloads through MCP while the host event loop remains available', async (t) => {

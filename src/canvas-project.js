@@ -127,10 +127,34 @@ function injectHead(html, text) {
 }
 
 function cleanHostDocument(html) {
-  return html
-    .replace(/<script\b[^>]*(?:\bdata-easel-canvas-kit\b|\bid\s*=\s*["'](?:easel-runtime-[^"']+|easel-project-[^"']+)["'])[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+  return stripManagedKitScripts(html)
+    .replace(/<script\b[^>]*\bid\s*=\s*["'](?:easel-runtime-[^"']+|easel-project-[^"']+)["'][^>]*>[\s\S]*?<\/script\s*>/gi, '')
     .replace(/<meta\b(?=[^>]*\bhttp-equiv\s*=\s*["']?content-security-policy["']?)[^>]*>/gi, '')
     .replace(/<meta\b[^>]*\bname=["']easel-canvas-(?:id|title)["'][^>]*>/gi, '');
+}
+
+function managedKitScripts(html) {
+  const scripts = [];
+  let templateDepth = 0;
+  // Consume complete tags, quoted attributes and raw-text elements before recognizing kit markers.
+  const tokens = /<!--[\s\S]*?(?:-->|$)|<(script|style|textarea|title|xmp|iframe|noembed|noframes)\b(?:"[^"]*"|'[^']*'|[^'">])*?>[\s\S]*?(?:<\/\1\s*>|$)|<plaintext\b(?:"[^"]*"|'[^']*'|[^'">])*?>[\s\S]*$|<\/?[a-z][a-z0-9:-]*(?:"[^"]*"|'[^']*'|[^'">])*?>/gi;
+  for (const match of html.matchAll(tokens)) {
+    const token = match[0];
+    if (/^<template\b/i.test(token)) { templateDepth += 1; continue; }
+    if (/^<\/template\b/i.test(token)) { templateDepth = Math.max(0, templateDepth - 1); continue; }
+    if (templateDepth || match[1]?.toLowerCase() !== 'script') continue;
+    const opening = /^<script\b(?:"[^"]*"|'[^']*'|[^'">])*?>/i.exec(token)[0];
+    const attributes = [...opening.slice(7, -1).matchAll(/([^\s"'=<>`]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=]+)))?/g)];
+    const marker = attributes.find((attribute) => attribute[1].toLowerCase() === 'data-easel-canvas-kit');
+    if (marker) scripts.push({ start: match.index, end: match.index + token.length, name: marker.slice(2).find((value) => value !== undefined), source: token.slice(opening.length, /<\/script\s*>$/i.exec(token)?.index ?? token.length) });
+  }
+  return scripts;
+}
+
+function stripManagedKitScripts(html) {
+  let source = html;
+  for (const script of managedKitScripts(html).reverse()) source = `${source.slice(0, script.start)}${source.slice(script.end)}`;
+  return source;
 }
 
 function sourcePath(reference, fromFile, files, assetPaths = new Set()) {
@@ -449,9 +473,9 @@ function projectFromDocument(html, { previous, extractAssets, extractKits, docum
       }
     }
   }
-  const foundKits = extractKits(html);
-  if (foundKits.length) output.manifest.kits = preferPrevious
-    ? [...output.manifest.kits.map((kit) => foundKits.find((candidate) => candidate.name === kit.name) || kit), ...foundKits.filter((kit) => !output.manifest.kits.some((candidate) => candidate.name === kit.name))]
+  const foundKits = preferPrevious && previous ? [] : extractKits(html);
+  if (foundKits.length) output.manifest.kits = embedded
+    ? output.manifest.kits.map((kit) => foundKits.find((candidate) => candidate.name === kit.name) || kit)
     : foundKits;
   let source = cleanHostDocument(html);
   const scriptNames = [];
@@ -524,4 +548,4 @@ function readChunk(content, { offset = 0, maxBytes = MAX_READ_BYTES } = {}) {
   return { text: bytes.subarray(offset, end).toString('utf8'), offset, nextOffset: end < bytes.length ? end : null, totalBytes: bytes.length, truncated: end < bytes.length, revision: digest(content) };
 }
 
-module.exports = { MAX_FILE_BYTES, MAX_PROJECT_BYTES, MAX_FILES, MAX_STATE_BYTES, assembleProject, cleanHostDocument, digest, documentTitle, projectDocuments, projectFromDocument, projectSnapshot, readChunk, resolveDocumentPath, validateFilePath, validateJavaScriptFiles, validateProject, validateStateText };
+module.exports = { MAX_FILE_BYTES, MAX_PROJECT_BYTES, MAX_FILES, MAX_STATE_BYTES, assembleProject, cleanHostDocument, digest, documentTitle, managedKitScripts, projectDocuments, projectFromDocument, projectSnapshot, readChunk, resolveDocumentPath, stripManagedKitScripts, validateFilePath, validateJavaScriptFiles, validateProject, validateStateText };

@@ -11,6 +11,12 @@ const {
   renderCanvasLibrary,
   submitChatWithShortcut,
   createCanvas,
+  appendReadyMediaCards,
+  appendMediaPreviewMessage,
+  canAutoPreviewMedia,
+  renderInstalledKitCatalog,
+  renderSkillList,
+  skillCompatibility,
 } = require('../src/renderer');
 
 function element(tagName = 'div') {
@@ -36,9 +42,18 @@ function element(tagName = 'div') {
     },
     addEventListener(name, callback) { listeners[name] = callback; },
     setAttribute(name, value) { this.attributes[name] = value; },
+    removeAttribute(name) { delete this.attributes[name]; delete this[name]; },
     append(...children) { this.children.push(...children); },
     replaceChildren(...children) { text = ''; this.children = [...children]; },
-    querySelectorAll() { return []; },
+    querySelectorAll(selector) {
+      const descendants = this.children.flatMap((child) => [child, ...(child.querySelectorAll?.('*') || [])]);
+      if (selector === '*') return descendants;
+      return descendants.filter((child) => selector.startsWith('.') ? child.className?.split(' ').includes(selector.slice(1)) : child.tagName === selector);
+    },
+    querySelector(selector) { return this.querySelectorAll(selector)[0] || null; },
+    pause() { this.paused = true; },
+    load() {},
+    async play() { this.played = true; },
   };
 }
 
@@ -336,4 +351,97 @@ test('renders saved canvas rows with separate open and export actions', () => {
   list.children[0].children[1].listeners.click();
   assert.deepEqual(actions, [['open', 'c'.repeat(32)], ['export', 'c'.repeat(32)]]);
   assert.equal(empty.hidden, true);
+});
+
+test('completed video references render one playable card across ready, notification, and history events', async () => {
+  const document = { createElement: (tag) => element(tag) };
+  const messages = element();
+  const previews = new Map();
+  const objectUrls = new Set();
+  const assetId = 'a'.repeat(32);
+  const asset = { assetId, mimeType: 'video/mp4', name: 'Sunlit cat in motion.mp4', thumbnail: 'data:image/png;base64,YWJj', duration: 3 };
+  let reads = 0;
+  const seen = [];
+  const options = { objectUrls, loadAsset: async () => { reads += 1; return { ...asset, data: 'YWJj' }; }, onSeen: (id) => seen.push(id) };
+  assert.equal(appendReadyMediaCards({ document, messagesElement: messages, event: { assets: [asset] }, assetPreviews: previews, options }), 1);
+  assert.equal(reads, 0);
+  assert.equal(previews.get(assetId).image.src, undefined);
+  assert.equal(previews.get(assetId).image.poster, asset.thumbnail);
+  assert.equal(previews.get(assetId).image.preload, 'none');
+  assert.match(messages.textContent, /New video/);
+  assert.match(messages.textContent, /Sunlit cat in motion/);
+  assert.equal(appendReadyMediaCards({ document, messagesElement: messages, event: { result: { assets: [asset] } }, assetPreviews: previews, options }), 0);
+  assert.equal(appendReadyMediaCards({ document, messagesElement: messages, event: { job: { assets: [asset] } }, assetPreviews: previews, options }), 0);
+  assert.equal(messages.children.length, 1);
+  await messages.querySelector('.message-media-play').listeners.click();
+  assert.equal(reads, 1);
+  assert.match(previews.get(assetId).image.src, /^blob:/);
+  assert.equal(previews.get(assetId).image.played, true);
+  assert.deepEqual(seen, [assetId]);
+  assert.equal(objectUrls.size, 1);
+  await previews.get(assetId).load();
+  assert.equal(reads, 1);
+  previews.get(assetId).dispose();
+  assert.equal(objectUrls.size, 0);
+  assert.equal(previews.get(assetId).image.src, undefined);
+});
+
+test('a late video read cannot attach bytes after its chat preview is disposed', async () => {
+  const document = { createElement: (tag) => element(tag) };
+  const objectUrls = new Set();
+  const asset = { assetId: 'a'.repeat(32), mimeType: 'video/mp4', name: 'Video.mp4' };
+  let resolveAsset;
+  const preview = appendMediaPreviewMessage(document, element(), asset, null, { objectUrls, loadAsset: () => new Promise((resolve) => { resolveAsset = resolve; }) });
+  const pending = preview.load();
+  preview.dispose();
+  resolveAsset({ ...asset, data: 'YWJj' });
+  await pending;
+  assert.equal(objectUrls.size, 0);
+  assert.equal(preview.image.src, undefined);
+});
+
+test('compact media cards keep actions independent from lazy playback and surface retrieval errors', async () => {
+  const document = { createElement: (tag) => element(tag) };
+  const messages = element();
+  const actions = [];
+  const asset = { assetId: 'a'.repeat(32), mimeType: 'video/mp4', name: 'Video.mp4' };
+  const preview = appendMediaPreviewMessage(document, messages, asset, null, {
+    onOpen: () => actions.push('open'), onDownload: () => actions.push('download'), onUse: () => actions.push('use'),
+    loadAsset: async () => { throw new Error('The saved media is unavailable.'); },
+  });
+  for (const button of messages.querySelector('.message-media-actions').children) await button.listeners.click();
+  assert.deepEqual(actions, ['open', 'download', 'use']);
+  await messages.querySelector('.message-media-play').listeners.click();
+  assert.match(messages.querySelector('.message-media-error').textContent, /saved media is unavailable/);
+  assert.equal(messages.querySelector('.message-media-error').hidden, false);
+  assert.equal(preview.image.src, undefined);
+});
+
+test('automatic media preview respects originating chat and project, viewer content, drafts, and activity', () => {
+  const state = { event: { chatId: 'chat-a', projectId: 'project-a' }, activeChatId: 'chat-a', projectId: 'project-a', previewKind: 'empty', busy: false };
+  assert.equal(canAutoPreviewMedia(state), true);
+  assert.equal(canAutoPreviewMedia({ ...state, projectId: '' }), true);
+  for (const override of [{ activeChatId: 'chat-b' }, { projectId: 'project-b' }, { previewKind: 'document' }, { previewKind: 'image' }, { previewKind: 'video' }, { busy: true }, { draft: 'A pending idea' }, { attachments: 1 }]) assert.equal(canAutoPreviewMedia({ ...state, ...override }), false);
+});
+
+test('Settings kit inventory reports installation availability without selection controls', () => {
+  const document = { createElement: (tag) => element(tag) };
+  const list = element();
+  renderInstalledKitCatalog(document, list, [{ id: 'tone', name: 'Tone.js', description: 'Offline synthesis', installed: true, version: '15' }, { id: 'other', name: 'Other kit', description: 'Not installed', installed: false }]);
+  assert.match(list.textContent, /Installed 15/);
+  assert.match(list.textContent, /Unavailable/);
+  assert.equal(list.querySelectorAll('input').length, 0);
+});
+
+test('unsupported bundled skill copies stay editable but cannot be enabled', () => {
+  const document = { createElement: (tag) => element(tag) };
+  const catalog = [{ id: 'hyperframes', name: 'HyperFrames', compatibility: 'unsupported', reason: 'Requires a CLI unavailable in this client.' }, { id: 'easel-media', name: 'easel-media', compatibility: 'supported' }];
+  const legacy = { id: 'pack-hyperframes', name: 'HyperFrames', instructions: 'Preserved instructions', enabled: false };
+  assert.equal(skillCompatibility({ ...legacy, id: 'custom-copy', name: 'hyperframes' }, catalog).supported, false);
+  assert.equal(skillCompatibility({ id: 'custom', name: 'My visual style' }, catalog).supported, true);
+  const list = element();
+  renderSkillList({ document, listElement: list, skills: [legacy], compatibility: (skill) => skillCompatibility(skill, catalog) });
+  assert.equal(list.querySelectorAll('input')[0].disabled, true);
+  assert.match(list.textContent, /Requires a CLI/);
+  assert.equal(list.querySelectorAll('button').find((button) => button.textContent === 'Edit').disabled, false);
 });

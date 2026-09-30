@@ -94,11 +94,10 @@
       .runtime-badge.active { color: #28543a; background: #e6efe6; }
       .runtime-footnote { margin: 10px 2px 2px; color: #65736b; font-size: 12px; line-height: 1.45; }
       .kit-list { display: grid; gap: 0; padding: 14px 19px 4px; }
-      .kit-option { min-height: 62px; display: grid; grid-template-columns: 17px minmax(0, 1fr) auto; align-items: center; gap: 11px; border-bottom: 1px solid #e3e7df; padding: 9px 2px; cursor: pointer; }
-      .kit-option input { width: 15px; height: 15px; margin: 0; accent-color: var(--green); }
-      .kit-option strong, .kit-option small { display: block; }
-      .kit-option strong { color: #2e4438; font-size: 12px; }
-      .kit-option small { margin-top: 4px; color: #5e6c63; font-size: 12px; line-height: 1.4; }
+      .kit-availability { min-height: 62px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 11px; border-bottom: 1px solid #e3e7df; padding: 9px 2px; }
+      .kit-availability strong, .kit-availability small { display: block; }
+      .kit-availability strong { color: #2e4438; font-size: 12px; }
+      .kit-availability small { margin-top: 4px; color: #5e6c63; font-size: 12px; line-height: 1.4; }
       .kit-status { min-height: 18px; margin: 10px 19px 16px; color: var(--muted); font-size: 12px; }
       .conversation { width: 100%; display: flex; flex-direction: column; overflow: hidden; }
       .conversation-head { min-height: 49px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px 0 14px; border-bottom: 1px solid #e5e7df; }
@@ -148,10 +147,22 @@
       .markdown th, .markdown td { border-bottom: 1px solid var(--line); padding: 7px 9px; text-align: left; }
       .markdown th { color: var(--green-deep); background: #e8ece3; }
       .markdown hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
-      .message-asset-preview { width: min(100%, 320px); margin: 0; overflow: hidden; border: 1px solid #d8ded5; border-radius: 9px; background: white; }
+      .message-asset-preview { width: min(100%, 320px); margin: 0; overflow: hidden; border-radius: 4px; background: var(--paper-deep); }
       .message-asset-preview img, .message-asset-preview video { display: block; width: 100%; height: 240px; object-fit: contain; background: var(--paper-deep); }
       .message-asset-preview audio { display: block; width: 100%; height: 42px; }
-      .message-asset-preview figcaption { border-top: 1px solid #e4e8e1; padding: 7px 9px; color: #405249; font-size: 12px; line-height: 1.35; }
+      .message-asset-preview figcaption { padding: 7px 0; color: var(--ink); background: var(--paper); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+      .message-media-visual { position: relative; }
+      .message-media-visual video { height: auto; aspect-ratio: 16 / 9; }
+      .message-media-badge, .project-thumbnail-new { position: absolute; top: 7px; left: 7px; border-radius: 3px; padding: 3px 5px; color: var(--paper); background: var(--green-deep); font-size: 10px; font-weight: 600; pointer-events: none; }
+      .message-media-play { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); min-height: 34px; border: 0; border-radius: 5px; padding: 7px 12px; color: var(--paper); background: var(--green-deep); font-size: 12px; font-weight: 600; }
+      .message-media-play:hover:not(:disabled) { background: var(--green); }
+      .message-media-actions { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+      .message-media-actions .button { min-height: 28px; padding: 3px 0; font-size: 11px; }
+      .message-media-error { margin: 5px 0 0; color: #9d3727; font-size: 11px; }
+      .skill-compatibility-note { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.4; }
+      .unavailable-skills { padding: 10px 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+      .unavailable-skills summary { cursor: pointer; }
+      .unavailable-skills p { margin: 8px 0; }
       .message-asset-add { align-self: flex-start; min-height: 28px; border: 1px solid #d6ded6; border-radius: 6px; padding: 4px 9px; color: var(--green); background: #f4f5ef; font-size: 11px; font-weight: 600; }
       .message-asset-add:hover:not(:disabled) { border-color: #a8bbab; background: var(--green-wash); }
       .message-asset-add:disabled { cursor: wait; opacity: .65; }
@@ -399,6 +410,13 @@
       .project-document[aria-current="true"], .project-document:hover:not(:disabled), .project-source-file:hover:not(:disabled) { color: var(--green-deep); background: var(--green-wash); }
       .project-files-details { margin: 14px 0 0; color: var(--muted); font-size: 12px; }
       .project-files-details summary { cursor: pointer; padding: 5px 0; }
+      .project-kits { flex: 0 0 auto; border-top: 1px solid var(--line); }
+      .project-kit-option { display: flex; align-items: center; gap: 9px; min-height: 34px; color: var(--ink); font-size: 12px; cursor: pointer; }
+      .project-kit-option input { flex: 0 0 auto; width: 15px; height: 15px; margin: 0; accent-color: var(--green); }
+      .project-kit-option span { flex: 1; }
+      .project-kit-option small, #project-kit-status { color: var(--muted); font-size: 11px; line-height: 1.5; }
+      #project-kit-status { margin: 8px 0 0; }
+      #project-kit-status[data-error="true"] { color: #9d3727; }
       .project-source-file { display: block; width: 100%; min-height: 30px; border: 0; border-radius: 4px; padding: 5px 8px; color: var(--muted); background: transparent; text-align: left; overflow-wrap: anywhere; font-size: 11px; }
       .project-media-item { min-width: 0; }
       .project-thumbnail { position: relative; display: grid; place-items: center; width: 100%; aspect-ratio: 1; overflow: hidden; border: 0; border-radius: 4px; padding: 0; color: var(--muted); background: var(--paper-deep); }
@@ -505,6 +523,7 @@
         </button>
         <button id="nav-media" class="activity-button" type="button" aria-label="Show media" title="Media" aria-pressed="false" aria-expanded="false" aria-controls="media-drawer">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3.5h15.5v15M3.5 6.5h14v14h-14Z"/><path d="m4 17 4.5-4.5 3.5 3.5 2-2 3.5 3.5"/><circle cx="8" cy="10.5" r="1.3"/></svg>
+          <span id="media-unread" class="chat-unread" aria-hidden="true" hidden></span>
         </button>
         <span class="activity-spacer"></span>
         <button id="settings-open" class="activity-button" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-pressed="false">
@@ -516,6 +535,7 @@
           <div class="section-head"><h2 id="library-title">Project files</h2><button id="library-collapse" class="fold-button" type="button" aria-label="Close project files" title="Close drawer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
           <div id="library-panel-content" class="library-panel-content">
             <div class="library-content project-documents" id="canvases-content"><div class="drawer-section-head"><h3>Canvases</h3><button id="drawer-new-document" class="button quiet small" type="button">New HTML</button></div><div id="canvases-list" class="canvas-list" aria-label="Project HTML documents"></div><p id="canvases-empty" class="empty-library">Select a project to browse its documents.</p><details class="project-files-details"><summary>Source files</summary><div id="project-source-files"></div></details></div>
+            <section class="library-content project-kits" aria-labelledby="project-kits-title"><div class="drawer-section-head"><h3 id="project-kits-title">Canvas kits</h3></div><div id="project-kit-list" aria-label="Kits shared by project canvases"></div><p id="project-kit-status" role="status" aria-live="polite">Select a project to choose its kits.</p></section>
           </div>
         </section>
         <section id="media-drawer" class="panel media-drawer" aria-labelledby="media-drawer-title" hidden>
@@ -647,17 +667,9 @@
           </div>
         </section>
         <section id="settings-kits" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-kits" hidden>
-          <div class="settings-section-head"><h3>Canvas kits</h3><p>Choose the offline frameworks available to new canvases. Selected libraries are embedded in saved HTML and work without network access.</p></div>
-          <div class="kit-list">
-            <label class="kit-option"><input type="checkbox" data-kit="canvas-2d" checked disabled /><span><strong>HTML + Canvas 2D</strong><small>Responsive layouts, drawing, and animation using browser APIs.</small></span><span class="runtime-badge active">Always on</span></label>
-            <label class="kit-option"><input type="checkbox" data-kit="html-deck" /><span><strong>HTML presentations</strong><small>Slide decks with keyboard navigation, transitions, and exportable HTML.</small></span><span class="runtime-badge active">Built in</span></label>
-            <label class="kit-option"><input type="checkbox" data-kit="three" /><span><strong>Three.js</strong><small>Offline 3D scenes, materials, cameras, and animation.</small></span><span class="runtime-badge active">Bundled</span></label>
-            <label class="kit-option"><input type="checkbox" data-kit="phaser" /><span><strong>Phaser</strong><small>2D game scenes, input, sprites, and physics.</small></span><span class="runtime-badge active">Bundled</span></label>
-            <label class="kit-option"><input type="checkbox" data-kit="matter" /><span><strong>Matter.js</strong><small>Rigid-body physics for interactive 2D prototypes.</small></span><span class="runtime-badge active">Bundled</span></label>
-            <label class="kit-option"><input type="checkbox" data-kit="tone" checked /><span><strong>Tone.js</strong><small>Audio synthesis and sequencing after a user gesture.</small></span><span class="runtime-badge active">Bundled</span></label>
-            <label class="kit-option"><input type="checkbox" data-kit="p5" /><span><strong>p5.js</strong><small>Creative coding with 2D and WebGL. p5 2.x; audio uses Tone.js.</small></span><span class="runtime-badge active">Bundled</span></label>
-          </div>
-          <p id="kit-status" class="kit-status" role="status" aria-live="polite">Selected kits are included in each new canvas and its exported HTML. Existing canvases keep the kits they were created with.</p>
+          <div class="settings-section-head"><h3>Installed canvas kits</h3><p>These offline frameworks are available on this device. Choose the kits for a project under Project files > Canvas kits; its HTML canvases share that selection.</p></div>
+          <div id="installed-kit-list" class="kit-list"></div>
+          <p id="kit-status" class="kit-status" role="status" aria-live="polite">Kits are embedded in saved HTML and remain available offline.</p>
         </section>
       </div>
     </dialog>
@@ -666,9 +678,10 @@
       <form id="new-canvas-form" class="settings-form">
         <label class="field" for="new-canvas-name"><span id="new-item-name-label">Project name</span><input id="new-canvas-name" name="title" type="text" maxlength="120" autocomplete="off" placeholder="e.g. Spring campaign" required /></label>
         <div class="new-canvas-kits">
-          <div class="new-canvas-kits-head"><strong>Canvas kits</strong><button id="new-canvas-kits-change" class="button outline small" type="button">Change kits</button></div>
+          <div class="new-canvas-kits-head"><strong>Project kits</strong></div>
           <p id="new-canvas-kits"></p>
           <p id="new-canvas-audio-hint"></p>
+          <p>Choose kits under Project files > Canvas kits. Every HTML canvas in the project shares them.</p>
         </div>
         <p id="new-canvas-status" role="status" aria-live="polite"></p>
         <div class="new-canvas-actions"><button id="new-canvas-submit" class="button primary" type="submit">Create empty canvas</button></div>

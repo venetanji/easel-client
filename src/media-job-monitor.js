@@ -3,8 +3,9 @@ const { handleMcpResult } = require('./agent');
 const { createMediaMcpClient } = require('./media-mcp-client');
 const { defaultMcpLaunchOptions } = require('./chat-service');
 const { createMediaJobWorkerClient } = require('./media-job-worker-client');
+const { generatedMediaName } = require('./media-names');
 
-function createMediaJobMonitor({ store, settingsStore, mediaAssetStore, attachAssets, onEvent, onReady,
+function createMediaJobMonitor({ store, settingsStore, mediaAssetStore, attachAssets, enrichAssets, onEvent, onReady,
   runtime = {}, mcpFactory = createMediaMcpClient, workerFactory = createMediaJobWorkerClient, now = Date.now, intervalMs = 5000 }) {
   let timer;
   let running = false;
@@ -39,9 +40,10 @@ function createMediaJobMonitor({ store, settingsStore, mediaAssetStore, attachAs
           const current = store.get(entry.id);
           const existing = current.assets[index++];
           if (existing) { await mediaAssetStore.get(existing.assetId); return existing.assetId; }
-          const assetId = await mediaAssetStore.save(media);
+          const name = generatedMediaName(entry.prompt || entry.name, media.mimeType, index - 1);
+          const assetId = await mediaAssetStore.save({ ...media, ...(name ? { name } : {}) });
           if (removed.has(entry.id)) return assetId;
-          store.update(entry.id, { downloadComplete: false, assets: [...store.get(entry.id).assets, { assetId, mimeType: media.mimeType, ...(media.name ? { name: media.name } : {}) }] });
+          store.update(entry.id, { downloadComplete: false, assets: [...store.get(entry.id).assets, { assetId, mimeType: media.mimeType, ...(name || media.name ? { name: name || media.name } : {}) }] });
           return assetId;
         } catch (error) { saveFailure = error; throw error; }
       },
@@ -54,6 +56,17 @@ function createMediaJobMonitor({ store, settingsStore, mediaAssetStore, attachAs
     }
     if (removed.has(entry.id)) return;
     entry = store.get(entry.id);
+    if (typeof enrichAssets === 'function' && !entry.metadataEnriched) {
+      try {
+        const assets = await enrichAssets(entry.assets, mediaJobSummary(entry));
+        if (removed.has(entry.id)) return;
+        entry = store.update(entry.id, { assets, metadataEnriched: true });
+      } catch {
+        // Optional poster metadata must not strand an otherwise completed generation.
+        if (removed.has(entry.id)) return;
+        entry = store.get(entry.id);
+      }
+    }
     if (entry.projectId && !entry.attached) {
       const attachment = await attachAssets?.(entry.projectId, entry.assets.map((asset) => asset.assetId));
       if (removed.has(entry.id)) return;
@@ -72,7 +85,7 @@ function createMediaJobMonitor({ store, settingsStore, mediaAssetStore, attachAs
       let result;
       if (isolated) {
         worker ||= workerFactory({ userDataPath: runtime.userDataPath });
-        result = await worker.poll({ id: entry.id, remoteId: entry.remoteId, modelId: entry.modelId, mediaType: entry.mediaType, assets: entry.assets }, launchOptions, (asset) => {
+        result = await worker.poll({ id: entry.id, remoteId: entry.remoteId, modelId: entry.modelId, mediaType: entry.mediaType, prompt: entry.prompt, name: entry.name, assets: entry.assets }, launchOptions, (asset) => {
           if (removed.has(entry.id)) return false;
           const current = store.get(entry.id);
           if (!current.assets.some((saved) => saved.assetId === asset.assetId)) store.update(entry.id, { downloadComplete: false, assets: [...current.assets, asset] });

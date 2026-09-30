@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { buildCanvasDocument, buildCanvasSnapshotDocument } = require('./canvas-policy');
 const { imageElement, imageInsertionLocation } = require('./canvas-html');
-const { MAX_FILE_BYTES, MAX_FILES, assembleProject, digest, documentTitle, projectDocuments, projectFromDocument, readChunk, resolveDocumentPath, validateFilePath, validateJavaScriptFiles, validateProject, validateStateText } = require('./canvas-project');
+const { MAX_FILE_BYTES, MAX_FILES, assembleProject, digest, documentTitle, managedKitScripts, projectDocuments, projectFromDocument, readChunk, resolveDocumentPath, stripManagedKitScripts, validateFilePath, validateJavaScriptFiles, validateProject, validateStateText } = require('./canvas-project');
 const { createProjectZip } = require('./project-zip');
 
 const ID_PATTERN = /^[a-f0-9]{32}$/;
@@ -164,10 +164,33 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
 
   function extractKits(html) {
     const kits = [];
-    for (const match of html.matchAll(/<script\b[^>]*\bdata-easel-canvas-kit\s*=\s*["']([a-z][a-z0-9-]*)["'][^>]*>([\s\S]*?)<\/script\s*>/gi)) {
-      if (!kits.some((kit) => kit.name === match[1])) kits.push(cacheDependency(match[1], match[2]));
+    for (const script of managedKitScripts(html)) {
+      if (!kits.some((kit) => kit.name === script.name)) kits.push(cacheDependency(script.name, script.source));
     }
     return kits;
+  }
+
+  function defaultProjectKits() {
+    return ['canvas-2d', ...(typeof kitBundles.tone === 'string' && kitBundles.tone ? ['tone'] : [])];
+  }
+
+  function validateKitNames(kits) {
+    if (!Array.isArray(kits) || kits.length > 32 || kits.some((kit) => typeof kit !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(kit))) throw new Error('Project kits must be offline kit names.');
+    return [...new Set(kits)];
+  }
+
+  function resolveProjectKits(kits, previous = []) {
+    return validateKitNames(kits).map((name) => {
+      if (['canvas-2d', 'html-deck'].includes(name)) return { name };
+      if (typeof kitBundles[name] === 'string' && kitBundles[name]) return cacheDependency(name, kitBundles[name]);
+      const saved = previous.find((kit) => kit.name === name && kit.digest);
+      if (saved) {
+        const source = fileSystem.readFileSync(path.join(dependenciesPath, `${saved.digest}.js`), 'utf8');
+        if (digest(source) !== saved.digest) throw new Error(`The ${name} saved canvas kit is corrupted.`);
+        return saved;
+      }
+      throw new Error(`The ${name} canvas kit is unavailable. Install it in Settings before enabling it for this project.`);
+    });
   }
 
   function saveAsset(bytes, mimeType, { id, name, assetPath, width, height, duration, codec } = {}) {
@@ -278,12 +301,11 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     const title = typeof artifact.title === 'string' && artifact.title.trim()
       ? artifact.title.trim().replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 120)
       : 'Easel Canvas';
-    const html = addCanvasMetadata(buildCanvasDocument({ ...artifact, kitBundles: { ...kitBundles, ...artifact.kitBundles } }), id, title);
+    const selectedKits = artifact.kits === undefined ? defaultProjectKits() : validateKitNames(artifact.kits);
+    const html = addCanvasMetadata(buildCanvasDocument({ ...artifact, html: typeof artifact.html === 'string' ? stripManagedKitScripts(artifact.html) : artifact.html, kits: selectedKits, kitBundles }), id, title);
     const project = projectFromDocument(html, { extractAssets, extractKits });
     applyArtifactAssets(project, artifact.assets);
-    for (const name of artifact.kits || []) {
-      if (!project.manifest.kits.some((kit) => kit.name === name)) project.manifest.kits.push({ name });
-    }
+    project.manifest.kits = resolveProjectKits(selectedKits, project.manifest.kits);
     project.id = id;
     project.title = title;
     return commitProject(id, project);
@@ -293,7 +315,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return save({ ...options, title, html: EMPTY_CANVAS_HTML });
   }
 
-  function createProject({ title = 'Untitled project', kits = [] } = {}) {
+  function createProject({ title = 'Untitled project', kits } = {}) {
     return createEmpty(title, { kits });
   }
 
@@ -310,6 +332,11 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return { id, title: project.title, documents: projectDocuments(project), projectRevision: projectRevision(project), updatedAt: project.updatedAt };
   }
 
+  function getProjectKits(id) {
+    const project = loadProject(id);
+    return { id, projectId: id, kits: project.manifest.kits.map((kit) => kit.name), projectRevision: projectRevision(project) };
+  }
+
   function createDocument(id, args = {}) {
     const project = loadProject(id);
     checkRevisions(project, undefined, args);
@@ -324,11 +351,12 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     const fallback = `Canvas ${projectDocuments(project).length + 1}`;
     const title = args.title === undefined ? documentTitle(args.html || '', fallback) : args.title;
     if (typeof title !== 'string' || !title.trim() || title.trim().length > 120 || /[\u0000-\u001f\u007f]/.test(title)) throw new Error('Canvas title must contain 1 to 120 characters without control characters.');
+    const requestedKits = args.kits === undefined ? [] : validateKitNames(args.kits);
     let authored = args.html === undefined ? EMPTY_CANVAS_HTML : args.html;
     if (typeof authored !== 'string') throw new Error('Canvas HTML is required.');
     // Existing project references remain opaque while the artifact validator processes new media.
     for (const asset of project.manifest.assets) authored = authored.split(`{{asset:${asset.id}}}`).join(`{{easel-project-asset:${asset.id}}}`);
-    let html = addCanvasMetadata(buildCanvasDocument({ html: authored, kits: args.kits || [], assets: args.assets || [], kitBundles }), id, title.trim());
+    let html = addCanvasMetadata(buildCanvasDocument({ html: stripManagedKitScripts(authored), assets: args.assets || [] }), id, title.trim());
     for (const asset of project.manifest.assets) html = html.split(`{{easel-project-asset:${asset.id}}}`).join(`{{asset:${asset.id}}}`);
     const base = name.replace(/\.html?$/i, '');
     const scriptPath = path.posix.basename(base).toLowerCase() === 'index' ? `${path.posix.dirname(name)}/app.js`.replace(/^\.\//, '') : `${base}.app.js`;
@@ -345,15 +373,10 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
         if (existing.digest !== asset.digest || existing.mimeType !== asset.mimeType) throw new Error('The new canvas reuses an asset ID with different media.');
       } else project.manifest.assets.push(asset);
     }
-    for (const kit of document.manifest.kits) {
-      if (!project.manifest.kits.some((candidate) => candidate.name === kit.name)) project.manifest.kits.push(kit);
-    }
-    for (const kit of args.kits || []) {
-      if (!project.manifest.kits.some((candidate) => candidate.name === kit)) project.manifest.kits.push({ name: kit });
-    }
     assemble(project, id, title.trim(), { documentPath: name });
     validateJavaScriptFiles({ ...project, manifest: { ...project.manifest, entry: name } }, Object.keys(document.files));
-    return { ...commitProject(id, project), documentPath: name, documentTitle: title.trim(), documents: projectDocuments(project), dependencyPaths: Object.keys(document.files).filter((filename) => filename !== name), atomic: true };
+    const ignoredDocumentKits = requestedKits.filter((kit) => !project.manifest.kits.some((selected) => selected.name === kit));
+    return { ...commitProject(id, project), documentPath: name, documentTitle: title.trim(), documents: projectDocuments(project), dependencyPaths: Object.keys(document.files).filter((filename) => filename !== name), kits: project.manifest.kits.map((kit) => kit.name), ...(ignoredDocumentKits.length ? { ignoredDocumentKits, kitGuidance: 'HTML documents inherit the project kit selection. Use update_canvas_project with kits to change dependencies for every document.' } : {}), atomic: true };
   }
 
   function update(id, snapshotHtml, { documentPath, restoreMetadata = false } = {}) {
@@ -751,16 +774,9 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     checkRevisions(project, undefined, args);
     if (args.entry !== undefined) project.manifest.entry = validateFilePath(args.entry);
     if (args.kits !== undefined) {
-      if (!Array.isArray(args.kits) || args.kits.length > 32 || args.kits.some((kit) => typeof kit !== 'string')) throw new Error('Project kits must be kit names.');
-      project.manifest.kits = [...new Set(args.kits)].map((name) => {
-        const existing = project.manifest.kits.find((kit) => kit.name === name);
-        if (typeof kitBundles[name] === 'string') return cacheDependency(name, kitBundles[name]);
-        if (existing) return existing;
-        if (['canvas-2d', 'html-deck'].includes(name)) return { name };
-        throw new Error(`The ${name} canvas kit is unavailable.`);
-      });
+      project.manifest.kits = resolveProjectKits(args.kits, project.manifest.kits);
     }
-    return { ...commitProject(id, project), manifest: project.manifest, effects: { source: 'persisted', runtime: 'unchanged until reload' } };
+    return { ...commitProject(id, project), projectId: id, kits: project.manifest.kits.map((kit) => kit.name), manifest: project.manifest, effects: { source: 'project manifest persisted for every HTML document', runtime: 'unchanged until reload' } };
   }
 
   function assetBytes(asset) {
@@ -994,7 +1010,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return { ...archive, id, title: project.title, fileName: `${slug}.zip`, bytes: archive.data.length, documents, manifest, contributions };
   }
 
-  return { attachAsset, attachAssets, createDocument, createEmpty, createProject, deleteFile, deleteProject, detachAsset, exportProject, get, getAsset, getDocument, getLibraryAsset, getProject, inspectAssetDeletion, inspectDeletion, inspectLibraryAssetDeletion, inspectProjectDeletion, insertImage, list, listAssets, listDocuments, listFiles, listLibraryAssets, migrateAssetReferences, patchFile, patchFiles, readAsset: getAsset, readFile, readProjectState, removeLibraryAsset, renameProject, save, saveProjectState, update, updateManifest, writeFile };
+  return { attachAsset, attachAssets, createDocument, createEmpty, createProject, deleteFile, deleteProject, detachAsset, exportProject, get, getAsset, getDocument, getLibraryAsset, getProject, getProjectKits, inspectAssetDeletion, inspectDeletion, inspectLibraryAssetDeletion, inspectProjectDeletion, insertImage, list, listAssets, listDocuments, listFiles, listLibraryAssets, migrateAssetReferences, patchFile, patchFiles, readAsset: getAsset, readFile, readProjectState, removeLibraryAsset, renameProject, save, saveProjectState, update, updateManifest, writeFile };
 }
 
 module.exports = { EMPTY_CANVAS_HTML, MAX_DOCUMENT_EXPORT_BYTES, MAX_PROJECT_EXPORT_BYTES, createCanvasStore };

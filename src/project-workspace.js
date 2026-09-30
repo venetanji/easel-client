@@ -23,6 +23,9 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   const mediaDrawerToggle = document.getElementById('nav-media');
   const mediaList = document.getElementById('media-list');
   const allMediaList = document.getElementById('all-media-list');
+  const mediaUnreadBadge = document.getElementById('media-unread');
+  const projectKitList = document.getElementById('project-kit-list');
+  const projectKitStatus = document.getElementById('project-kit-status');
   const documentsList = document.getElementById('canvases-list');
   const tabsElement = document.getElementById('open-canvas-tabs');
   const preview = document.getElementById('image-viewer');
@@ -32,11 +35,18 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   const previewInfo = document.getElementById('image-viewer-info');
   const tabStorageKey = 'easel-studio.project-tabs.v1';
   const activeStorageKey = 'easel-studio.active-project.v1';
+  const mediaNoticeStorageKey = 'easel-studio.media-notices.v1';
+  const mediaSeenStorageKey = 'easel-studio.media-seen.v1';
   let projects = [];
   let projectId = '';
   let documents = [];
   let assets = [];
   let libraryAssets = [];
+  let kitCatalog = [];
+  let kitCatalogPromise;
+  let projectKits = ['canvas-2d', 'tone'];
+  let projectRevision = '';
+  let kitsVersion = 0;
   let activeTab = null;
   let restored = false;
   let operation = false;
@@ -48,6 +58,8 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   let deletionQueue = Promise.resolve();
   const tabs = new Map();
   function read(key, fallback) { try { return JSON.parse(storage?.getItem(key) || 'null') ?? fallback; } catch { return fallback; } }
+  const mediaNotices = new Map(read(mediaNoticeStorageKey, []).filter((entry) => /^[a-f0-9]{32}$/.test(entry?.assetId) && ['image', 'video', 'audio'].includes(entry.kind)).slice(-256).map((entry) => [entry.assetId, entry]));
+  const knownMedia = new Set([...read(mediaSeenStorageKey, []).filter((id) => /^[a-f0-9]{32}$/.test(id)).slice(-1024), ...mediaNotices.keys()]);
   for (const tab of read(tabStorageKey, [])) {
     if (tab && /^[a-f0-9]{32}$/.test(tab.projectId) && ['document', 'image', 'video', 'audio'].includes(tab.kind) && typeof tab.resource === 'string' && typeof tab.title === 'string') tabs.set(keyFor(tab), tab);
   }
@@ -105,6 +117,37 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     svg.append(path);
     return svg;
   }
+  function updateMediaNotices() {
+    const unread = [...mediaNotices.values()].filter((notice) => !notice.acknowledged).length;
+    if (mediaUnreadBadge) {
+      mediaUnreadBadge.hidden = unread === 0;
+      mediaUnreadBadge.textContent = unread > 99 ? '99+' : String(unread);
+    }
+    const open = !mediaDrawer.hidden;
+    mediaDrawerToggle.setAttribute('aria-label', `${open ? 'Hide' : 'Show'} media${unread ? `, ${unread} new ${unread === 1 ? 'asset' : 'assets'}` : ''}`);
+    try { storage?.setItem(mediaNoticeStorageKey, JSON.stringify([...mediaNotices.values()].slice(-256))); } catch {}
+    try { storage?.setItem(mediaSeenStorageKey, JSON.stringify([...knownMedia].slice(-1024))); } catch {}
+    const newest = [...mediaNotices.values()].at(-1)?.assetId;
+    for (const list of [mediaList, allMediaList]) {
+      for (const card of list.children) {
+        const badge = card.querySelector('.project-thumbnail-new');
+        if (badge) badge.hidden = card.dataset.assetId !== newest;
+      }
+    }
+  }
+  function announceMediaReady(event) {
+    const job = event.job || event;
+    if (job.status && job.status !== 'ready') return;
+    for (const asset of event.assets || job.assets || []) {
+      const assetId = asset.assetId || asset.id;
+      const kind = mediaKind(asset);
+      if (!/^[a-f0-9]{32}$/.test(assetId || '') || !kind || knownMedia.has(assetId)) continue;
+      knownMedia.add(assetId);
+      mediaNotices.set(assetId, { assetId, kind, acknowledged: !mediaDrawer.hidden });
+    }
+    updateMediaNotices();
+  }
+  function markMediaSeen(assetId) { if (/^[a-f0-9]{32}$/.test(assetId || '')) knownMedia.add(assetId); mediaNotices.delete(assetId); updateMediaNotices(); }
   function setDrawer(open, focus = true, kind = 'files') {
     const showMedia = open && kind === 'media';
     const showFiles = open && !showMedia;
@@ -121,6 +164,8 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     mediaDrawerToggle.setAttribute('aria-expanded', String(showMedia));
     mediaDrawerToggle.setAttribute('aria-pressed', String(showMedia));
     mediaDrawerToggle.setAttribute('aria-label', showMedia ? 'Hide media' : 'Show media');
+    if (showMedia) for (const notice of mediaNotices.values()) notice.acknowledged = true;
+    updateMediaNotices();
     onDrawerChange?.(open, kind);
     if (focus) {
       if (open) (target.querySelector('button') || target).focus();
@@ -180,7 +225,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     const bytes = Uint8Array.from(atob(asset.data), (character) => character.charCodeAt(0));
     return new Blob([bytes], { type: asset.mimeType });
   }
-  async function openMedia(asset, library = false, { trustedPreview = false } = {}) {
+  async function openMedia(asset, library = false, { trustedPreview = false, onlyWhenEmpty = false, canOpen } = {}) {
     if (!trustedPreview) guard();
     const owner = projectId;
     const version = ++selectionVersion;
@@ -188,7 +233,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     updateBusy();
     try {
       const full = library ? await client.getLibraryAsset(asset.id) : await client.getProjectAsset(owner, asset.id);
-      if (version !== selectionVersion || owner !== projectId) return;
+      if (version !== selectionVersion || owner !== projectId || (onlyWhenEmpty && (activeTab || isBusy?.() || canOpen?.() === false))) return false;
       if (!trustedPreview) await client.hideCanvasPreview();
       hideMedia();
       mediaUrl = URL.createObjectURL(mediaBlob(full));
@@ -220,8 +265,10 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
         player.src = mediaUrl;
       }
       select({ projectId: owner, kind, resource: asset.id, title: full.name || asset.name || `${kind[0].toUpperCase()}${kind.slice(1)} ${asset.id.slice(0, 8)}`, library });
+      markMediaSeen(asset.id);
       renderDocuments();
       onStatus('');
+      return true;
     } finally { operation = false; updateBusy(); }
   }
   async function refreshAssets() {
@@ -245,6 +292,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     document.getElementById('all-media-empty').hidden = all.length > 0;
     document.getElementById('project-image-count').textContent = String(current.length);
     document.getElementById('all-media-count').textContent = String(all.length);
+    updateMediaNotices();
   }
   function mediaCard(asset, library, inProject) {
     const kind = mediaKind(asset);
@@ -259,6 +307,9 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       image.loading = 'lazy';
       thumbnail.append(image);
     } else thumbnail.append(mediaIcon(kind, 'project-thumbnail-placeholder'));
+    const fresh = node('span', 'project-thumbnail-new', `New ${kind}`);
+    fresh.hidden = !mediaNotices.has(asset.id);
+    thumbnail.append(fresh);
     if (kind !== 'image') {
       const badge = node('span', 'project-thumbnail-kind');
       badge.append(mediaIcon(kind), node('span', '', durationLabel(asset.duration) || (kind === 'video' ? 'Video' : 'Audio')));
@@ -395,6 +446,64 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     const result = library ? await client.saveLibraryAsset(id) : await client.saveProjectAsset(projectId, id);
     if (!result?.canceled) onStatus('Media downloaded.');
   }
+  async function openMediaReference(asset, { onlyWhenEmpty = false, canOpen } = {}) {
+    if (onlyWhenEmpty && (activeTab || operation || isBusy?.() || canOpen?.() === false)) return false;
+    return openMedia({ ...asset, id: asset.assetId || asset.id }, true, { onlyWhenEmpty, canOpen });
+  }
+  async function refreshKits() {
+    const owner = projectId;
+    const version = ++kitsVersion;
+    if (!kitCatalogPromise) kitCatalogPromise = (client.getAvailableKits ? client.getAvailableKits() : Promise.resolve([])).catch((error) => { kitCatalogPromise = null; throw error; });
+    const [catalog, selected] = await Promise.all([kitCatalogPromise, owner && client.getProjectKits ? client.getProjectKits(owner) : null]);
+    if (version !== kitsVersion || owner !== projectId) return;
+    kitCatalog = Array.isArray(catalog) ? catalog : catalog.kits || [];
+    projectKits = selected?.kits || ['canvas-2d', 'tone'].filter((id) => !kitCatalog.length || kitCatalog.some((kit) => kit.id === id && kit.installed));
+    projectRevision = selected?.projectRevision || '';
+    renderKits();
+  }
+  function renderKits() {
+    if (!projectKitList) return;
+    projectKitList.replaceChildren(...kitCatalog.map((kit) => {
+      const row = node('label', 'project-kit-option');
+      const checkbox = node('input');
+      checkbox.type = 'checkbox';
+      checkbox.dataset.projectKit = kit.id;
+      checkbox.checked = projectKits.includes(kit.id);
+      checkbox.dataset.unavailable = String(!kit.installed);
+      checkbox.disabled = !projectId || operation || Boolean(isBusy?.()) || (checkbox.dataset.unavailable === 'true' && !checkbox.checked);
+      checkbox.addEventListener('change', () => run(async () => {
+        guard();
+        const owner = projectId;
+        const selected = [...projectKitList.querySelectorAll('input')].filter((input) => input.checked).map((input) => input.dataset.projectKit);
+        operation = true;
+        updateBusy();
+        projectKitStatus.textContent = 'Updating project kits...';
+        try {
+          const result = await client.updateProjectKits(owner, { kits: selected, expectedProjectRevision: projectRevision });
+          if (owner !== projectId) return;
+          projectKits = result.kits;
+          projectRevision = result.projectRevision;
+          renderKits();
+          if (activeTab?.kind === 'document') select(activeTab, result);
+          projectKitStatus.textContent = result.runtimeWarning || 'Kits saved for every HTML canvas in this project.';
+          projectKitStatus.dataset.error = String(Boolean(result.runtimeWarning));
+          onStatus(projectKitStatus.textContent, Boolean(result.runtimeWarning));
+        } catch (error) {
+          await refreshKits().catch(() => renderKits());
+          projectKitStatus.textContent = error.message || 'Could not update project kits. Try again.';
+          projectKitStatus.dataset.error = 'true';
+          report(error);
+        } finally { operation = false; updateBusy(); }
+      }));
+      const label = node('span', '', kit.name);
+      label.title = kit.description || kit.name;
+      row.append(checkbox, label);
+      if (!kit.installed) row.append(node('small', '', 'Unavailable'));
+      return row;
+    }));
+    projectKitStatus.textContent = projectId ? 'Shared by every HTML canvas in this project.' : 'Select a project to choose its kits.';
+    projectKitStatus.dataset.error = 'false';
+  }
   async function deleteFile(path) {
     guard();
     const owner = projectId;
@@ -416,7 +525,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     }
   }
   function reportProjectDeletion(result) {
-    const warnings = [...(result.mediaWarnings || []), result.runtimeWarning].filter(Boolean);
+    const warnings = [...(result.mediaWarnings || []), result.runtimeWarning].map((warning) => typeof warning === 'string' ? warning : warning?.message).filter(Boolean);
     const count = result.deletedAssetIds?.length || 0;
     const media = count ? `${count} unshared media ${count === 1 ? 'asset' : 'assets'} deleted. Remaining media is available in All media.` : 'Saved media is available in All media.';
     onStatus(['Project deleted.', media, ...warnings].join(' '), warnings.length > 0);
@@ -539,7 +648,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       return row;
     }));
     if (!files.length) document.getElementById('project-source-files').append(node('p', 'empty-library', 'Shared scripts and styles appear here.'));
-    await refreshAssets();
+    await Promise.all([refreshAssets(), refreshKits()]);
   }
   async function openProject(id, documentPath) {
     guard();
@@ -573,7 +682,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     projects = await client.listCanvases();
     renderPicker();
     if (projectId) await loadProjectContents(projectId);
-    else await refreshAssets();
+    else await Promise.all([refreshAssets(), refreshKits()]);
     if (restore && !restored) {
       restored = true;
       const legacy = read('easel-studio.open-canvases.v1', []).at(-1);
@@ -709,6 +818,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     for (const element of document.querySelectorAll('.project-document, .project-source-file, .library .delete-control, .media-drawer .delete-control, .project-media-actions button, .media-job-recovery button, button.project-thumbnail, .canvas-tab button, #project-new, #project-rename, #drawer-new-document')) {
       element.disabled = busy || element.dataset.referenced === 'true' || (element.dataset.requiresProject === 'true' && !projectId);
     }
+    for (const checkbox of projectKitList?.querySelectorAll('input') || []) checkbox.disabled = busy || !projectId || (checkbox.dataset.unavailable === 'true' && !checkbox.checked);
     document.getElementById('project-rename').disabled = busy || !projectId;
     document.getElementById('project-delete').disabled = busy || !projectId;
     document.getElementById('image-use-chat').disabled = busy || !isMediaTab();
@@ -732,7 +842,9 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     if (event.key === 'Escape' && (!drawer.hidden || !mediaDrawer.hidden) && !document.querySelector('dialog[open]')) setDrawer(false, true, drawer.hidden ? 'media' : 'files');
   });
   setDrawer(false, false);
-  return { refreshProjects, refreshAssets, updateMediaJob, openProject, openDocument, changed, assetsChanged, acceptDeletion, previewMedia, create, exportCurrent, updateBusy,
+  return { refreshProjects, refreshAssets, refreshKits, updateMediaJob, announceMediaReady, markMediaSeen, openMediaReference, openProject, openDocument, changed, assetsChanged, acceptDeletion, previewMedia, create, exportCurrent, updateBusy,
+    getKits: () => [...projectKits], getKitCatalog: () => [...kitCatalog],
+    isMediaNew: (assetId) => mediaNotices.has(assetId),
     getProjectId: () => projectId, getPreviewKind: () => activeTab?.kind || 'empty', isOperating: () => operation, setDrawer, setMediaDrawer };
 }
 

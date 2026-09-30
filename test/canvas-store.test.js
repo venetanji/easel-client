@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const zlib = require('node:zlib');
 const { createCanvasStore } = require('../src/canvas-store');
 
 test('saves self-contained canvas HTML and lists it by title', (t) => {
@@ -379,4 +380,135 @@ test('reuses cached reference metadata and thumbnails while noticing atomic proj
   store.listLibraryAssets({ thumbnail: true });
   assert.ok(metadataReads > beforeRefresh);
   assert.equal(thumbnails, 1);
+});
+
+test('new projects default to installed Tone and explicit kit selections stay independent', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-project-kit-defaults-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const store = createCanvasStore({ userDataPath, kitBundles: { tone: 'window.Tone = { version: "test" };', three: 'window.THREE = { version: "test" };' } });
+  const first = store.createProject({ title: 'Default kits' });
+  const second = store.createProject({ title: 'Explicit none', kits: [] });
+  const third = store.createProject({ title: 'Three only', kits: ['three'] });
+  assert.deepEqual(store.getProjectKits(first.id).kits, ['canvas-2d', 'tone']);
+  assert.deepEqual(store.getProjectKits(second.id).kits, []);
+  assert.deepEqual(store.getProjectKits(third.id).kits, ['three']);
+  const unavailable = createCanvasStore({ userDataPath });
+  const plain = unavailable.createProject();
+  assert.deepEqual(unavailable.getProjectKits(plain.id).kits, ['canvas-2d']);
+  assert.match(store.get(first.id).html, /data-easel-canvas-kit="tone"/);
+});
+
+test('a project kit selection applies to every current and future HTML document', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-project-kit-inheritance-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const { managedKitScripts } = require('../src/canvas-project');
+  const bundles = { tone: 'window.Tone = {};', three: 'window.THREE = {};', phaser: 'window.Phaser = {};' };
+  const store = createCanvasStore({ userDataPath, kitBundles: bundles });
+  const project = store.createProject();
+  const second = store.createDocument(project.id, { title: 'Second', kits: ['phaser'] });
+  assert.deepEqual(second.ignoredDocumentKits, ['phaser']);
+  assert.deepEqual(managedKitScripts(store.get(project.id, { documentPath: second.documentPath }).html).map((kit) => kit.name), ['tone']);
+  const selection = store.getProjectKits(project.id);
+  const changed = store.updateManifest(project.id, { kits: ['canvas-2d', 'three'], expectedProjectRevision: selection.projectRevision });
+  assert.deepEqual(changed.kits, ['canvas-2d', 'three']);
+  for (const document of store.listDocuments(project.id).documents) {
+    assert.deepEqual(managedKitScripts(store.get(project.id, { documentPath: document.path }).html).map((kit) => kit.name), ['three']);
+  }
+  const third = store.createDocument(project.id, { title: 'Third', kits: ['tone', 'phaser'], html: '<script data-easel-canvas-kit="tone">window.Tone = { stale: true };</script><h1>Third</h1>' });
+  assert.deepEqual(third.ignoredDocumentKits, ['tone', 'phaser']);
+  assert.deepEqual(store.getProjectKits(project.id).kits, ['canvas-2d', 'three']);
+  assert.deepEqual(managedKitScripts(store.get(project.id, { documentPath: third.documentPath }).html).map((kit) => kit.name), ['three']);
+  const reopened = createCanvasStore({ userDataPath, kitBundles: bundles });
+  assert.deepEqual(reopened.getProjectKits(project.id).kits, ['canvas-2d', 'three']);
+  const exported = reopened.exportProject(project.id);
+  assert.deepEqual(exported.manifest.kits.map((kit) => kit.name), ['canvas-2d', 'three']);
+  assert.equal(exported.manifest.documents.length, 3);
+  const zipContents = new Map();
+  let offset = 0;
+  while (exported.data.readUInt32LE(offset) === 0x04034b50) {
+    const method = exported.data.readUInt16LE(offset + 8);
+    const bytes = exported.data.readUInt32LE(offset + 18);
+    const nameBytes = exported.data.readUInt16LE(offset + 26);
+    const extraBytes = exported.data.readUInt16LE(offset + 28);
+    const name = exported.data.toString('utf8', offset + 30, offset + 30 + nameBytes);
+    const start = offset + 30 + nameBytes + extraBytes;
+    const content = exported.data.subarray(start, start + bytes);
+    zipContents.set(name, (method === 8 ? zlib.inflateRawSync(content) : content).toString('utf8'));
+    offset = start + bytes;
+  }
+  for (const document of exported.manifest.documents) assert.deepEqual(managedKitScripts(zipContents.get(document.path)).map((kit) => kit.name), ['three']);
+});
+
+test('ordinary DOM adoption cannot re-enable disabled project kits from stale runtime tags', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-project-kit-adoption-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const { managedKitScripts } = require('../src/canvas-project');
+  const store = createCanvasStore({ userDataPath, kitBundles: { tone: 'window.Tone = {};' } });
+  const created = store.createProject();
+  const staleRuntime = store.get(created.id).html;
+  store.updateManifest(created.id, { kits: ['canvas-2d'] });
+  store.update(created.id, staleRuntime);
+  assert.deepEqual(store.getProjectKits(created.id).kits, ['canvas-2d']);
+  assert.deepEqual(managedKitScripts(store.get(created.id).html), []);
+  store.update(created.id, staleRuntime, { restoreMetadata: true });
+  assert.deepEqual(store.getProjectKits(created.id).kits, ['canvas-2d', 'tone']);
+});
+
+test('project kit edits check revisions, availability and idempotence without changing source files', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-project-kit-revisions-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const store = createCanvasStore({ userDataPath, kitBundles: { tone: 'window.Tone = {};' } });
+  const created = store.createProject();
+  const originalFiles = store.getProject(created.id).files;
+  const before = store.getProjectKits(created.id);
+  assert.equal(store.updateManifest(created.id, { kits: before.kits }).changed, false);
+  assert.throws(() => store.updateManifest(created.id, { kits: ['three'] }), /unavailable.*Settings/);
+  assert.throws(() => store.updateManifest(created.id, { kits: ['../tone'] }), /offline kit names/);
+  assert.deepEqual(store.getProjectKits(created.id), before);
+  store.writeFile(created.id, { path: 'notes.txt', content: 'Concurrent edit' });
+  assert.throws(() => store.updateManifest(created.id, { kits: ['canvas-2d'], expectedProjectRevision: before.projectRevision }), /project changed/);
+  const changed = store.updateManifest(created.id, { kits: ['canvas-2d'] });
+  assert.equal(changed.changed, true);
+  assert.deepEqual(store.getProject(created.id).files.filter((file) => file.path !== 'notes.txt'), originalFiles);
+  assert.equal(store.getProjectKits(created.id).projectRevision, changed.projectRevision);
+});
+
+test('managed kit recognition preserves ordinary scripts, comments, quoted attributes and templates', () => {
+  const { managedKitScripts, stripManagedKitScripts } = require('../src/canvas-project');
+  const html = '<!-- <script data-easel-canvas-kit="tone">example</script> -->'
+    + '<div title="<script data-easel-canvas-kit=\'three\'>example</script>"></div>'
+    + '<script title="data-easel-canvas-kit=\'tone\'">window.userCode = true;</script>'
+    + '<script>window.example = "<script data-easel-canvas-kit=\'tone\'>";</script>'
+    + '<textarea><script data-easel-canvas-kit="tone">text</script></textarea>'
+    + '<template><script data-easel-canvas-kit="tone">inert</script></template>'
+    + '<script data-easel-canvas-kit="three" title="a > b">window.THREE = {};</script>';
+  const scripts = managedKitScripts(html);
+  assert.equal(scripts.length, 1);
+  assert.equal(scripts[0].name, 'three');
+  assert.equal(scripts[0].source, 'window.THREE = {};');
+  const stripped = stripManagedKitScripts(html);
+  assert.equal(stripped, html.slice(0, scripts[0].start));
+  assert.match(stripped, /window.userCode = true/);
+  assert.match(stripped, /window.example/);
+  const unclosedText = '<textarea><script data-easel-canvas-kit="tone">inert text';
+  assert.equal(stripManagedKitScripts(unclosedText), unclosedText);
+  const unclosedComment = '<!-- <script data-easel-canvas-kit="tone">inert text';
+  assert.equal(stripManagedKitScripts(unclosedComment), unclosedComment);
+});
+
+test('legacy bundled kits migrate to one shared selection and can be disabled across raw HTML files', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-project-kit-legacy-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const { managedKitScripts } = require('../src/canvas-project');
+  const directory = path.join(userDataPath, 'canvases');
+  fs.mkdirSync(directory);
+  const id = 'f'.repeat(32);
+  const legacy = '<html><head><script data-easel-canvas-kit="tone">window.Tone = {};</script></head><body><h1>Legacy</h1></body></html>';
+  fs.writeFileSync(path.join(directory, `${id}.html`), legacy);
+  const store = createCanvasStore({ userDataPath });
+  assert.deepEqual(store.getProjectKits(id).kits, ['tone']);
+  store.writeFile(id, { path: 'other.html', content: legacy });
+  store.updateManifest(id, { kits: [] });
+  for (const document of store.listDocuments(id).documents) assert.deepEqual(managedKitScripts(store.get(id, { documentPath: document.path }).html), []);
+  assert.match(store.readFile(id, { path: 'other.html' }).text, /data-easel-canvas-kit="tone"/);
 });

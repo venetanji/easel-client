@@ -204,7 +204,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     return { ...saved, ...documentIdentity(document) };
   }
 
-  async function createEmpty(title = 'Untitled Canvas', kits = []) {
+  async function createEmpty(title = 'Untitled Canvas', kits) {
     if (!canvasStore) throw new Error('Canvas storage is unavailable.');
     const saved = canvasStore.createProject({ title, kits, kitBundles });
     const document = canvasStore.get(saved.id);
@@ -221,7 +221,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     return { ...result, projectId: result.id, projectTitle: result.title, documentPath: currentDocumentPath, documentTitle: selected?.title || result.documentTitle };
   }
 
-  async function ensureProject({ title = 'Untitled project', kits = [] } = {}) {
+  async function ensureProject({ title = 'Untitled project', kits } = {}) {
     if (currentCanvasId) return documentIdentity(canvasStore.get(currentCanvasId, { documentPath: currentDocumentPath || undefined }));
     const saved = canvasStore.createProject({ title, kits, kitBundles });
     currentCanvasId = saved.id;
@@ -538,6 +538,34 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     return { canvasId: saved.id, documentPath: currentDocumentPath, runtimeGeneration, url: currentUrl };
   }
 
+  async function updateProjectKits(projectId, { kits, expectedProjectRevision } = {}) {
+    if (!canvasStore) throw new Error('Canvas storage is unavailable.');
+    if (!Array.isArray(kits)) throw new Error('Project kit selection must be an array.');
+    const active = currentCanvasId === projectId && !!currentUrl && !!currentDocumentPath;
+    const identity = { documentPath: currentDocumentPath, generation: runtimeGeneration };
+    const updated = canvasStore.updateManifest(projectId, { kits, expectedProjectRevision });
+    const result = { ...(active ? mutationIdentity(updated) : updated), projectId, kits: updated.manifest.kits.map((kit) => kit.name), ok: true, applied: false, sourcePendingReload: active ? sourcePendingReload : false };
+    if (!updated.changed || !active) return { ...result, effects: { source: updated.changed ? 'project kits saved for every HTML document' : 'unchanged', runtime: 'unchanged' } };
+    sourcePendingReload = true;
+    let cleanup = null;
+    let state = null;
+    let applied = false;
+    try {
+      state = JSON.parse(await evaluate('window.EaselCanvas?.captureState() || null', 20_000));
+      if (currentCanvasId !== projectId || currentDocumentPath !== identity.documentPath || runtimeGeneration !== identity.generation) throw new Error('The open canvas changed before its kit update could reload.');
+      cleanup = await cleanupForReload();
+      if (currentCanvasId !== projectId || currentDocumentPath !== identity.documentPath || runtimeGeneration !== identity.generation) throw new Error('The open canvas changed during lifecycle cleanup.');
+      const saved = canvasStore.get(projectId, { documentPath: identity.documentPath });
+      await loadHtml(saved.html, projectId, state, false, identity.documentPath);
+      applied = true;
+      const validation = await validateCanvas();
+      return { ...result, applied: true, sourcePendingReload: false, preservedState: !!state, cleanup, validation, contract: canvasContract(), ...(validation.appRuntimeStatus.ok ? {} : { runtimeWarning: 'Project kits are saved and loaded. The app reports runtime errors; it may still use a kit that was disabled.' }), effects: { source: 'project kits saved for every HTML document', runtime: 'current document replaced once with managed lifecycle cleanup' } };
+    } catch (error) {
+      if (!applied && currentCanvasId === projectId && currentDocumentPath === identity.documentPath) sourcePendingReload = true;
+      return { ...result, applied, sourcePendingReload: currentCanvasId === projectId ? sourcePendingReload : false, preservedState: applied && !!state, cleanup, runtimeWarning: applied ? `Project kits are saved and loaded, but validation failed. ${error.message}` : `Project kits are saved. Reopen the canvas to apply them. ${error.message}`, contract: canvasContract(), effects: { source: 'project kits saved for every HTML document', runtime: applied ? 'current document replaced; validation unavailable' : cleanup ? 'reload failed after lifecycle cleanup' : 'unchanged; reload still required' } };
+    }
+  }
+
   function sameCaptureRuntime(identity) {
     return currentCanvasId === identity.canvasId && currentDocumentPath === identity.documentPath && runtimeGeneration === identity.runtimeGeneration && currentUrl === identity.url;
   }
@@ -816,6 +844,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     applyCanvasFilePatches: (args) => mutateProject('patchFiles', args),
     deleteCanvasFile: (args) => mutateProject('deleteFile', args),
     updateCanvasProject: (args) => mutateProject('updateManifest', args),
+    updateProjectKits,
     attachCanvasAsset: (args) => mutateProject('attachAsset', args),
     attachCanvasAssets: (args) => mutateProject('attachAssets', args),
     getCanvasState: (args) => readProject('readProjectState', args),

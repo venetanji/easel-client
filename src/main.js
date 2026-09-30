@@ -28,6 +28,7 @@ const {
   validateProjectAssetId,
   validateDocumentPath,
   validateProjectInput,
+  validateProjectKits,
   validateSettingsInput,
 } = require('./ipc-contract');
 const { createSettingsStore } = require('./settings-store');
@@ -42,11 +43,13 @@ const { renderCanvasInputScript, dismissCanvasInputScript } = require('./canvas-
 const { createCanvasMediaStore } = require('./canvas-media-store');
 const { createMediaJobStore, mediaJobSummary } = require('./media-job-store');
 const { createMediaJobMonitor } = require('./media-job-monitor');
+const { createVideoMetadataService } = require('./video-metadata');
 const { createDeletionService } = require('./deletion-service');
 const { validateFilePath } = require('./canvas-project');
 const { createLiteLLMModelService } = require('./litellm-models');
-const { readInstalledSkills } = require('./skill-catalog');
+const { readInstalledSkills, assertHarnessSkills } = require('./skill-catalog');
 const { loadCanvasKitBundles } = require('./canvas-kits');
+const { availableCanvasKits, assertInstalledKits } = require('./canvas-kit-catalog');
 
 const SETTINGS = createSettingsStore({
   userDataPath: app.getPath('userData'),
@@ -81,6 +84,11 @@ const CAPTURE_MEDIA = createCanvasMediaStore({ userDataPath: app.getPath('userDa
 const MEDIA_JOBS = createMediaJobStore({ userDataPath: app.getPath('userData') });
 const MEDIA_ASSETS = {
   save: (media) => media.mimeType?.startsWith('image/') ? ASSETS.save(media) : CAPTURE_MEDIA.save(media),
+  getMetadata: async (id) => {
+    try { return await CAPTURE_MEDIA.getMetadata(id); } catch {}
+    try { return CANVASES.getLibraryAsset(id, { thumbnail: true }); }
+    catch { return null; }
+  },
   get: async (id) => {
     try { return await ASSETS.get(id); } catch {}
     try { return await CAPTURE_MEDIA.get(id); } catch {}
@@ -152,7 +160,7 @@ function emitCanvasSaved(canvas) {
   }
 }
 
-async function attachProjectAssets(controller, projectId, assetIds, { kits = [] } = {}) {
+async function attachProjectAssets(controller, projectId, assetIds, { kits } = {}) {
   const selected = projectId ? { id: projectId } : await controller.ensureProject({ kits });
   const id = validateOpaqueId(selected.id, 'Project ID');
   const before = CANVASES.get(id).html;
@@ -264,6 +272,14 @@ async function saveAssetDownload(asset) {
   return { canceled: false, fileName: path.basename(selected.filePath) };
 }
 
+async function projectMedia(projectId, assetId) {
+  const asset = await CANVASES.getAsset(projectId, assetId);
+  if (/^(video|audio)\//.test(asset.mimeType)) {
+    try { Object.assign(asset, await CAPTURE_MEDIA.getMetadata(asset.id)); } catch {}
+  }
+  return asset;
+}
+
 async function saveCanvasBeforeSwitch(controller) {
   if (controller.getCurrentCanvasId()) await controller.saveCurrent();
 }
@@ -291,7 +307,7 @@ const CHAT = createChatService({
     const projectDeleted = projectId && !CANVASES.list().some((project) => project.id === projectId);
     if (projectDeleted) projectId = '';
     else if (!projectId) {
-      try { projectId = await withCanvas(async (controller) => (await controller.ensureProject({ kits: input.turnOptions?.kits || [] })).id); }
+      try { projectId = await withCanvas(async (controller) => (await controller.ensureProject({ kits: input.turnOptions?.kits })).id); }
       catch { /* An accepted job must remain retrievable even if its project cannot be created. */ }
     }
     try {
@@ -323,6 +339,10 @@ const CHAT = createChatService({
     }),
     inspect: () => withCanvas((controller) => controller.inspect()),
     getCurrentCanvasId: () => requireCanvasView().getCurrentCanvasId(),
+    getCurrentKits: () => {
+      const id = canvasView?.getCurrentCanvasId();
+      return id ? CANVASES.getProjectKits(id).kits : undefined;
+    },
     getCurrentDocumentPath: () => requireCanvasView().getCurrentDocumentPath(),
     getDefaultDocumentPath: () => CANVASES.getProject(requireCanvasView().getCurrentCanvasId()).manifest.entry,
     listMediaJobs: () => ({ jobs: MEDIA_JOBS.list(), polling: 'The host polls and downloads pending jobs across restarts. Do not resubmit.' }),
@@ -411,8 +431,21 @@ const CHAT = createChatService({
   },
 });
 
+const VIDEO_METADATA = createVideoMetadataService({
+  BrowserWindow,
+  sessionFactory: async (partition) => ({ partition, session: session.fromPartition(partition, { cache: false }) }),
+  mediaStore: CAPTURE_MEDIA,
+  onChanged: async (assets) => {
+    const previews = await Promise.all(assets.map(async (asset) => {
+      try { return { ...asset, ...await CAPTURE_MEDIA.getMetadata(asset.assetId) }; }
+      catch { return asset; }
+    }));
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, { type: 'media-metadata', assets: previews });
+  },
+});
 const JOB_MONITOR = createMediaJobMonitor({
   store: MEDIA_JOBS, settingsStore: SETTINGS, mediaAssetStore: MEDIA_ASSETS,
+  enrichAssets: VIDEO_METADATA.enrichAssets,
   runtime: { isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, userDataPath: app.getPath('userData') },
   attachAssets: (projectId, assetIds) => withCanvas((controller) => {
     if (!CANVASES.list().some((project) => project.id === projectId)) return { projectDeleted: true };
@@ -474,7 +507,8 @@ function registerIpcHandlers() {
     const options = validateProjectInput(input);
     const controller = requireCanvasView();
     await saveCanvasBeforeSwitch(controller);
-    const created = await controller.createEmpty(options.title, options.kits || []);
+    if (options.kits) assertInstalledKits(options.kits, CANVAS_KIT_BUNDLES);
+    const created = await controller.createEmpty(options.title, options.kits);
     emitCanvasSaved(created);
     return { ...created, undoAvailable: false };
   });
@@ -501,6 +535,26 @@ function registerIpcHandlers() {
     assertTrustedSender(event, mainWindow);
     const result = CANVASES.listDocuments(validateOpaqueId(id, 'Project ID'));
     return { ...result, projectId: result.id, projectTitle: result.title };
+  });
+  ipcMain.handle(IPC_CHANNELS.GET_AVAILABLE_KITS, (event) => {
+    assertTrustedSender(event, mainWindow);
+    return availableCanvasKits(CANVAS_KIT_BUNDLES);
+  });
+  ipcMain.handle(IPC_CHANNELS.GET_PROJECT_KITS, (event, id) => {
+    assertTrustedSender(event, mainWindow);
+    return CANVASES.getProjectKits(validateOpaqueId(id, 'Project ID'));
+  });
+  canvasHandle(IPC_CHANNELS.UPDATE_PROJECT_KITS, async (event, id, input) => {
+    assertTrustedSender(event, mainWindow);
+    if (CHAT.isBusy()) throw new Error('Stop the agent or wait for its reply before changing project kits.');
+    const projectId = validateOpaqueId(id, 'Project ID');
+    const options = validateProjectKits(input);
+    const previousKits = CANVASES.getProjectKits(projectId).kits;
+    assertInstalledKits(options.kits.filter((kit) => !previousKits.includes(kit)), CANVAS_KIT_BUNDLES);
+    const result = await requireCanvasView().updateProjectKits(projectId, options);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, { type: 'project-kits', ...result });
+    if (requireCanvasView().getCurrentCanvasId() === projectId) emitCanvasSaved(CANVASES.get(projectId));
+    return result;
   });
   canvasHandle(IPC_CHANNELS.CREATE_PROJECT_DOCUMENT, async (event, id, input) => {
     assertTrustedSender(event, mainWindow);
@@ -541,7 +595,7 @@ function registerIpcHandlers() {
   });
   ipcMain.handle(IPC_CHANNELS.GET_PROJECT_ASSET, async (event, id, assetId) => {
     assertTrustedSender(event, mainWindow);
-    return publicAsset(await CANVASES.getAsset(validateOpaqueId(id, 'Project ID'), validateProjectAssetId(assetId)));
+    return publicAsset(await projectMedia(validateOpaqueId(id, 'Project ID'), validateProjectAssetId(assetId)));
   });
   ipcMain.handle(IPC_CHANNELS.GET_LIBRARY_ASSET, async (event, id) => {
     assertTrustedSender(event, mainWindow);
@@ -558,7 +612,7 @@ function registerIpcHandlers() {
   });
   ipcMain.handle(IPC_CHANNELS.SAVE_PROJECT_ASSET, async (event, id, assetId) => {
     assertTrustedSender(event, mainWindow);
-    const asset = await CANVASES.getAsset(validateOpaqueId(id, 'Project ID'), validateProjectAssetId(assetId));
+    const asset = await projectMedia(validateOpaqueId(id, 'Project ID'), validateProjectAssetId(assetId));
     return saveAssetDownload(asset);
   });
   ipcMain.handle(IPC_CHANNELS.HIDE_CANVAS_PREVIEW, async (event) => {
@@ -674,7 +728,7 @@ function registerIpcHandlers() {
   });
   ipcMain.handle(IPC_CHANNELS.LIST_INSTALLED_SKILLS, (event) => {
     assertTrustedSender(event, mainWindow);
-    return readInstalledSkills(path.join(app.getAppPath(), '.agents', 'skills'));
+    return readInstalledSkills(path.join(app.getAppPath(), '.agents', 'skills'), { availableKits: availableCanvasKits(CANVAS_KIT_BUNDLES) });
   });
   ipcMain.handle(IPC_CHANNELS.SAVE_SETTINGS, (event, input) => {
     assertTrustedSender(event, mainWindow);
@@ -683,6 +737,7 @@ function registerIpcHandlers() {
   ipcMain.handle(IPC_CHANNELS.SEND_MESSAGE, async (event, input, options) => {
     assertTrustedSender(event, mainWindow);
     const chatOptions = validateChatOptions(options);
+    if (chatOptions.skills.length) assertHarnessSkills(chatOptions.skills, readInstalledSkills(path.join(app.getAppPath(), '.agents', 'skills'), { availableKits: availableCanvasKits(CANVAS_KIT_BUNDLES) }));
     const message = typeof input === 'string' && input.trim() ? validateChatMessage(input) : '';
     if (!message && !chatOptions.attachments?.length) throw new Error('Message or attachment is required.');
     return CHAT.sendMessage(message, chatOptions);
@@ -696,10 +751,16 @@ function registerIpcHandlers() {
     CHAT.clearHistory();
     return { ok: true };
   });
-  ipcMain.handle(IPC_CHANNELS.GET_CHAT, (event) => {
+  ipcMain.handle(IPC_CHANNELS.GET_CHAT, (event, options = {}) => {
     assertTrustedSender(event, mainWindow);
+    if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some((key) => key !== 'deferResume') || options.deferResume !== undefined && typeof options.deferResume !== 'boolean') throw new Error('Chat restoration options are invalid.');
+    const snapshot = CHAT.getCurrentChat(options);
     CHAT.recoverCanvasInputs();
-    return CHAT.getCurrentChat();
+    return snapshot;
+  });
+  ipcMain.handle(IPC_CHANNELS.ACKNOWLEDGE_CHAT, (event, id) => {
+    assertTrustedSender(event, mainWindow);
+    return CHAT.acknowledgeChat(id === '' ? '' : validateOpaqueId(id, 'Chat ID'));
   });
   ipcMain.handle(IPC_CHANNELS.LIST_CHATS, (event) => {
     assertTrustedSender(event, mainWindow);
@@ -879,6 +940,7 @@ async function createWindow() {
       // Keep the native view alive until the stopped turn finishes its host edits.
       await CHAT.shutdown();
       await JOB_MONITOR.stop();
+      await VIDEO_METADATA.close();
       await withCanvas(async (controller) => {
         if (controller.getCurrentCanvasId()) await controller.saveCurrent();
       });
@@ -904,9 +966,10 @@ async function createWindow() {
 app.whenReady().then(async () => {
   registerIpcHandlers();
   await createWindow();
+  VIDEO_METADATA.backfill({ jobs: MEDIA_JOBS.list({ raw: true }) }).catch(() => {});
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    if (!mainWindow || mainWindow.isDestroyed()) {
       createWindow();
     }
   });

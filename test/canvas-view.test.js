@@ -1,7 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { createCanvasView } = require('../src/canvas-view');
+const { createCanvasStore } = require('../src/canvas-store');
 
 function createFakeViewDependencies() {
   const state = { options: null, commands: [], visible: false, bounds: null, url: '', events: {}, detached: false, evaluateValue: '{"ok":true}' };
@@ -12,6 +16,10 @@ function createFakeViewDependencies() {
     detach() { attached = false; state.detached = true; },
     async sendCommand(method, params) {
       state.commands.push({ method, params });
+      if (state.commandHandler) {
+        const overridden = state.commandHandler(method, params);
+        if (overridden !== undefined) return overridden;
+      }
       if (method === 'Runtime.evaluate' && params.expression.includes('return clone.outerHTML')) {
         return { result: { value: '<html><head><title>Saved</title></head><body><h1>snapshot</h1></body></html>' } };
       }
@@ -199,4 +207,95 @@ test('migrates legacy asset-scheme images to embedded data URLs when opening sav
   assert.match(savedHtml, /texture\.src = "data:image\/png;base64,YWJj"/);
   assert.doesNotMatch(savedHtml, /asset:\/\//);
   canvas.destroy();
+});
+
+async function projectKitViewFixture(t) {
+  const fake = createFakeViewDependencies();
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-project-kit-view-'));
+  const store = createCanvasStore({ userDataPath, kitBundles: { tone: 'window.Tone = {};', three: 'window.THREE = {};' } });
+  const project = store.createProject({ title: 'Kit selection' });
+  const second = store.createDocument(project.id, { title: 'Second', html: '<main>Second canvas</main>' });
+  const canvas = await createCanvasView({ WebContentsView: fake.WebContentsView, sessionFactory: async () => ({ session: fake.session }), canvasStore: store });
+  t.after(() => { canvas.destroy(); fs.rmSync(userDataPath, { recursive: true, force: true }); });
+  return { fake, store, project, second, canvas };
+}
+
+test('project kit changes reload the current HTML once with managed cleanup and preserved state', async (t) => {
+  const { fake, store, project, second, canvas } = await projectKitViewFixture(t);
+  await canvas.openSaved(project.id, second.documentPath);
+  fake.state.commandHandler = (method, params) => method === 'Runtime.evaluate' && params.expression.includes('captureState()')
+    ? { result: { value: '{"apps":[{"id":"scene","state":{"rotation":5}}],"controls":[]}' } } : undefined;
+  const writesBefore = fake.state.commands.filter((command) => command.params?.expression?.includes('document.open()')).length;
+  const generationBefore = canvas.getContract().runtimeGeneration;
+  const result = await canvas.updateProjectKits(project.id, { kits: ['canvas-2d', 'three'], expectedProjectRevision: store.getProjectKits(project.id).projectRevision });
+  assert.equal(result.ok, true);
+  assert.equal(result.applied, true);
+  assert.equal(result.preservedState, true);
+  assert.equal(result.sourcePendingReload, false);
+  assert.equal(result.documentPath, second.documentPath);
+  assert.equal(canvas.getCurrentDocumentPath(), second.documentPath);
+  assert.equal(canvas.getContract().runtimeGeneration, generationBefore + 1);
+  const writes = fake.state.commands.filter((command) => command.params?.expression?.includes('document.open()'));
+  assert.equal(writes.length, writesBefore + 1);
+  assert.match(writes.at(-1).params.expression, /__easelPreservedState/);
+  assert.match(writes.at(-1).params.expression, /rotation/);
+  assert.equal(fake.state.commands.filter((command) => command.params?.expression?.includes('window.EaselCanvas.cleanup()')).length, 1);
+  assert.deepEqual(store.getProjectKits(project.id).kits, ['canvas-2d', 'three']);
+});
+
+test('inactive project kit changes persist without touching the current runtime', async (t) => {
+  const { fake, store, project, canvas } = await projectKitViewFixture(t);
+  await canvas.openSaved(project.id);
+  const inactive = store.createProject({ title: 'Inactive' });
+  const commandsBefore = fake.state.commands.length;
+  const result = await canvas.updateProjectKits(inactive.id, { kits: ['canvas-2d'] });
+  assert.equal(result.applied, false);
+  assert.equal(result.sourcePendingReload, false);
+  assert.equal(fake.state.commands.length, commandsBefore);
+  assert.equal(canvas.getCurrentCanvasId(), project.id);
+  assert.deepEqual(store.getProjectKits(inactive.id).kits, ['canvas-2d']);
+  assert.deepEqual(store.getProjectKits(project.id).kits, ['canvas-2d', 'tone']);
+});
+
+test('unchanged project kits avoid reload and stale revisions never change source or runtime', async (t) => {
+  const { fake, store, project, canvas } = await projectKitViewFixture(t);
+  await canvas.openSaved(project.id);
+  const before = store.getProjectKits(project.id);
+  const commandsBefore = fake.state.commands.length;
+  const unchanged = await canvas.updateProjectKits(project.id, { kits: before.kits, expectedProjectRevision: before.projectRevision });
+  assert.equal(unchanged.changed, false);
+  assert.equal(unchanged.applied, false);
+  assert.equal(fake.state.commands.length, commandsBefore);
+  store.writeFile(project.id, { path: 'notes.txt', content: 'Concurrent source edit' });
+  await assert.rejects(canvas.updateProjectKits(project.id, { kits: [], expectedProjectRevision: before.projectRevision }), /project changed/);
+  assert.deepEqual(store.getProjectKits(project.id).kits, before.kits);
+  assert.equal(fake.state.commands.length, commandsBefore);
+  await assert.rejects(canvas.updateProjectKits(project.id, {}), /must be an array/);
+});
+
+test('project kit reload failure reports saved selection and keeps the pending reload flag', async (t) => {
+  const { fake, store, project, canvas } = await projectKitViewFixture(t);
+  await canvas.openSaved(project.id);
+  fake.state.commandHandler = (method, params) => {
+    if (method === 'Runtime.evaluate' && params.expression.includes('document.open()')) throw new Error('Renderer failed to initialize');
+  };
+  const result = await canvas.updateProjectKits(project.id, { kits: ['canvas-2d'] });
+  assert.equal(result.ok, true);
+  assert.equal(result.applied, false);
+  assert.equal(result.sourcePendingReload, true);
+  assert.match(result.runtimeWarning, /saved.*Reopen.*Renderer failed/);
+  assert.deepEqual(store.getProjectKits(project.id).kits, ['canvas-2d']);
+  assert.equal(canvas.getContract().sourcePendingReload, true);
+});
+
+test('project kit reload keeps a hidden preview hidden and accepts legacy runtime without managed state', async (t) => {
+  const { fake, project, canvas } = await projectKitViewFixture(t);
+  await canvas.openSaved(project.id);
+  await canvas.hide();
+  fake.state.commandHandler = (method, params) => method === 'Runtime.evaluate' && params.expression.includes('captureState()') ? { result: { value: 'null' } } : undefined;
+  const result = await canvas.updateProjectKits(project.id, { kits: ['canvas-2d'] });
+  assert.equal(result.applied, true);
+  assert.equal(result.preservedState, false);
+  assert.equal(canvas.getContract().previewHidden, true);
+  assert.equal(fake.state.visible, false);
 });

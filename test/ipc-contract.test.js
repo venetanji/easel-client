@@ -6,6 +6,7 @@ const {
   validateCanvasBounds,
   validateCanvasTitle,
   validateCanvasKits,
+  validateProjectKits,
   validateChatMessage,
   validateOpaqueId,
   validateSettingsInput,
@@ -43,6 +44,14 @@ test('accepts only offline canvas kits at the IPC boundary', () => {
   assert.throws(() => validateCanvasKits(['https://cdn.example/tone.js']), /kit preference is invalid/i);
   assert.throws(() => validateCanvasKits(['strudel']), /kit preference is invalid/i);
   assert.throws(() => validateCanvasKits(Array(8).fill('tone')), /kit preferences are invalid/i);
+});
+
+test('project kit updates require an explicit selection and the inspected revision', () => {
+  const revision = 'a'.repeat(64);
+  assert.deepEqual(validateProjectKits({ kits: [], expectedProjectRevision: revision }), { kits: [], expectedProjectRevision: revision });
+  assert.throws(() => validateProjectKits({ kits: ['tone'] }), /Read the project/);
+  assert.throws(() => validateProjectKits({ expectedProjectRevision: revision }), /invalid/);
+  assert.throws(() => validateProjectKits({ kits: ['tone'], expectedProjectRevision: revision, reload: false }), /invalid/);
 });
 
 test('validates opaque library IDs and bounded canvas layout rectangles', () => {

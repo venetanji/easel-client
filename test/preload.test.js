@@ -36,12 +36,12 @@ test('preload exposes a narrow frozen API without secret getters', async () => {
   const api = exposed.easelClient;
 
   assert.deepEqual(Object.keys(api).sort(), [
-    'addAssetToCanvas', 'attachProjectAsset', 'checkModelCapabilities', 'clearChat', 'closeCanvas', 'createCanvas', 'createProject', 'createProjectDocument',
-    'deleteLibraryAsset', 'deleteMediaJob', 'deleteProject', 'deleteProjectAsset', 'deleteProjectFile', 'exportCanvas', 'exportProject', 'getCurrentChat', 'getLibraryAsset', 'getModelCatalog', 'getProjectAsset', 'getProjectAssets', 'getSettings', 'hideCanvasPreview',
+    'acknowledgeChat', 'addAssetToCanvas', 'attachProjectAsset', 'checkModelCapabilities', 'clearChat', 'closeCanvas', 'createCanvas', 'createProject', 'createProjectDocument',
+    'deleteLibraryAsset', 'deleteMediaJob', 'deleteProject', 'deleteProjectAsset', 'deleteProjectFile', 'exportCanvas', 'exportProject', 'getAvailableKits', 'getCurrentChat', 'getLibraryAsset', 'getModelCatalog', 'getProjectAsset', 'getProjectAssets', 'getProjectKits', 'getSettings', 'hideCanvasPreview',
     'listAssets', 'listCanvasFiles', 'listCanvasInputs', 'listCanvases', 'listChats', 'listInstalledSkills', 'listLiteLLMModels', 'listMediaJobs', 'listProjectDocuments', 'manageCanvasDevices',
     'onAgentEvent', 'openCanvas', 'openChat', 'openExternal', 'openProjectDocument', 'readCanvasFile', 'removeConnection', 'renameProject', 'retryCanvasInput', 'retryMediaJob',
     'saveCanvas', 'saveConnection', 'saveLibraryAsset', 'saveProjectAsset', 'saveSettings', 'selectModel', 'sendMessage', 'setCanvasBounds', 'stopAgent',
-    'testLiteLLMChat', 'testLiteLLMImage', 'undoCanvas', 'updateModel',
+    'testLiteLLMChat', 'testLiteLLMImage', 'undoCanvas', 'updateModel', 'updateProjectKits',
   ]);
   assert.equal(Object.isFrozen(api), true);
   await api.getSettings();

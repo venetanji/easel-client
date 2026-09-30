@@ -85,13 +85,11 @@ function resultSummary(count) {
 }
 
 const SKILL_STORAGE_KEY = 'easel-studio.skills.v1';
-const KIT_STORAGE_KEY = 'easel-studio.canvas-kits.v1';
 const OPEN_CANVAS_STORAGE_KEY = 'easel-studio.open-canvases.v1';
 const WORKBENCH_WIDTH_STORAGE_KEY = 'easel-studio.workbench-width.v1';
 const MAX_LOCAL_SKILLS = 64;
 const MAX_SKILL_INSTRUCTIONS = 32_000;
 const MAX_ACTIVE_SKILL_INSTRUCTIONS = 48_000;
-const LOCAL_RUNTIME_KITS = Object.freeze(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone', 'p5']);
 const DEFAULT_RUNTIME_KITS = Object.freeze(['canvas-2d', 'tone']);
 const MAX_PENDING_ATTACHMENTS = 6;
 const MAX_MEDIA_FILE_BYTES = 32 * 1024 * 1024;
@@ -105,23 +103,6 @@ const MEDIA_MIME_TYPES = Object.freeze({
   'video/mp4': 'video',
   'video/webm': 'video',
 });
-
-function readLocalKits(storage = typeof localStorage === 'undefined' ? null : localStorage) {
-  if (!storage) return [...DEFAULT_RUNTIME_KITS];
-  try {
-    const saved = JSON.parse(storage.getItem(KIT_STORAGE_KEY) || JSON.stringify(DEFAULT_RUNTIME_KITS));
-    return [...new Set(['canvas-2d', ...(Array.isArray(saved) ? saved.filter((kit) => LOCAL_RUNTIME_KITS.includes(kit)) : [])])];
-  } catch {
-    return [...DEFAULT_RUNTIME_KITS];
-  }
-}
-
-function writeLocalKits(kits, storage = typeof localStorage === 'undefined' ? null : localStorage) {
-  if (!storage) throw new Error('Local kit preferences are unavailable.');
-  const selected = [...new Set(['canvas-2d', ...(Array.isArray(kits) ? kits.filter((kit) => LOCAL_RUNTIME_KITS.includes(kit)) : [])])];
-  storage.setItem(KIT_STORAGE_KEY, JSON.stringify(selected));
-  return selected;
-}
 
 function readOpenCanvasIds(storage) {
   if (!storage) return [];
@@ -190,7 +171,7 @@ function createSkillId() {
   return `skill-${Date.now().toString(36)}-${random}`;
 }
 
-function renderSkillList({ document, listElement, emptyElement, skills, onToggle, onEdit, onRemove }) {
+function renderSkillList({ document, listElement, emptyElement, skills, onToggle, onEdit, onRemove, compatibility }) {
   const rows = normalizeLocalSkills(skills).map((skill) => {
     const row = document.createElement('div');
     row.className = 'skill-row';
@@ -199,12 +180,21 @@ function renderSkillList({ document, listElement, emptyElement, skills, onToggle
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.checked = skill.enabled;
+    const support = compatibility?.(skill);
+    checkbox.disabled = support?.supported === false;
+    if (support?.reason) toggleLabel.title = support.reason;
     checkbox.setAttribute('aria-label', `Use ${skill.name} in chat`);
     checkbox.addEventListener('change', () => onToggle?.(skill.id, checkbox.checked));
     toggleLabel.append(checkbox);
     const name = document.createElement('span');
     name.className = 'skill-row-name';
     name.textContent = skill.name;
+    if (support?.reason) {
+      const note = document.createElement('small');
+      note.className = 'skill-compatibility-note';
+      note.textContent = support.reason;
+      name.append(note);
+    }
     const edit = createButton(document, 'Edit', 'button quiet small', () => onEdit?.(skill));
     edit.setAttribute('aria-label', `Edit ${skill.name}`);
     const remove = createButton(document, 'Remove', 'button quiet small', () => onRemove?.(skill));
@@ -283,7 +273,7 @@ function renderAssistantAssetLinks(document, content, text, assetPreviews, pendi
   return { resolvedAssetIds, hasText: content.textContent.trim().length > 0 };
 }
 
-function appendMediaPreviewMessage(document, messagesElement, event, onAddToCanvas) {
+function appendMediaPreviewMessage(document, messagesElement, event, onAddToCanvas, options = {}) {
   const shouldFollow = messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight < 56;
   const message = document.createElement('article');
   message.className = 'message assistant message-media';
@@ -292,18 +282,80 @@ function appendMediaPreviewMessage(document, messagesElement, event, onAddToCanv
   figure.className = 'message-asset-preview';
   const kind = /^(video|audio)\//.exec(event.mimeType || '')?.[1] || 'image';
   const image = document.createElement(kind === 'image' ? 'img' : kind);
-  image.src = `data:${event.mimeType};base64,${event.data}`;
+  const inline = typeof event.data === 'string' && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(event.data);
+  if (inline) image.src = `data:${event.mimeType};base64,${event.data}`;
   const label = event.name || `Generated ${kind}`;
   image.alt = label;
   image.setAttribute('aria-label', label);
   if (kind !== 'image') {
     image.controls = true;
-    image.preload = 'metadata';
+    image.preload = inline ? 'metadata' : 'none';
     if (kind === 'video') image.playsInline = true;
+  }
+  const poster = normalizeResultSource(event.thumbnail || event.thumbnailDataUrl);
+  if (poster) {
+    if (kind === 'video') image.poster = poster;
+    else if (kind === 'image' && !inline) image.src = poster;
+  }
+  const visual = document.createElement('div');
+  visual.className = 'message-media-visual';
+  visual.append(image);
+  if (options.newMedia) {
+    const badge = document.createElement('span');
+    badge.className = 'message-media-badge';
+    badge.textContent = `New ${kind}`;
+    visual.append(badge);
   }
   const caption = document.createElement('figcaption');
   caption.textContent = label;
-  figure.append(image, caption);
+  figure.append(visual, caption);
+  let disposed = false;
+  let loading;
+  let objectUrl = '';
+  let playButton;
+  const error = document.createElement('p');
+  error.className = 'message-media-error';
+  error.hidden = true;
+  async function load(play = false) {
+    if (disposed) return;
+    if (!inline && !objectUrl) {
+      if (!options.loadAsset) throw new Error('Open this media from the Media drawer to play it.');
+      if (!loading) loading = Promise.resolve(options.loadAsset(event)).then((asset) => {
+        if (disposed) return;
+        if (asset.mimeType !== event.mimeType || typeof asset.data !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.data)) throw new Error('The saved media could not be read.');
+        const bytes = Uint8Array.from(atob(asset.data), (character) => character.charCodeAt(0));
+        objectUrl = URL.createObjectURL(new Blob([bytes], { type: asset.mimeType }));
+        options.objectUrls?.add(objectUrl);
+        image.src = objectUrl;
+        image.preload = 'metadata';
+      }).finally(() => { loading = null; });
+      await loading;
+    }
+    if (disposed) return;
+    options.onSeen?.(event.assetId);
+    if (play && kind !== 'image') {
+      try { await image.play(); if (playButton) playButton.hidden = true; }
+      catch { if (playButton) playButton.textContent = `Play ${kind}`; }
+    }
+  }
+  if (!inline && kind !== 'image') {
+    playButton = createButton(document, `Play ${kind}`, 'message-media-play', async () => {
+      playButton.disabled = true;
+      playButton.textContent = 'Loading...';
+      error.hidden = true;
+      try { await load(true); }
+      catch (failure) { error.textContent = failure.message || 'Media could not load. Try again.'; error.hidden = false; }
+      finally { playButton.disabled = false; playButton.textContent = `Play ${kind}`; }
+    });
+    playButton.setAttribute('aria-label', `Play ${label}`);
+    visual.append(playButton);
+  }
+  image.addEventListener('play', () => { options.onSeen?.(event.assetId); if (playButton) playButton.hidden = true; });
+  image.addEventListener('error', () => {
+    if (disposed) return;
+    error.textContent = `This ${kind} could not be decoded. Download it to open in another player.`;
+    error.hidden = false;
+  });
   let add;
   if (onAddToCanvas) {
     add = createButton(document, 'Add to project', 'message-asset-add', () => onAddToCanvas(event.assetId, add));
@@ -311,9 +363,76 @@ function appendMediaPreviewMessage(document, messagesElement, event, onAddToCanv
   }
   message.append(figure);
   if (add) message.append(add);
+  if (options.onOpen || options.onDownload || options.onUse) {
+    const actions = document.createElement('div');
+    actions.className = 'message-media-actions';
+    for (const [text, action] of [['Open in viewer', options.onOpen], ['Download', options.onDownload], ['Use in chat', options.onUse]]) {
+      if (!action) continue;
+      const button = createButton(document, text, 'button quiet small', async () => {
+        button.disabled = true;
+        error.hidden = true;
+        try { await action(event); }
+        catch (failure) { error.textContent = failure.message || 'This action failed. Try again.'; error.hidden = false; }
+        finally { button.disabled = false; }
+      });
+      actions.append(button);
+    }
+    message.append(actions);
+  }
+  message.append(error);
   messagesElement.append(message);
   if (shouldFollow) messagesElement.scrollTop = messagesElement.scrollHeight;
-  return { image, caption, message, addButton: add };
+  return { image, caption, message, addButton: add, load,
+    dispose() {
+      disposed = true;
+      if (kind !== 'image') { image.pause(); image.removeAttribute('src'); image.load(); }
+      if (objectUrl) { URL.revokeObjectURL(objectUrl); options.objectUrls?.delete(objectUrl); objectUrl = ''; }
+    } };
+}
+
+function appendReadyMediaCards({ document, messagesElement, event, assetPreviews, options = {} }) {
+  let added = 0;
+  const assets = event.assets || event.result?.assets || event.job?.assets || [];
+  for (const asset of assets) {
+    const assetId = asset.assetId || asset.id;
+    if (!/^[a-f0-9]{32}$/i.test(assetId || '') || !['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm', 'audio/wav', 'audio/mpeg'].includes(asset.mimeType) || assetPreviews.has(assetId)) continue;
+    const media = { ...asset, assetId, projectId: event.projectId || event.job?.projectId || asset.projectId, name: asset.name || event.job?.name || `Generated ${event.job?.mediaType || 'media'}` };
+    const newMedia = typeof options.newMedia === 'function' ? options.newMedia(assetId) : options.newMedia !== false;
+    const preview = appendMediaPreviewMessage(document, messagesElement, media, null, { ...options, newMedia });
+    assetPreviews.set(assetId, preview);
+    added += 1;
+  }
+  return added;
+}
+
+function canAutoPreviewMedia({ event, activeChatId, projectId, previewKind, busy, draft = '', attachments = 0 }) {
+  const ownerChat = event.chatId || event.job?.chatId;
+  const ownerProject = event.projectId || event.job?.projectId;
+  return Boolean(ownerChat && ownerChat === activeChatId && (!projectId || ownerProject === projectId) && previewKind === 'empty' && !busy && !draft.trim() && attachments === 0);
+}
+
+function renderInstalledKitCatalog(document, listElement, catalog) {
+  listElement.replaceChildren(...catalog.map((kit) => {
+    const row = document.createElement('div');
+    row.className = 'kit-availability';
+    const copy = document.createElement('span');
+    const name = document.createElement('strong');
+    name.textContent = kit.name;
+    const description = document.createElement('small');
+    description.textContent = kit.description;
+    copy.append(name, description);
+    const status = document.createElement('span');
+    status.className = `runtime-badge${kit.installed ? ' active' : ''}`;
+    status.textContent = kit.installed ? kit.version ? `Installed ${kit.version}` : 'Installed' : 'Unavailable';
+    row.append(copy, status);
+    return row;
+  }));
+}
+
+function skillCompatibility(skill, installedSkills) {
+  const installed = installedSkills.find((item) => `pack-${item.id}` === skill?.id || item.name.trim().toLowerCase() === skill?.name?.trim().toLowerCase());
+  if (!installed && !skill?.id?.startsWith('pack-')) return { supported: true, reason: 'Custom instructions; compatibility has not been reviewed.' };
+  return { supported: installed?.compatibility === 'supported', reason: installed?.compatibility === 'supported' ? '' : installed?.reason || 'This installed recipe is unavailable in the client.' };
 }
 
 let assistantMarkdown;
@@ -574,7 +693,7 @@ async function undoCanvas({ client, canvasId, statusElement, onCanvasChange }) {
   }
 }
 
-function renderAgentEvent({ document, messagesElement, imagesElement, event, statusElement, activityElement, activityLabel, copyText, assetPreviews, pendingAssetCaptions, onLibraryRefresh, onCanvasChange, onCapabilities, onAddToCanvas, onImageReady }) {
+function renderAgentEvent({ document, messagesElement, imagesElement, event, statusElement, activityElement, activityLabel, copyText, assetPreviews, pendingAssetCaptions, onLibraryRefresh, onCanvasChange, onCapabilities, onAddToCanvas, onImageReady, mediaPreviewOptions }) {
   if (!event || typeof event.type !== 'string') return;
   if (event.type === 'capabilities') {
     onCapabilities?.(Array.isArray(event.tools) ? event.tools : []);
@@ -597,11 +716,12 @@ function renderAgentEvent({ document, messagesElement, imagesElement, event, sta
     return;
   }
   if (event.type === 'image' || (event.type === 'media' && event.generated)) {
-    if (typeof event.data !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(event.data)) return;
+    if (event.data !== undefined && (typeof event.data !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(event.data))) return;
     if (!['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm', 'audio/wav', 'audio/mpeg'].includes(event.mimeType)) return;
     if (messagesElement && assetPreviews instanceof Map && /^[a-f0-9]{32}$/i.test(event.assetId || '')) {
       const assetId = event.assetId.toLowerCase();
-      const preview = appendMediaPreviewMessage(document, messagesElement, event, onAddToCanvas);
+      if (assetPreviews.has(assetId)) return;
+      const preview = appendMediaPreviewMessage(document, messagesElement, event, onAddToCanvas, mediaPreviewOptions);
       const caption = pendingAssetCaptions?.get(assetId);
       if (caption) {
         preview.image.alt = caption;
@@ -610,7 +730,7 @@ function renderAgentEvent({ document, messagesElement, imagesElement, event, sta
       }
       assetPreviews.set(assetId, preview);
       onImageReady?.({ assetId, preview });
-    } else if (imagesElement) {
+    } else if (imagesElement && typeof event.data === 'string') {
       const card = document.createElement('figure');
       card.className = 'image-result';
       const image = document.createElement('img');
@@ -853,7 +973,7 @@ function wireRenderer({ document, client }) {
   const activityLabel = document.getElementById('agent-activity-label');
   const messagesElement = document.getElementById('messages');
   const activitySettings = document.getElementById('settings-open');
-  const kitOptions = [...document.querySelectorAll('[data-kit]')];
+  const installedKitList = document.getElementById('installed-kit-list');
   const leftColumn = document.querySelector('.left-column');
   const studio = document.querySelector('.studio');
   const workbenchSplitter = document.getElementById('workbench-splitter');
@@ -908,11 +1028,9 @@ function wireRenderer({ document, client }) {
   let pendingAttachments = [];
   const messageObjectUrls = new Set();
   let localSkills = readLocalSkills(storage);
-  let localKits = readLocalKits(storage);
   let installedSkills = [];
   let editingSkillId = '';
   let savedSettings = { litellmModel: '', activeConnectionId: '', connections: [] };
-  let returnToNewCanvas = false;
   let nativeDialogOpen = false;
   let filesCanvasId = '';
   let fileReadVersion = 0;
@@ -920,6 +1038,7 @@ function wireRenderer({ document, client }) {
   let fileDeleting = false;
   let currentFilePage = null;
   let themedDropdowns = [];
+  const notifiedMediaJobs = new Set();
   const workspace = createProjectWorkspace({
     document, client, storage,
     onSelection: updateCanvasState,
@@ -943,6 +1062,58 @@ function wireRenderer({ document, client }) {
     },
     isBusy: () => chatBusy || canvasResumeBusy,
   });
+  async function loadChatMedia(asset) {
+    try { return await client.getLibraryAsset(asset.assetId); }
+    catch (error) {
+      if (!asset.projectId) throw error;
+      return client.getProjectAsset(asset.projectId, asset.assetId);
+    }
+  }
+  const mediaPreviewOptions = {
+    loadAsset: loadChatMedia,
+    objectUrls: messageObjectUrls,
+    newMedia: (assetId) => workspace.isMediaNew(assetId),
+    onSeen: (assetId) => {
+      workspace.markMediaSeen(assetId);
+      const badge = assetPreviews.get(assetId)?.message.querySelector('.message-media-badge');
+      if (badge) badge.hidden = true;
+    },
+    onOpen: async (asset) => {
+      await workspace.openMediaReference(asset);
+      mediaPreviewOptions.onSeen(asset.assetId);
+    },
+    onDownload: async (asset) => {
+      nativeDialogOpen = true;
+      updateCanvasBounds();
+      try { await client.saveLibraryAsset(asset.assetId); }
+      finally { nativeDialogOpen = false; updateCanvasBounds(); }
+    },
+    onUse: async (asset) => {
+      if (chatBusy || canvasResumeBusy) throw new Error('Wait for the current reply before adding a reference.');
+      const full = await loadChatMedia(asset);
+      if (chatBusy || canvasResumeBusy) throw new Error('Wait for the current reply before adding a reference.');
+      const bytes = Uint8Array.from(atob(full.data), (character) => character.charCodeAt(0));
+      await addAttachmentFiles([new File([bytes], full.name || asset.name, { type: full.mimeType })]);
+      mediaPreviewOptions.onSeen(asset.assetId);
+      showConversation();
+    },
+  };
+  function disposeMediaPreviews() {
+    for (const preview of assetPreviews.values()) preview.dispose?.();
+    assetPreviews.clear();
+  }
+  function showReadyMedia(event, { automatic = true } = {}) {
+    workspace.announceMediaReady(event);
+    if ((event.chatId || event.job?.chatId) !== activeChatId) return;
+    const added = appendReadyMediaCards({ document, messagesElement, event, assetPreviews, options: mediaPreviewOptions });
+    if (added) receivedMessage();
+    const canOpen = () => canAutoPreviewMedia({ event, activeChatId, projectId: workspace.getProjectId(), previewKind: workspace.getPreviewKind(),
+      busy: chatBusy || canvasResumeBusy, draft: messageInput.value, attachments: pendingAttachments.length });
+    const assets = event.assets || event.result?.assets || event.job?.assets || [];
+    if (automatic && added && canOpen() && assets[0]) workspace.openMediaReference(assets[0], { onlyWhenEmpty: true, canOpen })
+      .then((opened) => { if (opened) mediaPreviewOptions.onSeen(assets[0].assetId || assets[0].id); })
+      .catch((error) => setStatus(statusElement, `Media saved. Open it from Media to preview it: ${error.message}`, true));
+  }
   themedDropdowns = [...document.querySelectorAll('select')].map((select) => createThemedDropdown(select, { onOpenChange: updateCanvasBounds }));
 
   function showConversation(focus = true) {
@@ -1375,7 +1546,10 @@ function wireRenderer({ document, client }) {
       listElement: skillList,
       emptyElement: skillEmpty,
       skills: localSkills,
+      compatibility: localSkillCompatibility,
       onToggle: (id, enabled) => {
+        const support = localSkillCompatibility(localSkills.find((skill) => skill.id === id));
+        if (enabled && !support.supported) { setStatus(skillStatus, support.reason, true); refreshSkillUi(); return; }
         const activeCount = localSkills.filter((skill) => skill.enabled).length;
         if (enabled && activeCount >= 8) {
           setStatus(skillStatus, 'Use up to 8 skills in a single request.', true);
@@ -1424,12 +1598,14 @@ function wireRenderer({ document, client }) {
   }
 
   function renderInstalledSkillCatalog() {
-    const rows = installedSkills.map((skill) => {
+    const supported = installedSkills.filter((skill) => skill.compatibility === 'supported');
+    const rows = supported.map((skill) => {
       const row = document.createElement('div');
       row.className = 'installed-skill-row';
       const name = document.createElement('span');
       name.className = 'installed-skill-name';
       name.textContent = skill.name;
+      name.title = [skill.description, skill.requiredKits?.length ? `Uses project kits: ${skill.requiredKits.join(', ')}.` : ''].filter(Boolean).join(' ');
       if (skill.truncated) name.title = 'The full skill is longer than the per-skill prompt limit; only its first 32,000 characters are available.';
       const skillId = `pack-${skill.id}`;
       const exists = localSkills.some((item) => item.id === skillId);
@@ -1455,13 +1631,33 @@ function wireRenderer({ document, client }) {
       row.append(name, add);
       return row;
     });
+    const unavailable = installedSkills.filter((skill) => skill.compatibility !== 'supported');
+    if (unavailable.length) {
+      const details = document.createElement('details');
+      details.className = 'unavailable-skills';
+      const summary = document.createElement('summary');
+      summary.textContent = `${unavailable.length} unavailable recipes`;
+      details.append(summary);
+      for (const skill of unavailable) {
+        const item = document.createElement('p');
+        item.textContent = `${skill.name}: ${skill.reason || 'Compatibility with this client has not been reviewed.'}`;
+        details.append(item);
+      }
+      rows.push(details);
+    }
     installedSkillList.replaceChildren(...rows);
-    installedSkillCount.textContent = `${installedSkills.length} available`;
+    installedSkillCount.textContent = `${supported.length} compatible`;
+  }
+  function localSkillCompatibility(skill) {
+    return skillCompatibility(skill, installedSkills);
   }
 
   async function refreshInstalledSkillCatalog() {
     try {
       installedSkills = await client.listInstalledSkills();
+      const next = localSkills.map((skill) => skill.enabled && !localSkillCompatibility(skill).supported ? { ...skill, enabled: false } : skill);
+      if (next.some((skill, index) => skill.enabled !== localSkills[index].enabled)) localSkills = writeLocalSkills(next, storage);
+      refreshSkillUi();
       renderInstalledSkillCatalog();
     } catch {
       installedSkillCount.textContent = 'Unavailable';
@@ -1624,7 +1820,7 @@ function wireRenderer({ document, client }) {
       if (request.status === 'dispatching') canvasResumeRequests.add(request.id);
     }
     canvasResumeBusy = canvasResumeRequests.size > 0;
-    assetPreviews.clear();
+    disposeMediaPreviews();
     pendingAssetCaptions.clear();
     pendingAttachments = [];
     for (const url of messageObjectUrls) URL.revokeObjectURL(url);
@@ -1637,13 +1833,13 @@ function wireRenderer({ document, client }) {
       if (message.role === 'tool' || message.mediaJobResult) {
         try {
           const result = message.mediaJobResult || JSON.parse(message.content);
-          if (message.mediaJobResult) appendTextMessage(document, messagesElement, 'assistant', result.status === 'ready' ? 'Your media is ready.' : `Generation failed: ${result.error || 'The service reported a failure.'}`, { copyText });
-          for (const asset of result.assets || []) {
-            const image = images.get(asset.assetId) || generatedMedia.get(asset.assetId);
-            if (!image || assetPreviews.has(asset.assetId)) continue;
-            const preview = appendMediaPreviewMessage(document, messagesElement, image);
-            assetPreviews.set(asset.assetId, preview);
+          if (message.mediaJobResult && result.status !== 'ready') appendTextMessage(document, messagesElement, 'assistant', `Generation failed: ${result.error || 'The service reported a failure.'}`, { copyText });
+          const assets = (result.assets || []).map((asset) => ({ ...asset, ...(images.get(asset.assetId) || generatedMedia.get(asset.assetId) || {}) }));
+          if (message.mediaJobResult) {
+            workspace.announceMediaReady({ job: result, assets });
+            notifiedMediaJobs.add(message.mediaJobId);
           }
+          appendReadyMediaCards({ document, messagesElement, event: { ...result, chatId: chat.id, assets }, assetPreviews, options: mediaPreviewOptions });
         } catch {}
         continue;
       }
@@ -1680,6 +1876,8 @@ function wireRenderer({ document, client }) {
     if (chat.mediaTruncated && !chat.error) setStatus(statusElement, 'Some older capture previews were omitted. Their saved filenames are still shown.');
     if (canvasResumeBusy) activityLabel.textContent = 'Continuing from your canvas response...';
     updateSendState();
+    if (typeof client.acknowledgeChat === 'function') client.acknowledgeChat(chat.id || '')
+      .catch((error) => setStatus(statusElement, `Chat restored, but the agent could not resume: ${error.message}`, true));
   }
 
   async function refreshChatHistory() {
@@ -1830,7 +2028,7 @@ function wireRenderer({ document, client }) {
         canvasInputNodes.clear();
         canvasAnswerIds.clear();
         notifiedCanvasInputs.clear();
-        assetPreviews.clear();
+        disposeMediaPreviews();
         pendingAssetCaptions.clear();
         const pendingUrls = new Set(pendingAttachments.map((attachment) => attachment.previewUrl));
         for (const url of messageObjectUrls) if (!pendingUrls.has(url)) { URL.revokeObjectURL(url); messageObjectUrls.delete(url); }
@@ -1844,7 +2042,7 @@ function wireRenderer({ document, client }) {
         messagesElement,
         mode: 'chat',
         skills: localSkills.filter((skill) => skill.enabled).map(({ name, instructions }) => ({ name, instructions })),
-        kits: localKits,
+        kits: workspace.getKits(),
         attachments,
         activityElement,
         activityLabel,
@@ -1942,18 +2140,6 @@ function wireRenderer({ document, client }) {
       settingsSections[target].tab.focus();
     });
   }
-  for (const checkbox of kitOptions) {
-    checkbox.checked = localKits.includes(checkbox.dataset.kit);
-    checkbox.addEventListener('change', () => {
-      try {
-        localKits = writeLocalKits(kitOptions.filter((option) => option.checked).map((option) => option.dataset.kit), storage);
-        setStatus(document.getElementById('kit-status'), 'Kit preferences saved for new canvases.');
-      } catch (error) {
-        checkbox.checked = !checkbox.checked;
-        setStatus(document.getElementById('kit-status'), error?.message || 'Could not save kit preferences.', true);
-      }
-    });
-  }
   let workbenchPointerId = null;
   const resizeWorkbenchAt = (clientX) => {
     const bounds = leftColumn.getBoundingClientRect();
@@ -1991,10 +2177,6 @@ function wireRenderer({ document, client }) {
   document.getElementById('settings-close').addEventListener('click', () => settingsDialog.close());
   settingsDialog.addEventListener('close', () => {
     activitySettings.setAttribute('aria-pressed', 'false');
-    if (returnToNewCanvas) {
-      returnToNewCanvas = false;
-      openNewCanvasDialog(creationKind, newCanvasName.value);
-    }
     updateCanvasBounds();
   });
   const openSkills = () => {
@@ -2070,19 +2252,15 @@ function wireRenderer({ document, client }) {
     newCanvasName.placeholder = creationKind === 'document' ? 'e.g. Audio study' : 'e.g. Spring campaign';
     newCanvasDialog.querySelector('.new-canvas-kits').hidden = rename;
     setStatus(newCanvasStatus, '');
-    newCanvasKits.textContent = kitOptions.filter((option) => localKits.includes(option.dataset.kit))
-      .map((option) => option.closest('label').querySelector('strong').textContent).join(', ');
-    newCanvasAudioHint.textContent = localKits.includes('tone')
+    const catalog = workspace.getKitCatalog();
+    const kits = creationKind === 'project' ? DEFAULT_RUNTIME_KITS.filter((id) => !catalog.length || catalog.some((kit) => kit.id === id && kit.installed)) : workspace.getKits();
+    newCanvasKits.textContent = kits.map((id) => catalog.find((kit) => kit.id === id)?.name || (id === 'canvas-2d' ? 'HTML + Canvas 2D' : id === 'tone' ? 'Tone.js' : id)).join(', ');
+    newCanvasAudioHint.textContent = kits.includes('tone')
       ? 'Tone.js is included. Audio starts when you click Play in the canvas.'
-      : 'For audio synthesis, enable Tone.js in Canvas kits before creating this canvas.';
+      : 'Add Tone.js under Project files > Canvas kits for audio synthesis.';
     openDialog(newCanvasDialog, newCanvasName);
   }
   document.getElementById('new-canvas-open').addEventListener('click', () => openNewCanvasDialog('document'));
-  document.getElementById('new-canvas-kits-change').addEventListener('click', () => {
-    returnToNewCanvas = true;
-    newCanvasDialog.close();
-    openSettings('kits');
-  });
   document.getElementById('new-canvas-close').addEventListener('click', () => newCanvasDialog.close());
   newCanvasDialog.addEventListener('close', updateCanvasBounds);
   newCanvasForm.addEventListener('submit', async (event) => {
@@ -2090,7 +2268,7 @@ function wireRenderer({ document, client }) {
     newCanvasSubmit.disabled = true;
     newCanvasSubmit.textContent = creationKind === 'rename' ? 'Saving...' : 'Creating...';
     try {
-      const canvas = await workspace.create(creationKind, newCanvasName.value.trim(), localKits);
+      const canvas = await workspace.create(creationKind, newCanvasName.value.trim());
       newCanvasDialog.close();
       newCanvasName.value = '';
       setStatus(statusElement, creationKind === 'rename' ? 'Project renamed.' : `Created ${canvas.documentTitle || canvas.title}.`);
@@ -2140,7 +2318,7 @@ function wireRenderer({ document, client }) {
         updateSendState();
         messageInput.focus();
       }));
-      assetPreviews.clear();
+      disposeMediaPreviews();
       pendingAssetCaptions.clear();
       pendingAttachments = [];
       for (const objectUrl of messageObjectUrls) URL.revokeObjectURL(objectUrl);
@@ -2168,11 +2346,36 @@ function wireRenderer({ document, client }) {
     }
     if (event.type === 'media-job-removed' || event.type === 'media-job-ready') {
       refreshAssets();
-      if (event.type === 'media-job-ready') receivedMessage();
+      if (event.type === 'media-job-ready') showReadyMedia(event);
       return;
     }
     if (event.type === 'media-job-notification') {
-      if (event.chatId === activeChatId) appendTextMessage(document, messagesElement, 'assistant', event.text, { copyText });
+      showReadyMedia(event);
+      const jobId = event.jobId || event.job?.id;
+      if (event.chatId === activeChatId && !notifiedMediaJobs.has(jobId)) {
+        notifiedMediaJobs.add(jobId);
+        if (event.job?.status === 'failed' || event.result?.status === 'failed') appendTextMessage(document, messagesElement, 'assistant', event.text, { copyText });
+      }
+      return;
+    }
+    if (event.type === 'media-metadata') {
+      refreshAssets();
+      for (const asset of event.assets || []) {
+        const preview = assetPreviews.get(asset.assetId || asset.id);
+        if (!preview) continue;
+        const poster = normalizeResultSource(asset.thumbnail || asset.thumbnailDataUrl);
+        if (poster && asset.mimeType?.startsWith('video/')) preview.image.poster = poster;
+        if (asset.name) {
+          preview.caption.textContent = asset.name;
+          preview.image.alt = asset.name;
+          preview.image.setAttribute('aria-label', asset.name);
+          preview.message.querySelector('.message-media-play')?.setAttribute('aria-label', `Play ${asset.name}`);
+        }
+      }
+      return;
+    }
+    if (event.type === 'project-kits') {
+      if (event.projectId === workspace.getProjectId()) workspace.refreshKits().catch((error) => setStatus(statusElement, error.message, true));
       return;
     }
     if (event.type === 'media-job-resume-start' || event.type === 'media-job-resume-end') {
@@ -2236,6 +2439,7 @@ function wireRenderer({ document, client }) {
       copyText,
       assetPreviews,
       pendingAssetCaptions,
+      mediaPreviewOptions,
       onLibraryRefresh: refreshAssets,
       onCanvasChange: (canvas) => workspace.changed(canvas).catch((error) => setStatus(statusElement, error.message, true)),
       onCapabilities: (tools) => {
@@ -2248,7 +2452,9 @@ function wireRenderer({ document, client }) {
     applySettings(settings);
     return refreshModelCatalog();
   }).catch((error) => setStatus(document.getElementById('connection-status'), error?.message || 'Could not load settings.', true));
-  client.getCurrentChat().then(restoreChat)
+  client.getAvailableKits().then((catalog) => renderInstalledKitCatalog(document, installedKitList, catalog))
+    .catch((error) => setStatus(document.getElementById('kit-status'), error?.message || 'Could not read installed kits.', true));
+  client.getCurrentChat({ deferResume: true }).then(restoreChat)
     .catch((error) => setStatus(statusElement, error?.message || 'Could not restore the last chat.', true))
     .finally(() => {
       chatBusy = false;
@@ -2288,6 +2494,9 @@ function wireRenderer({ document, client }) {
   return {
     dispose() {
       unsubscribe();
+      disposeMediaPreviews();
+      for (const url of messageObjectUrls) URL.revokeObjectURL(url);
+      messageObjectUrls.clear();
       resizeObserver?.disconnect();
       if (typeof window !== 'undefined') {
         window.removeEventListener('resize', handleWindowResize);
@@ -2303,6 +2512,12 @@ function wireRenderer({ document, client }) {
 if (typeof module !== 'undefined') {
   module.exports = {
     appendTextMessage,
+    appendMediaPreviewMessage,
+    appendReadyMediaCards,
+    canAutoPreviewMedia,
+    renderInstalledKitCatalog,
+    renderSkillList,
+    skillCompatibility,
     addAssetToCanvas,
     createCanvas,
     exportCanvas,
