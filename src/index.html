@@ -200,7 +200,7 @@
       .composer-topline { min-height: 38px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 5px 10px; }
       .composer-options { display: flex; flex: 1 1 100%; align-items: center; gap: 7px; min-width: 0; }
       .model-picker { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; color: var(--muted); font-size: 11px; }
-      #chat-model { width: 100%; min-width: 0; min-height: 30px; border: 0; border-radius: 5px; padding: 4px 5px; color: var(--green-deep); background: var(--green-wash); font-size: 12px; font-weight: 600; text-overflow: ellipsis; }
+      #chat-model, #codex-model { width: 100%; min-width: 0; min-height: 30px; border: 0; border-radius: 5px; padding: 4px 5px; color: var(--green-deep); background: var(--green-wash); font-size: 12px; font-weight: 600; text-overflow: ellipsis; }
       #prompt-template { max-width: 130px; min-height: 29px; border: 0; border-radius: 5px; padding: 4px; color: var(--muted); background: transparent; font-size: 11px; }
       #prompt-template:hover { background: var(--green-wash); }
       #chat-model:disabled, #prompt-template:disabled { opacity: .58; }
@@ -301,6 +301,32 @@
       .settings-block-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
       .settings-block-head h4, .endpoint-editor h4 { margin: 0; color: #2d4136; font-size: 13px; font-weight: 700; }
       .settings-block p, .endpoint-detail, .model-catalog p { margin: 5px 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .agent-backends { margin: 15px 19px 0; border: 0; padding: 0; }
+      .agent-backend-option { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: start; gap: 11px; padding: 13px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+      .agent-backend-option input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--green); }
+      .agent-backend-option strong { display: block; color: var(--ink); font-size: 12px; font-weight: 650; }
+      .agent-backend-option small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+      .agent-backend-option:has(input:checked) strong { color: var(--green); }
+      .agent-backend-option:has(input:disabled) { cursor: default; }
+      .agent-detail { margin: 18px 19px; }
+      .agent-detail h4 { margin: 0 0 8px; color: var(--green-deep); font-size: 13px; }
+      .agent-detail p, .agent-control-status { color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .agent-detail p { margin: 7px 0; }
+      .agent-detail .button-row { flex-wrap: wrap; margin-top: 10px; }
+      .agent-connection-url, .agent-setup-command { display: block; max-width: 100%; overflow-wrap: anywhere; color: var(--ink); font: 12px/1.6 Consolas, monospace; }
+      .agent-setup-command { margin: 10px 0; padding: 10px; background: var(--paper-deep); white-space: pre-wrap; }
+      .agent-control-status { min-height: 18px; margin: 10px 19px 18px; }
+      .agent-control-status.error, #agent-codex-error { color: #9d3727; }
+      #agent-mcp-status[data-ready="true"] { color: var(--green); }
+      #agent-mcp-token-field { margin-top: 12px; }
+      #agent-mcp-token { font-family: Consolas, monospace; }
+      #agent-codex-login-panel { margin-top: 15px; border-top: 1px solid var(--line); padding-top: 12px; }
+      #agent-codex-user-code { display: block; margin: 10px 0; color: var(--green-deep); font: 600 24px/1.3 Consolas, monospace; letter-spacing: .04em; }
+      #agent-codex-signout-section { margin-top: 15px; border-top: 1px solid var(--line); padding-top: 12px; }
+      .composer-external { padding: 16px 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .composer-external strong { display: block; color: var(--green-deep); font-size: 13px; }
+      .composer-external p { margin: 5px 0 8px; }
+      .composer-external .button { padding-left: 0; }
       .endpoint-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 13px 0; border-top: 1px solid #e1e6dc; }
       .endpoint-info { flex: 1 1 220px; min-width: 0; }
       .endpoint-name { color: var(--ink); font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
@@ -381,8 +407,8 @@
       .themed-dropdown-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .themed-dropdown-trigger svg { flex: 0 0 auto; width: 13px; height: 13px; color: var(--muted); }
       .themed-dropdown-project-select { flex: 1; max-width: 320px; }
-      .themed-dropdown-chat-model { flex: 1; }
-      .themed-dropdown-chat-model .themed-dropdown-trigger { min-height: 29px; border: 0; padding: 4px 6px; font-size: 11px; }
+      .themed-dropdown-chat-model, .themed-dropdown-codex-model { flex: 1; }
+      .themed-dropdown-chat-model .themed-dropdown-trigger, .themed-dropdown-codex-model .themed-dropdown-trigger { min-height: 29px; border: 0; padding: 4px 6px; font-size: 11px; }
       .themed-dropdown-prompt-template .themed-dropdown-trigger { min-height: 29px; border: 0; padding: 4px 6px; color: var(--muted); background: transparent; font-size: 11px; }
       .themed-dropdown-prompt-template { max-width: 130px; }
       .themed-dropdown-popup { position: fixed; z-index: 1000; display: flex; flex-direction: column; overflow: hidden; border-radius: 8px; padding: 5px; color: var(--ink); background: var(--paper); box-shadow: 0 8px 30px #173b2d38; }
@@ -569,10 +595,12 @@
           <div id="agent-activity" class="agent-activity" role="status" aria-live="polite" hidden><span class="activity-pulse" aria-hidden="true"></span><span id="agent-activity-label">Preparing your image…</span></div>
           <p id="status" role="status" aria-live="polite"></p>
           <form id="chat-form">
+            <div id="composer-external" class="composer-external" hidden><strong>Chat in your connected agent</strong><p>Your external MCP client controls Easel. Keep this window open; your draft and chat history stay here.</p><button id="composer-external-settings" class="button quiet small" type="button">Connection details</button></div>
             <div class="composer">
               <div class="composer-topline">
                 <div class="composer-options">
-                  <label class="model-picker" for="chat-model">Model<select id="chat-model" aria-describedby="status" disabled><option value="">Loading models...</option></select></label>
+                  <label id="builtin-model-picker" class="model-picker" for="chat-model">Model<select id="chat-model" aria-describedby="status" disabled><option value="">Loading models...</option></select></label>
+                  <label id="codex-model-picker" class="model-picker" for="codex-model" hidden>Codex<select id="codex-model" aria-label="Codex model" aria-describedby="status" disabled><option value="">Sign in to choose a model</option></select></label>
                 </div>
                 <button id="attach-media" class="button quiet small" type="button" aria-label="Attach image, audio, or video" title="Attach image, audio, or video"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 8.5 4.1-4.1a2.1 2.1 0 0 1 3 3l-5.4 5.4a3.2 3.2 0 0 1-4.5-4.5l5.4-5.4"/></svg>Attach</button>
                 <input id="media-files" class="sr-only" type="file" multiple accept="image/png,image/jpeg,image/webp,audio/mpeg,audio/wav,video/mp4,video/webm" />
@@ -612,14 +640,40 @@
       </section>
     </main>
     <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
-      <div class="dialog-head"><div><h2 id="settings-title">Settings</h2><p class="dialog-description">Manage credentials, available models, creative skills, and canvas kits.</p></div><button id="settings-close" class="button outline small" type="button">Done</button></div>
+      <div class="dialog-head"><div><h2 id="settings-title">Settings</h2><p class="dialog-description">Manage your agent, credentials, models, creative skills, and canvas kits.</p></div><button id="settings-close" class="button outline small" type="button">Done</button></div>
       <div class="settings-shell">
         <nav class="settings-nav" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
+          <button id="settings-tab-agent" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-agent"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="14" height="10" rx="3"/><path d="M10 3v3M7 10v1m6-1v1M7 14h6M1 10v3m18-3v3"/></svg>Agent</button>
           <button id="settings-tab-credentials" class="settings-tab" type="button" role="tab" aria-selected="true" aria-controls="settings-credentials"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6.5" cy="7" r="3.5"/><path d="m9 9.5 7 7m-3-3 2-2m-4 0 2-2"/></svg>Credentials</button>
           <button id="settings-tab-models" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-models"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="4.5" width="11" height="11" rx="2"/><path d="M7.5 1.8v2.7m5-2.7v2.7m-5 11v2.7m5-2.7v2.7M1.8 7.5h2.7m-2.7 5h2.7m11-5h2.7m-2.7 5h2.7"/><rect x="8" y="8" width="4" height="4" rx=".5"/></svg>Models</button>
           <button id="settings-tab-skills" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-skills"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 2.8 12 7l4.6.7-3.3 3.2.8 4.6-4.1-2.2-4.1 2.2.8-4.6-3.3-3.2L8 7l2-4.2Z"/></svg>Skills <span id="skill-count" class="active-count" aria-label="0 active skills">0</span></button>
           <button id="settings-tab-kits" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-kits"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 5-4 5 4 5M13 5l4 5-4 5M11.5 3l-3 14"/></svg>Kits</button>
         </nav>
+        <section id="settings-agent" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-agent" hidden>
+          <div class="settings-section-head"><h3>Choose your agent</h3><p>Choose where conversations run. Your projects, media, skills, and canvas kits stay in Easel.</p></div>
+          <fieldset class="agent-backends"><legend class="sr-only">Agent backend</legend>
+            <label class="agent-backend-option" for="agent-backend-builtin"><input id="agent-backend-builtin" type="radio" name="agent-backend" value="builtin" checked disabled /><span><strong>Built-in</strong><small>Chat in Easel using a saved API endpoint and Agent model.</small></span></label>
+            <label class="agent-backend-option" for="agent-backend-external"><input id="agent-backend-external" type="radio" name="agent-backend" value="external" disabled /><span><strong>External MCP</strong><small>Chat in desktop Codex or another MCP client and control the open Easel app.</small></span></label>
+            <label class="agent-backend-option" for="agent-backend-codex"><input id="agent-backend-codex" type="radio" name="agent-backend" value="codex" disabled /><span><strong>Codex</strong><small>Chat inside Easel through the Codex runtime installed on this device.</small></span></label>
+          </fieldset>
+          <div id="agent-backend-lock" class="agent-detail" hidden><p>Agent selection is locked while a request is running.</p></div>
+          <div id="agent-builtin-panel" class="agent-detail"><h4>API agent</h4><p>Add an endpoint under Credentials, enable an Agent model under Models, then choose it in the chat.</p></div>
+          <div id="agent-external-panel" class="agent-detail" hidden>
+            <h4>Connect to this window</h4><p>Keep Easel open while your external agent works. The connection token lets that client control your projects and canvases.</p>
+            <code id="agent-mcp-url" class="agent-connection-url">Connection unavailable</code><p id="agent-mcp-status" role="status" aria-live="polite">Waiting for an external client</p>
+            <p>Set the token as <code>EASEL_MCP_TOKEN</code> in your controller environment, then add the connection:</p><pre id="agent-mcp-command" class="agent-setup-command"></pre>
+            <div class="button-row"><button id="agent-mcp-reveal" class="button outline small" type="button" aria-expanded="false" aria-controls="agent-mcp-token-field">Reveal token</button><button id="agent-mcp-copy" class="button quiet small" type="button">Copy token</button><button id="agent-mcp-disconnect" class="button quiet small" type="button" disabled>Disconnect controller</button></div>
+            <label id="agent-mcp-token-field" class="field" for="agent-mcp-token" hidden>Connection token<input id="agent-mcp-token" type="text" readonly autocomplete="off" spellcheck="false" /></label>
+          </div>
+          <div id="agent-codex-panel" class="agent-detail" hidden>
+            <h4 id="agent-codex-runtime">Checking Codex runtime...</h4><p id="agent-codex-install" hidden>Install the official Codex CLI, then reopen Easel to connect it.</p><p id="agent-codex-account">Sign in to use Codex inside Easel.</p>
+            <div id="agent-codex-login-actions" class="button-row"><button id="agent-codex-browser" class="button primary" type="button">Sign in with browser</button><button id="agent-codex-device" class="button outline" type="button">Use a device code</button></div>
+            <div id="agent-codex-login-panel" hidden><p id="agent-codex-login-description"></p><code id="agent-codex-verification-url" class="agent-connection-url"></code><code id="agent-codex-user-code" hidden></code><div class="button-row"><button id="agent-codex-open-login" class="button outline small" type="button">Open sign-in page</button><button id="agent-codex-cancel" class="button quiet small" type="button">Cancel sign-in</button></div></div>
+            <div id="agent-codex-signout-section" hidden><p>This account is shared with other Codex clients on this device. Signing out here signs them out too.</p><button id="agent-codex-signout" class="button outline small" type="button">Sign out of Codex</button></div>
+            <p id="agent-codex-error" role="status" aria-live="polite"></p>
+          </div>
+          <p id="agent-control-status" class="agent-control-status" role="status" aria-live="polite"></p>
+        </section>
         <section id="settings-credentials" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-credentials">
           <div class="settings-section-head"><h3>Credentials</h3><p>Save an endpoint and its API key. Each endpoint can provide both Agent and Media models. Keys are encrypted on this device.</p></div>
           <div class="settings-block">
@@ -703,6 +757,7 @@
     <script src="./connection-settings.js"></script>
     <script src="./project-workspace.js"></script>
     <script src="./themed-dropdown.js"></script>
+    <script src="./agent-control-ui.js"></script>
     <script src="./renderer.js"></script>
   </body>
 </html>

@@ -65,6 +65,7 @@ function createChatService({
   let shuttingDown = false;
   let inputQueuePaused = false;
   let chatRestorePending = false;
+  let enabled = true;
   let lastTurnOptions = { mode: 'chat', size: '1024x1024', skills: [], kits: [] };
   const pendingSubmissions = new Set();
   try {
@@ -96,7 +97,7 @@ function createChatService({
   }
 
   function scheduleCanvasInputs() {
-    if ((!inputStore && !mediaJobStore) || inputDrainScheduled || shuttingDown || inputQueuePaused || chatRestorePending) return;
+    if (!enabled || (!inputStore && !mediaJobStore) || inputDrainScheduled || shuttingDown || inputQueuePaused || chatRestorePending) return;
     inputDrainScheduled = true;
     queueMicrotask(() => {
       inputDrainScheduled = false;
@@ -177,6 +178,7 @@ function createChatService({
   }
 
   async function sendMessage(input, { mode = 'chat', size = '1024x1024', skills = [], kits = [], attachments = [] } = {}, canvasResume = null, resumeTurn = null) {
+    if (!enabled) throw new Error('The built-in agent is disabled while another controller is selected.');
     let userMessage = '';
     if (typeof input === 'string' && input.trim()) {
       if (canvasResume) {
@@ -263,7 +265,8 @@ function createChatService({
               } finally { await submissionMcp.close(); }
             })();
             pendingSubmissions.add(submission);
-            submission.then(() => pendingSubmissions.delete(submission), () => pendingSubmissions.delete(submission));
+            const settled = () => { pendingSubmissions.delete(submission); onEvent?.({ type: 'control-settled' }); };
+            submission.then(settled, settled);
             return submission;
           }
           const remoteId = name === 'get_video' ? args.videoId : name === 'get_image_job' ? args.jobId : '';
@@ -387,12 +390,12 @@ function createChatService({
   }
 
   async function drainCanvasInputs() {
-    if (!inputStore || busy || drainingInputs || drainingMedia || !chatId || shuttingDown || inputQueuePaused || chatRestorePending) return;
+    if (!enabled || !inputStore || busy || drainingInputs || drainingMedia || !chatId || shuttingDown || inputQueuePaused || chatRestorePending) return;
     drainingInputs = true;
     try {
       const queue = inputStore.list({ chatId, status: ['answered', 'queued'], limit: 200, raw: true }).reverse();
       for (const entry of queue) {
-        if (busy || entry.chatId !== chatId || shuttingDown || inputQueuePaused) break;
+        if (!enabled || busy || entry.chatId !== chatId || shuttingDown || inputQueuePaused) break;
         if (!matchingCanvas(entry)) continue;
         const claimed = inputStore.beginDispatch(entry.id);
         const turn = beginTurn(entry.id);
@@ -441,14 +444,14 @@ function createChatService({
   }
 
   async function drainMediaJobs() {
-    if (!mediaJobStore || busy || drainingInputs || drainingMedia || !chatId || shuttingDown || inputQueuePaused || chatRestorePending) return;
+    if (!enabled || !mediaJobStore || busy || drainingInputs || drainingMedia || !chatId || shuttingDown || inputQueuePaused || chatRestorePending) return;
     drainingMedia = true;
     try {
       const settings = settingsStore.loadPublic();
       for (const entry of completedMediaJobs().reverse()) {
         const sameAgent = entry.approvedAgent && entry.approvedAgent.connectionId === settings.activeConnectionId && entry.approvedAgent.model === settings.litellmModel && entry.approvedAgent.baseUrl === settings.litellmBaseUrl;
         const sameProject = !entry.projectId || !canvasController?.getCurrentCanvasId || canvasController.getCurrentCanvasId() === entry.projectId;
-        if (!sameAgent || !sameProject || activeTurn || shuttingDown || inputQueuePaused) continue;
+        if (!enabled || !sameAgent || !sameProject || activeTurn || shuttingDown || inputQueuePaused) continue;
         deliverMediaNotifications();
         if (history.some((message) => message.mediaJobCompletedId === entry.id)) { mediaJobStore.update(entry.id, { notification: 'responded' }); continue; }
         const turn = beginTurn();
@@ -675,7 +678,7 @@ function createChatService({
     return { id: currentId, title: currentTitle, history: currentHistory, images: [...images.values()], media, mediaTruncated, canvasInputs: inputStore && currentId ? inputStore.list({ chatId: currentId, limit: 50 }) : [], ...(loadError ? { error: loadError } : {}) };
   }
 
-  return { sendMessage, stopAgent, shutdown, cancelShutdown, notifyMediaJob, submitCanvasInput, submitCanvasMedia, cancelCanvasInput, retryCanvasInput, recoverCanvasInputs, getCanvasInputs: (query) => inputStore?.list(query) || [], clearHistory, openChat, getCurrentChat, acknowledgeChat, getActiveChatId: () => chatId, listChats: () => chatStore?.list() || [], isBusy: () => busy || drainingInputs || drainingMedia };
+  return { setEnabled(value) { enabled = Boolean(value); if (enabled) scheduleCanvasInputs(); }, sendMessage, stopAgent, shutdown, cancelShutdown, notifyMediaJob, submitCanvasInput, submitCanvasMedia, cancelCanvasInput, retryCanvasInput, recoverCanvasInputs, getCanvasInputs: (query) => inputStore?.list(query) || [], clearHistory, openChat, getCurrentChat, acknowledgeChat, getActiveChatId: () => chatId, listChats: () => chatStore?.list() || [], isSettling: () => pendingSubmissions.size > 0, isBusy: () => busy || drainingInputs || drainingMedia };
 }
 
 module.exports = { createChatService, defaultMcpLaunchOptions };

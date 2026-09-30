@@ -31,16 +31,16 @@ function runPreload() {
   return { exposed, calls, listeners, ipcRenderer, contextBridge };
 }
 
-test('preload exposes a narrow frozen API without secret getters', async () => {
+test('preload exposes a narrow frozen API with an explicit MCP connection action', async () => {
   const { exposed, calls, listeners, ipcRenderer } = runPreload();
   const api = exposed.easelClient;
 
   assert.deepEqual(Object.keys(api).sort(), [
-    'acknowledgeChat', 'addAssetToCanvas', 'attachProjectAsset', 'checkModelCapabilities', 'clearChat', 'closeCanvas', 'createCanvas', 'createProject', 'createProjectDocument',
-    'deleteLibraryAsset', 'deleteMediaJob', 'deleteProject', 'deleteProjectAsset', 'deleteProjectFile', 'exportCanvas', 'exportProject', 'getAvailableKits', 'getCurrentChat', 'getLibraryAsset', 'getModelCatalog', 'getProjectAsset', 'getProjectAssets', 'getProjectKits', 'getSettings', 'hideCanvasPreview',
+    'acknowledgeChat', 'addAssetToCanvas', 'attachProjectAsset', 'checkModelCapabilities', 'clearChat', 'closeCanvas', 'codexCancelLogin', 'codexLogin', 'codexLogout', 'createCanvas', 'createProject', 'createProjectDocument',
+    'deleteLibraryAsset', 'deleteMediaJob', 'deleteProject', 'deleteProjectAsset', 'deleteProjectFile', 'exportCanvas', 'exportProject', 'getAgentControl', 'getAvailableKits', 'getCurrentChat', 'getLibraryAsset', 'getMcpConnection', 'getModelCatalog', 'getProjectAsset', 'getProjectAssets', 'getProjectKits', 'getSettings', 'hideCanvasPreview',
     'listAssets', 'listCanvasFiles', 'listCanvasInputs', 'listCanvases', 'listChats', 'listInstalledSkills', 'listLiteLLMModels', 'listMediaJobs', 'listProjectDocuments', 'manageCanvasDevices',
     'onAgentEvent', 'openCanvas', 'openChat', 'openExternal', 'openProjectDocument', 'readCanvasFile', 'removeConnection', 'renameProject', 'retryCanvasInput', 'retryMediaJob',
-    'saveCanvas', 'saveConnection', 'saveLibraryAsset', 'saveProjectAsset', 'saveSettings', 'selectModel', 'sendMessage', 'setCanvasBounds', 'stopAgent',
+    'saveCanvas', 'saveConnection', 'saveLibraryAsset', 'saveProjectAsset', 'saveSettings', 'selectCodexModel', 'selectModel', 'sendMessage', 'setAgentBackend', 'setCanvasBounds', 'stopAgent',
     'testLiteLLMChat', 'testLiteLLMImage', 'undoCanvas', 'updateModel', 'updateProjectKits',
   ]);
   assert.equal(Object.isFrozen(api), true);
@@ -72,4 +72,22 @@ test('preload exposes a narrow frozen API without secret getters', async () => {
   unsubscribe();
   assert.equal(listeners.size, 0);
   assert.equal(typeof ipcRenderer.invoke, 'function');
+});
+
+test('agent controls invoke only their declared trusted IPC channels', async () => {
+  const { exposed, calls } = runPreload();
+  const client = exposed.easelClient;
+  await client.getAgentControl();
+  await client.setAgentBackend('external');
+  await client.getMcpConnection();
+  await client.codexLogin({ type: 'chatgptDeviceCode' });
+  await client.codexCancelLogin('pending-login');
+  await client.codexLogout();
+  await client.selectCodexModel('model-a');
+  assert.deepEqual(calls, [
+    { channel: 'agent:control:get', args: [] }, { channel: 'agent:control:select', args: ['external'] },
+    { channel: 'agent:mcp:connection', args: [] }, { channel: 'agent:codex:login', args: [{ type: 'chatgptDeviceCode' }] },
+    { channel: 'agent:codex:login:cancel', args: ['pending-login'] }, { channel: 'agent:codex:logout', args: [] },
+    { channel: 'agent:codex:model', args: ['model-a'] },
+  ]);
 });

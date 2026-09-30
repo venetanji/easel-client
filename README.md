@@ -1,6 +1,6 @@
 # Easel Studio
 
-A local-first Electron chat client for Easel image generation and editing. LiteLLM supplies the language model; a standalone Media MCP server exposes Easel tools over stdio. Prompts and conversation progress are saved on this device while a turn runs. The last conversation reopens on launch; the left rail opens **Chat** or a full-column **History** view with **New chat**. Choosing a saved conversation returns to Chat. Conversations are independent of projects: changing the current project keeps the conversation, and opening history keeps the current project.
+A local-first Electron client for Easel canvases and media. Choose a built-in OpenAI-compatible agent, an external MCP controller, or embedded Codex. Prompts and conversation progress are saved on this device while a turn runs. The last conversation reopens on launch; the left rail opens **Chat** or a full-column **History** view with **New chat**. Choosing a saved conversation returns to Chat. Conversations are independent of projects: changing the current project keeps the conversation, and opening history keeps the current project.
 
 ## Configure
 
@@ -28,7 +28,35 @@ npm start
 
 ## Headless Media MCP
 
-`@easel/media-mcp` is a reusable stdio server for local/headless agents. See [`packages/media-mcp/README.md`](packages/media-mcp/README.md) for standalone configuration and screenshot-browser setup. V1 uses stdio only; Streamable HTTP and remote multi-Easel orchestration are future work.
+`@easel/media-mcp` is a reusable stdio server for local/headless agents. See [`packages/media-mcp/README.md`](packages/media-mcp/README.md) for standalone configuration and screenshot-browser setup. Its media APIs are separate from the live app control server described here.
+
+## Agent controllers
+
+**Settings > Agent** selects **Built-in**, **External MCP**, or **Codex**. Switching restores the selected backend's conversation and preserves unsent text and attachments. History lists Built-in and Codex conversations. Stop interrupts the active turn; accepted generation jobs keep their saved IDs and continue downloading.
+
+### External MCP control
+
+Keep Easel open and select **External MCP**. Chat moves to your external agent; the Easel composer is hidden. Copy the loopback URL and explicitly reveal/copy the private token in Agent settings. Supply the token as `EASEL_MCP_TOKEN` in the controller's process environment, then use the command shown in settings:
+
+```sh
+codex mcp add easel --url "http://127.0.0.1:PORT/mcp" --bearer-token-env-var EASEL_MCP_TOKEN
+```
+
+Replace `PORT` with the displayed port. Restart a controller launched before its environment/configuration changed. Easel does not modify global Codex configuration. The URL/token persist across Easel restarts; the port changes only if occupied. One controller can connect at a time. **Disconnect controller** cancels current tool requests, including during a run.
+
+The server exposes live canvas inspection/editing/capture, project listing/opening/creation, media references and generation, and deletion requests with native confirmation. It listens only on loopback and checks Host, Origin and bearer authentication before parsing requests. Endpoint keys remain inside Easel; MCP grants access to its creative tools and configured media generation.
+
+Use `get_control_events({after,limit})` for saved media completions, canvas answers/captures and project changes. `easel://events` supports resource subscriptions. Events and jobs survive app restarts. External conversation wakeup depends on the controller; MCP notifications do not guarantee that Codex desktop starts a new turn. Read pending events at the next turn instead of polling or resubmitting media jobs.
+
+### Embedded Codex
+
+Install the official Codex CLI on PATH, then select **Codex**. Use browser or device sign-in to start its managed ChatGPT authentication. Browser sign-in opens the returned address; device sign-in displays a verification address and code. Codex manages login and token refresh. Easel does not read its authentication cache or store ChatGPT access tokens. The account is shared with the installed CLI, so sign-out affects that CLI account.
+
+The child process uses only Easel MCP, the OpenAI provider, a dedicated working directory, disabled shell/other host tools, and a read-only sandbox. It does not inherit unrelated MCP servers or OpenAI API-key/base-URL environment settings. Canvas edits use the same host executor as Built-in and External MCP. Native command/file/network approvals are unavailable. The app-server protocol is experimental; this integration is exercised with Codex CLI 0.159.2.
+
+Choose a model in the chat composer. Each conversation retains its Codex thread ID. Saved canvas answers and media completions continue that thread only when its controller, conversation, model and canvas/project are selected. Interrupted responses require an explicit retry. This route accepts images and sampled video frames; audio attachments are rejected while preserving the draft.
+
+Official references: [Codex authentication](https://learn.chatgpt.com/docs/auth), [app-server](https://learn.chatgpt.com/docs/app-server), and [MCP](https://learn.chatgpt.com/docs/extend/mcp).
 
 ## Projects, canvases, and images
 

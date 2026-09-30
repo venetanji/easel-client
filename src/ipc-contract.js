@@ -1,5 +1,12 @@
 const IPC_CHANNELS = Object.freeze({
   GET_SETTINGS: 'settings:get',
+  GET_AGENT_CONTROL: 'agent:control:get',
+  SET_AGENT_BACKEND: 'agent:control:select',
+  GET_MCP_CONNECTION: 'agent:mcp:connection',
+  CODEX_LOGIN: 'agent:codex:login',
+  CODEX_CANCEL_LOGIN: 'agent:codex:login:cancel',
+  CODEX_LOGOUT: 'agent:codex:logout',
+  SELECT_CODEX_MODEL: 'agent:codex:model',
   SAVE_SETTINGS: 'settings:save',
   SAVE_CONNECTION: 'connections:save',
   REMOVE_CONNECTION: 'connections:remove',

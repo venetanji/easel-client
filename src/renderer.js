@@ -753,6 +753,36 @@ function renderAgentEvent({ document, messagesElement, imagesElement, event, sta
   }
 }
 
+function renderStreamingAgentEvent({ document, messagesElement, event, streams, chatId, copyText, assetPreviews, pendingAssetCaptions }) {
+  if (!['token', 'assistant'].includes(event?.type) || !event.itemId || typeof event.text !== 'string') return false;
+  if (chatId && event.chatId && event.chatId !== chatId) return 'ignored';
+  const key = `${event.chatId || chatId || ''}:${event.itemId}`;
+  let stream = streams.get(key);
+  if (stream?.final) return 'ignored';
+  if (!stream) {
+    stream = { text: '', final: false };
+    stream.message = appendTextMessage(document, messagesElement, 'assistant', '', {
+      copyText: copyText ? () => copyText(stream.text) : undefined,
+    });
+    stream.message.dataset.itemId = event.itemId;
+    streams.set(key, stream);
+  }
+  const shouldFollow = messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight < 56;
+  stream.text = event.type === 'token' ? stream.text + event.text : event.text;
+  stream.final = event.type === 'assistant';
+  const content = stream.message.querySelector('.message-content');
+  content.textContent = stream.text;
+  content.classList.toggle('markdown', stream.final);
+  if (stream.final) {
+    content.replaceChildren();
+    renderAssistantAssetLinks(document, content, stream.text, assetPreviews || new Map(), pendingAssetCaptions);
+    renderAssistantMarkdown(content);
+  }
+  stream.message.dataset.streaming = String(!stream.final);
+  if (shouldFollow) messagesElement.scrollTop = messagesElement.scrollHeight;
+  return 'updated';
+}
+
 async function handleSettingsSubmit({ client, fields, statusElement }) {
   setStatus(statusElement, 'Saving settings…');
   try {
@@ -927,6 +957,7 @@ function canvasInputDisplayText(message, request) {
 function wireRenderer({ document, client }) {
   const settingsDialog = document.getElementById('settings-dialog');
   const settingsSections = [
+    { id: 'agent', tab: document.getElementById('settings-tab-agent'), section: document.getElementById('settings-agent') },
     { id: 'credentials', tab: document.getElementById('settings-tab-credentials'), section: document.getElementById('settings-credentials') },
     { id: 'models', tab: document.getElementById('settings-tab-models'), section: document.getElementById('settings-models') },
     { id: 'skills', tab: document.getElementById('settings-tab-skills'), section: document.getElementById('settings-skills') },
@@ -1018,6 +1049,8 @@ function wireRenderer({ document, client }) {
   let agentRunning = false;
   let stopPending = false;
   let canvasResumeBusy = false;
+  let backendHistoryBusy = false;
+  let chatSnapshotEpoch = 0;
   const canvasResumeRequests = new Set();
   const canvasInputs = new Map();
   const canvasInputNodes = new Map();
@@ -1038,13 +1071,18 @@ function wireRenderer({ document, client }) {
   let fileDeleting = false;
   let currentFilePage = null;
   let themedDropdowns = [];
+  let agentControlUi = null;
+  const streamingMessages = new Map();
   const notifiedMediaJobs = new Set();
   const workspace = createProjectWorkspace({
     document, client, storage,
     onSelection: updateCanvasState,
     onStatus: (text, error) => setStatus(statusElement, text, error),
     onBounds: updateCanvasBounds,
-    onAttach: (file) => { showConversation(); addAttachmentFiles([file]); messageInput.focus(); },
+    onAttach: (file) => {
+      if (agentControlUi?.isExternal()) { setStatus(statusElement, 'Use media through your connected MCP client, or switch agents under Settings > Agent.'); return; }
+      showConversation(); addAttachmentFiles([file]); messageInput.focus();
+    },
     onCreate: openNewCanvasDialog,
     onFiles: openCanvasFiles,
     onBusy: updateSendState,
@@ -1060,7 +1098,7 @@ function wireRenderer({ document, client }) {
       chatHistoryButton.setAttribute('aria-pressed', String(!open && !chatHistoryPanel.hidden));
       if (!conversationPanel.inert) clearUnreadMessages();
     },
-    isBusy: () => chatBusy || canvasResumeBusy,
+    isBusy: () => chatBusy || canvasResumeBusy || backendHistoryBusy || Boolean(agentControlUi?.getState()?.busy),
   });
   async function loadChatMedia(asset) {
     try { return await client.getLibraryAsset(asset.assetId); }
@@ -1089,6 +1127,7 @@ function wireRenderer({ document, client }) {
       finally { nativeDialogOpen = false; updateCanvasBounds(); }
     },
     onUse: async (asset) => {
+      if (agentControlUi?.isExternal()) throw new Error('Use this media through your connected MCP client, or switch agents under Settings > Agent.');
       if (chatBusy || canvasResumeBusy) throw new Error('Wait for the current reply before adding a reference.');
       const full = await loadChatMedia(asset);
       if (chatBusy || canvasResumeBusy) throw new Error('Wait for the current reply before adding a reference.');
@@ -1228,6 +1267,7 @@ function wireRenderer({ document, client }) {
   }
 
   function selectSettingsSection(id) {
+    if (id !== 'agent') agentControlUi?.clearToken();
     for (const item of settingsSections) {
       const active = item.id === id;
       item.tab.setAttribute('aria-selected', String(active));
@@ -1429,29 +1469,33 @@ function wireRenderer({ document, client }) {
   });
 
   function updateSendState() {
-    const busy = chatBusy || canvasResumeBusy || workspace.isOperating();
-    const running = agentRunning || canvasResumeBusy;
+    const control = agentControlUi?.getState();
+    const external = agentControlUi?.isExternal();
+    const busy = chatBusy || canvasResumeBusy || backendHistoryBusy || Boolean(control?.busy) || workspace.isOperating();
+    const running = agentRunning || canvasResumeBusy || Boolean(control?.busy);
+    const ready = agentControlUi?.isReady() && (control.backend !== 'builtin' || Boolean(savedSettings.litellmModel));
+    agentControlUi?.setBusy(chatBusy || canvasResumeBusy || backendHistoryBusy || agentRunning || workspace.isOperating());
     workspace.updateBusy();
     document.getElementById('new-canvas-open').disabled = busy;
-    document.querySelectorAll('[data-starter]').forEach((button) => { button.disabled = busy; });
+    document.querySelectorAll('[data-starter], .prompt-suggestion').forEach((button) => { button.disabled = busy || external; });
     undoCanvasButton.disabled = busy || activePreviewKind !== 'document' || !activeUndoAvailable;
-    sendButton.disabled = running ? stopPending : busy || modelSaving || credentialsSaving || !savedSettings.litellmModel || (!messageInput.value.trim() && pendingAttachments.length === 0);
+    sendButton.disabled = external || (running ? stopPending : busy || modelSaving || credentialsSaving || !ready || (!messageInput.value.trim() && pendingAttachments.length === 0));
     sendButton.dataset.action = running ? 'stop' : 'send';
     document.getElementById('send-label').textContent = running ? stopPending ? 'Stopping...' : 'Stop' : 'Send';
     sendButton.setAttribute('aria-label', running ? stopPending ? 'Stopping agent' : 'Stop agent' : 'Send message');
     sendButton.title = running ? 'Stop the current reply; completed edits are kept' : 'Send message';
     sendButton.querySelector('svg path').setAttribute('d', running ? 'M4 4h8v8H4Z' : 'M3 8h9M8 4l4 4-4 4');
-    messageInput.disabled = busy;
-    attachMediaButton.disabled = busy;
-    mediaFileInput.disabled = busy;
+    messageInput.disabled = busy || external;
+    attachMediaButton.disabled = busy || external;
+    mediaFileInput.disabled = busy || external;
     attachmentStrip.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
-    newChatButton.disabled = busy;
-    historyNewChatButton.disabled = busy;
+    newChatButton.disabled = busy || agentControlUi?.isExternal();
+    historyNewChatButton.disabled = busy || agentControlUi?.isExternal();
     chatHistoryButton.disabled = busy;
     chatHistoryList.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
     modelSelect.disabled = busy || modelSaving || credentialsSaving || !modelSelect.querySelector('option[value]:not([value=""])');
-    templateSelect.disabled = busy;
-    for (const node of canvasInputNodes.values()) if (node.retry) node.retry.disabled = busy || modelSaving || credentialsSaving || node.retrying;
+    templateSelect.disabled = busy || external;
+    for (const node of canvasInputNodes.values()) if (node.retry) node.retry.disabled = busy || external || !ready || modelSaving || credentialsSaving || node.retrying;
     if (canvasResumeBusy) activityElement.hidden = false;
     updateFileControls();
   }
@@ -1735,7 +1779,7 @@ function wireRenderer({ document, client }) {
     const node = { message: note, retry: null, retrying: false };
     if (['failed', 'interrupted'].includes(request.status)) {
       node.retry = createButton(document, 'Retry response', 'button outline small', async () => {
-        if (chatBusy || canvasResumeBusy || node.retrying) return;
+        if (chatBusy || canvasResumeBusy || node.retrying || agentControlUi?.isExternal() || !agentControlUi?.isReady() || agentControlUi.getState()?.busy) return;
         node.retrying = true;
         node.retry.textContent = 'Retrying...';
         canvasResumeRequests.add(request.id);
@@ -1757,7 +1801,7 @@ function wireRenderer({ document, client }) {
           updateSendState();
         }
       });
-      node.retry.disabled = chatBusy || canvasResumeBusy || modelSaving || credentialsSaving;
+      node.retry.disabled = chatBusy || canvasResumeBusy || modelSaving || credentialsSaving || agentControlUi?.isExternal() || !agentControlUi?.isReady() || agentControlUi.getState()?.busy;
       actions.append(node.retry);
     }
     if (actions.children.length) note.append(actions);
@@ -1806,7 +1850,8 @@ function wireRenderer({ document, client }) {
     return true;
   }
 
-  function restoreChat(chat) {
+  function restoreChat(chat, { preserveComposer = false } = {}) {
+    streamingMessages.clear();
     clearUnreadMessages();
     notifiedCanvasInputs.clear();
     activeChatId = chat.id || '';
@@ -1822,9 +1867,13 @@ function wireRenderer({ document, client }) {
     canvasResumeBusy = canvasResumeRequests.size > 0;
     disposeMediaPreviews();
     pendingAssetCaptions.clear();
-    pendingAttachments = [];
-    for (const url of messageObjectUrls) URL.revokeObjectURL(url);
-    messageObjectUrls.clear();
+    if (!preserveComposer) pendingAttachments = [];
+    const retainedUrls = new Set(pendingAttachments.map((attachment) => attachment.previewUrl));
+    for (const url of messageObjectUrls) {
+      if (retainedUrls.has(url)) continue;
+      URL.revokeObjectURL(url);
+      messageObjectUrls.delete(url);
+    }
     renderPendingAttachments();
     const images = new Map((chat.images || []).map((image) => [image.assetId, image]));
     const media = new Map((chat.media || []).map((asset) => [`${asset.requestId}:${asset.assetId}`, asset]));
@@ -1880,18 +1929,37 @@ function wireRenderer({ document, client }) {
       .catch((error) => setStatus(statusElement, `Chat restored, but the agent could not resume: ${error.message}`, true));
   }
 
+  async function restoreBackendChat(backend) {
+    const snapshotEpoch = ++chatSnapshotEpoch;
+    backendHistoryBusy = true;
+    updateSendState();
+    try {
+      const chat = await client.getCurrentChat({ deferResume: true });
+      if (snapshotEpoch !== chatSnapshotEpoch || backend !== agentControlUi.getState()?.backend) return;
+      restoreChat(chat, { preserveComposer: true });
+      if (!chatHistoryPanel.hidden) await refreshChatHistory();
+    } catch (error) {
+      if (snapshotEpoch === chatSnapshotEpoch) setStatus(statusElement, error?.message || 'Could not restore this agent conversation. Try reopening its chat.', true);
+    } finally {
+      if (snapshotEpoch === chatSnapshotEpoch) { backendHistoryBusy = false; updateSendState(); }
+    }
+  }
+
   async function refreshChatHistory() {
     setStatus(chatHistoryStatus, 'Loading saved chats…');
     try {
       const chats = await client.listChats();
       chatHistoryList.replaceChildren(...chats.map((chat) => {
         const button = createButton(document, '', 'chat-history-row', async () => {
-          if (chatBusy || canvasResumeBusy) return;
+          if (chatBusy || canvasResumeBusy || backendHistoryBusy || agentControlUi.getState()?.busy) return;
+          const snapshotEpoch = ++chatSnapshotEpoch;
           chatBusy = true;
           updateSendState();
           setStatus(chatHistoryStatus, 'Opening chat…');
           try {
-            restoreChat(await client.openChat(chat.id));
+            const snapshot = await client.openChat(chat.id);
+            if (snapshotEpoch !== chatSnapshotEpoch) return;
+            restoreChat(snapshot);
             showConversation(false);
             setStatus(statusElement, `Opened ${chat.title}.`);
           } catch (error) {
@@ -1969,12 +2037,27 @@ function wireRenderer({ document, client }) {
     onRendered: updateSendState,
   });
 
-  function applySettings(settings) {
-    savedSettings = settings;
-    const configured = Boolean(settings.activeConnectionId && settings.litellmModel);
+  agentControlUi = createAgentControlUi({
+    document, client, copyText,
+    onStateChange: () => { updateConnectionStatus(); updateSendState(); updateCanvasBounds(); },
+    onOpenSettings: () => openSettings('agent'),
+  });
+
+  function updateConnectionStatus() {
+    const control = agentControlUi?.getState();
+    const configured = control?.backend === 'external' ? Boolean(control.external?.enabled && control.external?.connectedClients)
+      : control?.backend === 'codex' ? agentControlUi.isReady()
+        : Boolean(savedSettings.activeConnectionId && savedSettings.litellmModel);
     connectionDot.classList.toggle('ready', configured);
     connectionDot.classList.toggle('needs-setup', !configured);
-    connectionDot.title = configured ? 'Endpoint and model selected' : 'Add credentials and choose a model in chat';
+    connectionDot.title = control?.backend === 'external' ? configured ? 'External agent connected' : 'Connect an external MCP client under Settings > Agent'
+      : control?.backend === 'codex' ? configured ? 'Codex is ready' : 'Connect and sign in under Settings > Agent'
+        : configured ? 'Endpoint and model selected' : 'Add credentials and choose a model in chat';
+  }
+
+  function applySettings(settings) {
+    savedSettings = settings;
+    updateConnectionStatus();
     connectionUi.load(settings);
     updateSendState();
   }
@@ -1982,7 +2065,7 @@ function wireRenderer({ document, client }) {
   function refreshModelCatalog() { return connectionUi.refresh(); }
 
   modelSelect.addEventListener('change', async () => {
-    if (chatBusy || canvasResumeBusy || modelSaving || credentialsSaving || !modelSelect.value) return;
+    if (agentControlUi.getState()?.backend !== 'builtin' || chatBusy || canvasResumeBusy || agentControlUi.getState()?.busy || modelSaving || credentialsSaving || !modelSelect.value) return;
     modelSaving = true;
     updateSendState();
     setStatus(statusElement, 'Switching model...');
@@ -1996,7 +2079,8 @@ function wireRenderer({ document, client }) {
   });
   chatForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (agentRunning || canvasResumeBusy) {
+    if (agentControlUi.isExternal()) return;
+    if (agentRunning || canvasResumeBusy || agentControlUi.getState()?.busy) {
       if (stopPending) return;
       stopPending = true;
       updateSendState();
@@ -2011,9 +2095,10 @@ function wireRenderer({ document, client }) {
       updateSendState();
       return;
     }
-    if (chatBusy || canvasResumeBusy || workspace.isOperating() || modelSaving || credentialsSaving || !savedSettings.litellmModel) return;
+    if (chatBusy || canvasResumeBusy || backendHistoryBusy || workspace.isOperating() || modelSaving || credentialsSaving || !agentControlUi.isReady() || (agentControlUi.getState()?.backend === 'builtin' && !savedSettings.litellmModel)) return;
     if (!messageInput.value.trim() && pendingAttachments.length === 0) return;
     const startNewChat = chatForm.parentElement === starterComposer && !starterSubmitted && Boolean(activeChatId);
+    chatSnapshotEpoch += 1;
     starterSubmitted = true;
     showConversation(false);
     chatBusy = true;
@@ -2024,6 +2109,7 @@ function wireRenderer({ document, client }) {
         await client.clearChat();
         activeChatId = '';
         messagesElement.replaceChildren();
+        streamingMessages.clear();
         canvasInputs.clear();
         canvasInputNodes.clear();
         canvasAnswerIds.clear();
@@ -2117,7 +2203,7 @@ function wireRenderer({ document, client }) {
   };
   document.querySelectorAll('[data-starter]').forEach((button) => {
     button.addEventListener('click', () => {
-      if (chatBusy || canvasResumeBusy || workspace.isOperating()) return;
+      if (chatBusy || canvasResumeBusy || workspace.isOperating() || agentControlUi.isExternal() || agentControlUi.getState()?.busy) return;
       const prompt = starterPrompts[button.dataset.starter];
       if (!prompt) return;
       if (messageInput.value.trim() && messageInput.value !== insertedStarterPrompt) messageInput.value = `${messageInput.value.trim()}\n\n${prompt}`;
@@ -2176,6 +2262,7 @@ function wireRenderer({ document, client }) {
   document.getElementById('connections-open').addEventListener('click', () => openSettings('credentials'));
   document.getElementById('settings-close').addEventListener('click', () => settingsDialog.close());
   settingsDialog.addEventListener('close', () => {
+    agentControlUi.clearToken();
     activitySettings.setAttribute('aria-pressed', 'false');
     updateCanvasBounds();
   });
@@ -2298,7 +2385,8 @@ function wireRenderer({ document, client }) {
     onCanvasChange: (canvas) => workspace.changed(canvas).catch((error) => setStatus(statusElement, error.message, true)),
   }).catch(() => {}));
   newChatButton.addEventListener('click', async () => {
-    if (chatBusy || canvasResumeBusy) return;
+    if (chatBusy || canvasResumeBusy || backendHistoryBusy || agentControlUi.getState()?.busy) return;
+    chatSnapshotEpoch += 1;
     chatBusy = true;
     updateSendState();
     try {
@@ -2318,6 +2406,7 @@ function wireRenderer({ document, client }) {
         updateSendState();
         messageInput.focus();
       }));
+      streamingMessages.clear();
       disposeMediaPreviews();
       pendingAssetCaptions.clear();
       pendingAttachments = [];
@@ -2340,6 +2429,26 @@ function wireRenderer({ document, client }) {
   });
 
   const unsubscribe = client.onAgentEvent((event) => {
+    if (event.type === 'agent-control') {
+      const previous = agentControlUi.getState()?.backend;
+      agentControlUi.applyState(event.state);
+      if (previous && previous !== event.state?.backend && event.reason === 'backend-switch') restoreBackendChat(event.state.backend);
+      return;
+    }
+    if (backendHistoryBusy && ['token', 'assistant', 'tool-start', 'canvas-input-resume-start', 'media-job-resume-start'].includes(event.type)) {
+      chatSnapshotEpoch += 1;
+      backendHistoryBusy = false;
+      updateSendState();
+    }
+    const streamingStatus = renderStreamingAgentEvent({ document, messagesElement, event, streams: streamingMessages, chatId: activeChatId, copyText, assetPreviews, pendingAssetCaptions });
+    if (streamingStatus) {
+      if (event.type === 'assistant' && streamingStatus === 'updated') {
+        receivedMessage();
+        activityElement.hidden = true;
+        setStatus(statusElement, '');
+      }
+      return;
+    }
     if (event.type === 'media-job') {
       if (!workspace.updateMediaJob(event.job)) refreshAssets();
       return;
@@ -2452,9 +2561,11 @@ function wireRenderer({ document, client }) {
     applySettings(settings);
     return refreshModelCatalog();
   }).catch((error) => setStatus(document.getElementById('connection-status'), error?.message || 'Could not load settings.', true));
+  client.getAgentControl().then((state) => agentControlUi.applyState(state)).catch((error) => agentControlUi.loadError(error));
   client.getAvailableKits().then((catalog) => renderInstalledKitCatalog(document, installedKitList, catalog))
     .catch((error) => setStatus(document.getElementById('kit-status'), error?.message || 'Could not read installed kits.', true));
-  client.getCurrentChat({ deferResume: true }).then(restoreChat)
+  const initialChatEpoch = chatSnapshotEpoch;
+  client.getCurrentChat({ deferResume: true }).then((chat) => { if (initialChatEpoch === chatSnapshotEpoch) restoreChat(chat); })
     .catch((error) => setStatus(statusElement, error?.message || 'Could not restore the last chat.', true))
     .finally(() => {
       chatBusy = false;
@@ -2494,6 +2605,8 @@ function wireRenderer({ document, client }) {
   return {
     dispose() {
       unsubscribe();
+      agentControlUi.dispose();
+      streamingMessages.clear();
       disposeMediaPreviews();
       for (const url of messageObjectUrls) URL.revokeObjectURL(url);
       messageObjectUrls.clear();
@@ -2531,6 +2644,7 @@ if (typeof module !== 'undefined') {
     refreshLiteLLMModels,
     testLiteLLMConnection,
     renderAgentEvent,
+    renderStreamingAgentEvent,
     renderAssetLibrary,
     renderCanvasLibrary,
     setStatus,

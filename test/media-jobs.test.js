@@ -36,6 +36,27 @@ test('accepted job IDs survive restart, deduplicate receipts, and exclude creden
   assert.throws(() => store.get('../escape'), /invalid/);
 });
 
+test('media job origins survive restart and public summaries without changing original receipt ownership', (t) => {
+  const { root, store } = fixture(t);
+  const origin = { backend: 'codex', chatId: 'd'.repeat(32), threadId: 'thread_123-abcd', model: 'gpt-6.1-sol' };
+  const saved = store.track({ ...input, origin });
+  const restored = createMediaJobStore({ userDataPath: root });
+  assert.deepEqual(restored.get(saved.id).origin, origin);
+  assert.deepEqual(restored.list()[0].origin, origin);
+  const duplicate = restored.track({ ...input, origin: { backend: 'external' } });
+  assert.equal(duplicate.id, saved.id);
+  assert.deepEqual(duplicate.origin, origin);
+  assert.throws(() => restored.track({ ...input, origin: { ...origin, bearerToken: 'secret' } }));
+});
+
+test('media jobs reject invalid origin metadata while legacy records stay unchanged', (t) => {
+  const { store } = fixture(t);
+  const saved = store.track(input);
+  assert.equal(Object.hasOwn(store.get(saved.id), 'origin'), false);
+  assert.equal(Object.hasOwn(store.list()[0], 'origin'), false);
+  for (const origin of [{ backend: 'unknown' }, { backend: 'codex', chatId: '../escape' }, { backend: 'codex', threadId: 'a'.repeat(161) }, { backend: 'external', threadId: 'a/b' }, { backend: 'builtin', model: 'a'.repeat(257) }, { backend: 'external', apiKey: 'private' }, null]) assert.throws(() => store.track({ ...input, origin }));
+});
+
 test('polling saves queue estimates, then downloads and attaches output exactly once', async (t) => {
   const { store } = fixture(t);
   let completed = false;

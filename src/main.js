@@ -36,7 +36,15 @@ const { createAssetStore } = require('./asset-store');
 const { createCanvasStore } = require('./canvas-store');
 const { createCanvasView } = require('./canvas-view');
 const { createCanvasHistory } = require('./canvas-history');
-const { createChatService } = require('./chat-service');
+const { createChatService, defaultMcpLaunchOptions } = require('./chat-service');
+const { createMediaMcpClient } = require('./media-mcp-client');
+const { createAgentControl } = require('./agent-control');
+const { createControlEventStore } = require('./control-event-store');
+const { createControlMcpServer } = require('./control-mcp-server');
+const { createEaselToolHost } = require('./easel-tool-host');
+const { createAgentRouter } = require('./agent-router');
+const { createCodexAppServer, resolveCodexExecutable } = require('./codex-app-server');
+const { createCodexChatService, defaultInput } = require('./codex-chat-service');
 const { createChatStore } = require('./chat-store');
 const { createCanvasInputStore } = require('./canvas-input-store');
 const { renderCanvasInputScript, dismissCanvasInputScript } = require('./canvas-input-runtime');
@@ -158,6 +166,7 @@ function emitCanvasSaved(canvas) {
       undoAvailable: Boolean(canvasId && CANVAS_HISTORY.canUndo(canvasId)),
     });
   }
+  recordControlChange({ type: 'canvas', canvasId, projectId: canvasId, title: document.projectTitle || document.title, documentPath: document.documentPath, documentTitle: document.documentTitle });
 }
 
 async function attachProjectAssets(controller, projectId, assetIds, { kits } = {}) {
@@ -175,6 +184,7 @@ async function attachProjectAssets(controller, projectId, assetIds, { kits } = {
   const project = CANVASES.getProject(id);
   const metadata = { id, title: project.title, projectId: id, projectTitle: project.title, canvasId: id, documentPath: controller.getCurrentCanvasId() === id ? controller.getCurrentDocumentPath() : '', createdProject: Boolean(selected.createdProject), assetIds, attachedToProject: true, runtimeAssetsUpdated, changed: Boolean(result.changed), attachedCount: result.attachedCount, projectRevision: result.projectRevision, undoAvailable: CANVAS_HISTORY.canUndo(id), ...(runtimeWarning ? { runtimeWarning } : {}) };
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, { type: 'project-assets', ...metadata });
+  recordControlChange({ type: 'project-assets', ...metadata });
   return metadata;
 }
 
@@ -201,7 +211,7 @@ const DELETIONS = createDeletionService({
     if (controller.getCurrentCanvasId() === id) return controller.closeCurrent({ save: false });
     return { closed: false };
   },
-  onEvent: (event) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, event); },
+  onEvent: (event) => emitAgentEvent(event),
   previewFile: async (controller, id, info) => {
     if (info.isDocument) emitCanvasSaved(await controller.openSaved(id, info.path));
     else {
@@ -293,13 +303,14 @@ async function checkpointCanvasForUndo(controller) {
 }
 
 const LITELLM_MODELS = createLiteLLMModelService({ settingsStore: SETTINGS });
-const CHAT = createChatService({
-  settingsStore: SETTINGS,
-  assetStore: ASSETS,
-  chatStore: createChatStore({ userDataPath: app.getPath('userData') }),
-  inputStore: CANVAS_INPUTS,
-  mediaJobStore: MEDIA_JOBS,
-  registerMediaJob: async (input) => {
+let CHAT;
+let TOOL_HOST;
+let MCP_SERVER;
+let suppressControlEvents = false;
+let codexRuntimeError = '';
+let refreshingCodex;
+const CHAT_STORE = createChatStore({ userDataPath: app.getPath('userData') });
+const registerTrackedMediaJob = async (input) => {
     const settings = SETTINGS.loadPublic();
     const connection = settings.connections.find((entry) => input.modelId?.startsWith(entry.id + ':'));
     if (!connection) throw new Error(`Job ${input.job.id} was accepted, but its endpoint could not be saved. Keep its ID; do not generate a replacement.`);
@@ -311,23 +322,21 @@ const CHAT = createChatService({
       catch { /* An accepted job must remain retrievable even if its project cannot be created. */ }
     }
     try {
-      const tracked = JOB_MONITOR.track({ ...input, projectId, baseUrl: connection.baseUrl });
+      const tracked = JOB_MONITOR.track({ ...input, origin: input.origin || { backend: 'builtin', ...(input.chatId ? { chatId: input.chatId } : {}) }, projectId, baseUrl: connection.baseUrl });
       if (projectDeleted) MEDIA_JOBS.update(tracked.id, { notification: 'interrupted' });
       return tracked;
     } catch (error) {
       throw new Error(`Job ${input.job.id} was accepted, but its receipt could not be saved: ${error.message}. Keep this remote ID to retrieve it; do not resubmit generation.`);
     }
-  },
-  mediaAssetStore: MEDIA_ASSETS,
-  runtime: { isPackaged: app.isPackaged, resourcesPath: process.resourcesPath },
-  presentCanvas: (artifact) => withCanvas(async (controller) => {
+  };
+const presentToolCanvas = (artifact) => withCanvas(async (controller) => {
     await saveCanvasBeforeSwitch(controller);
     const id = controller.getCurrentCanvasId();
     const before = id ? CANVASES.get(id).html : '';
     try { return await controller.present(artifact); }
     finally { if (id && CANVASES.get(id).html !== before) CANVAS_HISTORY.record(id, before); }
-  }),
-  canvasController: {
+  });
+const CANVAS_CONTROLLER = {
     createEmpty: (title, kits) => withCanvas(async (controller) => {
       await saveCanvasBeforeSwitch(controller);
       const id = controller.getCurrentCanvasId();
@@ -374,6 +383,20 @@ const CHAT = createChatService({
       mainWindow?.webContents.send(IPC_CHANNELS.AGENT_EVENT, { type: 'canvas-input', request, status: 'pending' });
       return request;
     }),
+    getCanvasInputs: ({ canvasId, limit = 20 } = {}, context = {}) => {
+      const chatId = context.chatId;
+      if (!chatId) throw new Error('Canvas responses require an active agent conversation.');
+      const entries = CANVAS_INPUTS.list({ chatId, ...(canvasId ? { canvasId } : {}), limit });
+      const inputs = [];
+      let bytes = 0;
+      for (const entry of entries) {
+        const size = Buffer.byteLength(JSON.stringify(entry));
+        if (bytes + size > 24_000) break;
+        inputs.push(entry);
+        bytes += size;
+      }
+      return { inputs, truncated: inputs.length < entries.length };
+    },
     completeCanvasInput: (request) => withCanvas(async (controller) => {
       if (controller.getCurrentCanvasId() !== request.canvasId || (request.documentPath && controller.getCurrentDocumentPath() !== request.documentPath)) throw new Error('Open the original project document to complete this input.');
       await controller.evaluate(dismissCanvasInputScript(request.id));
@@ -425,11 +448,218 @@ const CHAT = createChatService({
       return controller.execute(code);
     }),
     addImage: (options) => projectMutation('addImage', options),
+  };
+const emitAgentEvent = (event) => {
+    if (event.type === 'control-settled') { emitControlState(); return; }
+    if (['canvas', 'project-assets', 'project-deleted'].includes(event.type)) recordControlChange(event);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, event);
+  };
+const CONTROL_EVENTS = createControlEventStore({ userDataPath: app.getPath('userData') });
+function publishControlEvent(event) {
+  const stored = CONTROL_EVENTS.append(event);
+  MCP_SERVER?.publishEvent(stored);
+  return stored;
+}
+function recordControlChange(event) {
+  try { publishControlEvent(event); }
+  catch { emitAgentEvent({ type: 'error', message: 'The change is saved, but its external agent notification could not be saved. Inspect the project before continuing.' }); }
+}
+const AGENT_CONTROL = createAgentControl({
+  userDataPath: app.getPath('userData'),
+  isAgentBusy: () => Boolean(CHAT?.isRunning() || TOOL_HOST?.isBusy()),
+  onChanged: () => { if (!suppressControlEvents) emitControlState(); },
+});
+const BUILTIN_CHAT = createChatService({
+  settingsStore: SETTINGS,
+  assetStore: ASSETS,
+  chatStore: CHAT_STORE.forBackend('builtin'),
+  inputStore: CANVAS_INPUTS,
+  mediaJobStore: MEDIA_JOBS,
+  registerMediaJob: registerTrackedMediaJob,
+  mediaAssetStore: MEDIA_ASSETS,
+  runtime: { isPackaged: app.isPackaged, resourcesPath: process.resourcesPath },
+  presentCanvas: presentToolCanvas,
+  canvasController: CANVAS_CONTROLLER,
+  onEvent: emitAgentEvent,
+});
+
+const CODEX_CWD = path.join(app.getPath('userData'), 'codex-workspace');
+fs.mkdirSync(CODEX_CWD, { recursive: true, mode: 0o700 });
+const CODEX_SERVER = createCodexAppServer({ cwd: CODEX_CWD,
+  getMcpConnection: () => AGENT_CONTROL.getBackend() === 'codex' ? MCP_SERVER?.getConnectionInfo() : undefined,
+});
+const CODEX_CHAT = createCodexChatService({
+  appServer: CODEX_SERVER, cwd: CODEX_CWD, chatStore: CHAT_STORE.forBackend('codex'),
+  getContext: (options) => {
+    const projectKits = CANVAS_CONTROLLER.getCurrentKits() || options.kits || [];
+    const skills = options.skills || [];
+    const model = CODEX_CHAT.getState().model;
+    if (!model) throw new Error('Choose an available Codex model in chat before sending.');
+    return { model, origin: { model, projectId: canvasView?.getCurrentCanvasId() || '' },
+      instructions: [TOOL_HOST.instructions, `Enabled offline kits: ${projectKits.join(', ') || 'none'}.`,
+        ...skills.map((skill) => `Skill: ${skill.name}\n${skill.instructions}`)].join('\n\n') };
+  },
+  hydrateChat: hydrateCodexChat,
+  prepareInput: async ({ text, attachments, options }) => {
+    const input = defaultInput({ text, attachments });
+    if (!options.attachmentRefs?.length && attachments.length) {
+      options.attachmentRefs = await Promise.all(attachments.map(async (attachment) => {
+        const assetId = await (attachment.type === 'image' ? ASSETS : CAPTURE_MEDIA).save(attachment);
+        return { assetId, type: attachment.type, name: attachment.name, mimeType: attachment.mimeType };
+      }));
+    }
+    return input;
+  },
+  onServerRequest: async ({ method, params, signal }) => {
+    if (method === 'item/mcpToolCall/requestApproval' && params.server === 'easel') {
+      const approval = await dialog.showMessageBox(mainWindow, { type: 'question', title: 'Codex tool request',
+        message: `Allow Codex to use ${String(params.tool || 'an Easel tool').slice(0, 120)}?`,
+        buttons: ['Allow', 'Cancel'], defaultId: 1, cancelId: 1, ...(signal ? { signal } : {}) });
+      return { decision: approval.response === 0 ? 'accept' : 'decline' };
+    }
+    throw new Error('Easel supports canvas MCP tools. Native command, file, and network approval requests are unavailable.');
   },
   onEvent: (event) => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, event);
+    if (event.type === 'codex-state') emitControlState();
+    else if (event.type === 'codex-login-completed') {
+      if (event.success) refreshCodexState().catch(() => {});
+      emitControlState();
+    } else emitAgentEvent(event);
   },
 });
+TOOL_HOST = createEaselToolHost({
+  canvasController: CANVAS_CONTROLLER, presentCanvas: presentToolCanvas,
+  assetStore: ASSETS, mediaAssetStore: MEDIA_ASSETS,
+  createMediaClient: (signal) => {
+    const settings = SETTINGS.loadPublic();
+    const secrets = SETTINGS.loadSecrets(settings.activeConnectionId);
+    secrets.connectionKeys = Object.fromEntries(settings.connections.filter((connection) => settings.models.some((model) => model.connectionId === connection.id && model.enabled && model.roles.includes('media')))
+      .map((connection) => [connection.id, SETTINGS.loadSecrets(connection.id).litellmApiKey]));
+    return createMediaMcpClient({ ...defaultMcpLaunchOptions(settings, secrets, { isPackaged: app.isPackaged, resourcesPath: process.resourcesPath }), signal });
+  },
+  getKits: () => CANVAS_CONTROLLER.getCurrentKits() || [],
+  getOrigin: () => CHAT.getToolOrigin(),
+  registerMediaJob: registerTrackedMediaJob, control: AGENT_CONTROL,
+  eventStore: { read: (...args) => CONTROL_EVENTS.read(...args) },
+  onEvent: emitAgentEvent,
+  onWaiting: ({ request, origin }) => { if (origin.backend === 'codex') CODEX_CHAT.pauseForCanvasInput(request); },
+  workspace: {
+    list: () => ({ projects: CANVASES.list(), currentProjectId: canvasView?.getCurrentCanvasId() || '' }),
+    open: ({ projectId, documentPath }, { signal }) => withCanvas(async (controller) => {
+      signal?.throwIfAborted();
+      await saveCanvasBeforeSwitch(controller);
+      const result = await controller.openSaved(validateOpaqueId(projectId, 'Project ID'), documentPath ? validateDocumentPath(documentPath) : undefined);
+      emitCanvasSaved(result);
+      publishControlEvent({ type: 'project-opened', projectId, documentPath: result.documentPath, title: result.title });
+      return { ok: true, projectId, title: result.title, documentPath: result.documentPath };
+    }),
+    create: ({ title, kits = [] }, { signal }) => withCanvas(async (controller) => {
+      signal?.throwIfAborted();
+      assertInstalledKits(kits, CANVAS_KIT_BUNDLES);
+      await saveCanvasBeforeSwitch(controller);
+      const created = CANVASES.createProject({ title: validateCanvasTitle(title), kits });
+      const result = await controller.openSaved(created.id);
+      emitCanvasSaved(result);
+      publishControlEvent({ type: 'project-created', projectId: result.id, title: result.title, documentPath: result.documentPath });
+      return { ok: true, projectId: result.id, title: result.title, documentPath: result.documentPath };
+    }),
+    delete: ({ projectId }, context) => withCanvas((controller) => DELETIONS.deleteProject(controller, validateOpaqueId(projectId, 'Project ID'), {}, context)),
+  },
+});
+function createControlServer() {
+  return createControlMcpServer({ userDataPath: app.getPath('userData'), toolHost: TOOL_HOST,
+    control: AGENT_CONTROL, getEventCursor: CONTROL_EVENTS.getCursor, onEvent: () => emitControlState() });
+}
+MCP_SERVER = createControlServer();
+CHAT = createAgentRouter({ builtin: BUILTIN_CHAT, codex: CODEX_CHAT, control: AGENT_CONTROL,
+  chatStore: CHAT_STORE, inputStore: CANVAS_INPUTS, mediaJobStore: MEDIA_JOBS, mediaAssetStore: MEDIA_ASSETS,
+  canvasController: CANVAS_CONTROLLER, eventStore: { append: publishControlEvent }, onEvent: emitAgentEvent,
+  disconnectControllers: (reason) => MCP_SERVER.disconnectAll(reason),
+  shutdownTools: async () => { await TOOL_HOST.shutdown(); await MCP_SERVER.close(); },
+  resumeTools: async () => {
+    TOOL_HOST.cancelShutdown();
+    if (!MCP_SERVER.getConnectionInfo().url) {
+      MCP_SERVER = createControlServer();
+      await MCP_SERVER.start();
+    }
+  },
+  onBackendChanged: async (reason) => {
+    if (AGENT_CONTROL.getBackend() === 'codex' && reason) {
+      suppressControlEvents = true;
+      try { await refreshCodexState(); }
+      finally { suppressControlEvents = false; }
+    }
+    emitControlState(reason);
+  },
+});
+
+function publicControlState() {
+  const connection = MCP_SERVER?.getConnectionInfo() || {};
+  const codex = CODEX_CHAT.getState();
+  let available = false;
+  try { resolveCodexExecutable(); available = true; } catch {}
+  return { backend: AGENT_CONTROL.getBackend(), busy: AGENT_CONTROL.getState().busy,
+    external: { url: connection.url || '', enabled: Boolean(connection.url && AGENT_CONTROL.canConnect()), connectedClients: connection.connectedClients?.length || 0 },
+    codex: { available, connected: codex.connected === true, authenticated: codex.authenticated,
+      accountLabel: codex.account?.email || codex.account?.planType || (codex.account ? 'Codex account' : ''),
+      model: codex.model,
+      models: codex.models.map((model) => ({ id: model.model || model.id, displayName: model.displayName || model.model || model.id })),
+      login: codex.login, error: codexRuntimeError || codex.error || '' } };
+}
+function emitControlState(reason) {
+  if (suppressControlEvents || CHAT?.isSwitching()) return;
+  emitAgentEvent({ type: 'agent-control', state: publicControlState(), ...(reason ? { reason } : {}) });
+}
+async function refreshCodexState() {
+  if (refreshingCodex) return refreshingCodex;
+  refreshingCodex = (async () => {
+    try {
+      await CODEX_CHAT.readAccount();
+      await CODEX_CHAT.listModels();
+      const model = AGENT_CONTROL.getCodexModel();
+      if (model && CODEX_CHAT.getState().models.some((entry) => (entry.model || entry.id) === model)) CODEX_CHAT.selectModel(model);
+      codexRuntimeError = '';
+    } catch (error) { codexRuntimeError = error.message; }
+    finally { emitControlState(); }
+    return publicControlState();
+  })().finally(() => { refreshingCodex = undefined; });
+  return refreshingCodex;
+}
+
+async function hydrateCodexChat(snapshot) {
+  const references = new Map();
+  for (const message of snapshot.history) {
+    for (const asset of message.canvasMediaRefs || []) references.set(asset.assetId, { ...asset, requestId: message.canvasInputRequestId, input: true });
+    for (const asset of message.mediaJobResult?.assets || []) if (!references.has(asset.assetId)) references.set(asset.assetId, asset);
+    if (message.role !== 'tool') continue;
+    try {
+      const output = JSON.parse(message.content);
+      const values = [output.structuredContent, ...(output.content || []).filter((block) => block.type === 'text').map((block) => { try { return JSON.parse(block.text); } catch { return null; } })];
+      for (const value of values.filter(Boolean)) for (const asset of [...(value.assets || []), ...(value.assetId ? [{ assetId: value.assetId }] : [])]) if (!references.has(asset.assetId)) references.set(asset.assetId, asset);
+    } catch {}
+  }
+  let bytes = 0;
+  for (const [assetId, reference] of [...references].slice(-20)) {
+    try {
+      const metadata = await MEDIA_ASSETS.getMetadata(assetId);
+      if (/^(video|audio)\//.test(metadata?.mimeType)) snapshot.media.push({ ...reference, ...metadata, assetId });
+      else {
+        const asset = await MEDIA_ASSETS.get(assetId);
+        const size = Buffer.byteLength(asset.data, 'base64');
+        if (bytes + size > 64 * 1024 * 1024) continue;
+        bytes += size;
+        if (reference.input) snapshot.media.push({ ...reference, ...asset, assetId });
+        else snapshot.images.push({ ...reference, ...asset, assetId });
+      }
+    } catch {}
+  }
+  return snapshot;
+}
+
+async function refreshMediaTools(action) {
+  try { return await action(); }
+  finally { TOOL_HOST.invalidateTools(); }
+}
 
 const VIDEO_METADATA = createVideoMetadataService({
   BrowserWindow,
@@ -463,6 +693,58 @@ function registerIpcHandlers() {
     if (event.sender !== controller.view.webContents || event.senderFrame !== controller.view.webContents.mainFrame || !controller.getCurrentCanvasId() || contract.loading || contract.previewHidden || event.senderFrame.url !== contract.url) throw new Error('Canvas bridge request was rejected.');
     return controller;
   }
+  ipcMain.handle(IPC_CHANNELS.GET_AGENT_CONTROL, async (event) => {
+    assertTrustedSender(event, mainWindow);
+    if (AGENT_CONTROL.getBackend() === 'codex' && !CHAT.isBusy()) await refreshCodexState();
+    return publicControlState();
+  });
+  ipcMain.handle(IPC_CHANNELS.SET_AGENT_BACKEND, async (event, backend) => {
+    assertTrustedSender(event, mainWindow);
+    if (!['builtin', 'external', 'codex'].includes(backend)) throw new Error('Choose Built-in, External MCP, or Codex.');
+    await CHAT.setBackend(backend);
+    return publicControlState();
+  });
+  ipcMain.handle(IPC_CHANNELS.GET_MCP_CONNECTION, (event) => {
+    assertTrustedSender(event, mainWindow);
+    if (AGENT_CONTROL.getBackend() !== 'external') throw new Error('Select External MCP to reveal its connection token.');
+    const { url, bearerToken } = MCP_SERVER.getConnectionInfo();
+    return { url, bearerToken, enabled: AGENT_CONTROL.canConnect() };
+  });
+  ipcMain.handle(IPC_CHANNELS.CODEX_LOGIN, async (event, input = {}) => {
+    assertTrustedSender(event, mainWindow);
+    AGENT_CONTROL.assertIdle();
+    if (AGENT_CONTROL.getBackend() !== 'codex') throw new Error('Select Codex before signing in.');
+    if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => key !== 'type') || !['chatgpt', 'chatgptDeviceCode'].includes(input.type)) throw new Error('Choose browser or device sign-in.');
+    const login = await CODEX_CHAT.startLogin(input.type);
+    if (input.type === 'chatgpt' && login.authUrl) {
+      const url = new URL(login.authUrl);
+      if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('Codex returned an unsupported sign-in address.');
+      await shell.openExternal(url.href);
+    }
+    return publicControlState();
+  });
+  ipcMain.handle(IPC_CHANNELS.CODEX_CANCEL_LOGIN, async (event, loginId) => {
+    assertTrustedSender(event, mainWindow);
+    if (AGENT_CONTROL.getBackend() !== 'codex' || typeof loginId !== 'string' || loginId !== CODEX_CHAT.getState().login?.loginId) throw new Error('This Codex sign-in is no longer pending.');
+    await CODEX_CHAT.cancelLogin(loginId);
+    return publicControlState();
+  });
+  ipcMain.handle(IPC_CHANNELS.CODEX_LOGOUT, async (event) => {
+    assertTrustedSender(event, mainWindow);
+    AGENT_CONTROL.assertIdle();
+    if (AGENT_CONTROL.getBackend() !== 'codex') throw new Error('Select Codex before signing out.');
+    await CODEX_CHAT.logout();
+    return publicControlState();
+  });
+  ipcMain.handle(IPC_CHANNELS.SELECT_CODEX_MODEL, (event, model) => {
+    assertTrustedSender(event, mainWindow);
+    AGENT_CONTROL.assertIdle();
+    if (AGENT_CONTROL.getBackend() !== 'codex') throw new Error('Select Codex before choosing its model.');
+    CODEX_CHAT.selectModel(model);
+    AGENT_CONTROL.selectCodexModel(model);
+    emitControlState();
+    return publicControlState();
+  });
   ipcMain.handle('canvas:submit-input', (event, input) => {
     const controller = requireCanvasSender(event);
     if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['requestId', 'value'].includes(key))) throw new Error('Canvas input is invalid.');
@@ -478,20 +760,32 @@ function registerIpcHandlers() {
     const canvasId = controller.getCurrentCanvasId();
     const generation = controller.getContract().runtimeGeneration;
     const chatId = CHAT.getActiveChatId();
-    const selected = SETTINGS.loadPublic();
-    const modelIdentity = (settings) => JSON.stringify([settings.activeConnectionId, settings.litellmModel, settings.litellmBaseUrl]);
+    const backend = AGENT_CONTROL.getBackend();
+    const destination = () => {
+      if (AGENT_CONTROL.getBackend() === 'codex') return { backend: 'codex', model: CODEX_CHAT.getState().model || AGENT_CONTROL.getCodexModel() };
+      if (AGENT_CONTROL.getBackend() === 'external') return { backend: 'external' };
+      const settings = SETTINGS.loadPublic();
+      return { connectionId: settings.activeConnectionId, model: settings.litellmModel, baseUrl: settings.litellmBaseUrl };
+    };
+    const selected = destination();
     if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['media', 'prompt'].includes(key))) throw new Error('Canvas media input is invalid.');
     if (input.prompt !== undefined && (typeof input.prompt !== 'string' || input.prompt.length > 20_000)) throw new Error('Canvas media prompt is invalid.');
     const media = validateChatOptions({ attachments: [input.media] }).attachments[0];
     if (!['image', 'audio'].includes(media.type)) throw new Error('Share a photo or audio recording.');
-    if (!selected.litellmModel) throw new Error('Choose an Agent model in chat before sharing a capture.');
-    const consent = await dialog.showMessageBox(mainWindow, { type: 'question', title: 'Share capture with chat', message: `Send ${media.name} to ${selected.litellmModel}?`, detail: 'The capture will be saved on this device and sent to your configured model endpoint.', buttons: ['Send to chat', 'Cancel'], defaultId: 0, cancelId: 1 });
+    if (backend === 'codex' && media.type === 'audio') throw new Error('Embedded Codex supports image captures. Choose an Agent model with audio input to share this recording.');
+    if (backend !== 'external' && !selected.model) throw new Error('Choose an Agent model in chat before sharing a capture.');
+    const destinationLabel = backend === 'external' ? AGENT_CONTROL.getState().controller?.name || 'your external agent' : selected.model;
+    const consent = await dialog.showMessageBox(mainWindow, { type: 'question', title: 'Share capture with agent', message: `Send ${media.name} to ${destinationLabel}?`, detail: backend === 'external'
+      ? 'The capture will be saved locally and made available to the connected controller through Easel MCP.'
+      : backend === 'codex' ? 'The capture will be saved locally and sent through the signed-in Codex account.' : 'The capture will be saved locally and sent to your configured model endpoint.',
+      buttons: ['Share capture', 'Cancel'], defaultId: 1, cancelId: 1 });
     if (consent.response !== 0) return { ok: false, cancelled: true, error: 'Capture was not shared.' };
     if (controller.getCurrentCanvasId() !== canvasId || controller.getContract().runtimeGeneration !== generation) throw new Error('The canvas changed before this capture could be shared.');
-    if (modelIdentity(SETTINGS.loadPublic()) !== modelIdentity(selected)) throw new Error('The selected model changed. Share the capture again with the intended model.');
+    if (AGENT_CONTROL.getBackend() !== backend || JSON.stringify(destination()) !== JSON.stringify(selected)) throw new Error('The selected controller or model changed. Share the capture again with the intended model.');
     const assetId = await (media.type === 'image' ? ASSETS : CAPTURE_MEDIA).save(media);
     if (controller.getCurrentCanvasId() !== canvasId || controller.getContract().runtimeGeneration !== generation) throw new Error('The canvas changed before this capture could be shared.');
-    return CHAT.submitCanvasMedia({ canvasId, documentPath: controller.getCurrentDocumentPath(), chatId, attachments: [{ assetId, type: media.type, mimeType: media.mimeType, name: media.name }], prompt: input.prompt || '', approvedModel: { connectionId: selected.activeConnectionId, model: selected.litellmModel, baseUrl: selected.litellmBaseUrl } });
+    if (AGENT_CONTROL.getBackend() !== backend || JSON.stringify(destination()) !== JSON.stringify(selected) || CHAT.getActiveChatId() !== chatId) throw new Error('The selected conversation, controller or model changed while saving. The capture is saved locally; share it again to confirm its destination.');
+    return CHAT.submitCanvasMedia({ canvasId, documentPath: controller.getCurrentDocumentPath(), chatId, attachments: [{ assetId, type: media.type, mimeType: media.mimeType, name: media.name }], prompt: input.prompt || '', approvedModel: selected });
   });
   ipcMain.handle(IPC_CHANNELS.LIST_CANVAS_FILES, (event, id) => {
     assertTrustedSender(event, mainWindow);
@@ -692,7 +986,7 @@ function registerIpcHandlers() {
   });
   ipcMain.handle(IPC_CHANNELS.LIST_LITELLM_MODELS, (event) => {
     assertTrustedSender(event, mainWindow);
-    return LITELLM_MODELS.listModels();
+    return refreshMediaTools(() => LITELLM_MODELS.listModels());
   });
   ipcMain.handle(IPC_CHANNELS.TEST_LITELLM_CHAT, (event, model) => {
     assertTrustedSender(event, mainWindow);
@@ -704,11 +998,11 @@ function registerIpcHandlers() {
   });
   ipcMain.handle(IPC_CHANNELS.SAVE_CONNECTION, (event, input) => {
     assertTrustedSender(event, mainWindow);
-    return SETTINGS.saveConnection(input);
+    return refreshMediaTools(() => SETTINGS.saveConnection(input));
   });
   ipcMain.handle(IPC_CHANNELS.REMOVE_CONNECTION, (event, id) => {
     assertTrustedSender(event, mainWindow);
-    return SETTINGS.removeConnection(id);
+    return refreshMediaTools(() => SETTINGS.removeConnection(id));
   });
   ipcMain.handle(IPC_CHANNELS.SELECT_MODEL, (event, input) => {
     assertTrustedSender(event, mainWindow);
@@ -716,11 +1010,11 @@ function registerIpcHandlers() {
   });
   ipcMain.handle(IPC_CHANNELS.UPDATE_MODEL, (event, input) => {
     assertTrustedSender(event, mainWindow);
-    return SETTINGS.updateModel(input);
+    return refreshMediaTools(() => SETTINGS.updateModel(input));
   });
   ipcMain.handle(IPC_CHANNELS.CHECK_MODEL_CAPABILITIES, (event, input) => {
     assertTrustedSender(event, mainWindow);
-    return LITELLM_MODELS.checkCapabilities(validateModelSelection(input));
+    return refreshMediaTools(() => LITELLM_MODELS.checkCapabilities(validateModelSelection(input)));
   });
   ipcMain.handle(IPC_CHANNELS.GET_MODEL_CATALOG, (event) => {
     assertTrustedSender(event, mainWindow);
@@ -732,7 +1026,7 @@ function registerIpcHandlers() {
   });
   ipcMain.handle(IPC_CHANNELS.SAVE_SETTINGS, (event, input) => {
     assertTrustedSender(event, mainWindow);
-    return SETTINGS.save(validateSettingsInput(input));
+    return refreshMediaTools(() => SETTINGS.save(validateSettingsInput(input)));
   });
   ipcMain.handle(IPC_CHANNELS.SEND_MESSAGE, async (event, input, options) => {
     assertTrustedSender(event, mainWindow);
@@ -880,7 +1174,8 @@ function registerIpcHandlers() {
 }
 
 async function createWindow() {
-  CHAT.cancelShutdown({ schedule: false });
+  await CHAT.cancelShutdown({ schedule: false });
+  await MCP_SERVER.start();
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 900,
@@ -946,9 +1241,9 @@ async function createWindow() {
       });
       closePrepared = true;
       if (!closingWindow.isDestroyed()) closingWindow.close();
-    })().catch((error) => {
+    })().catch(async (error) => {
       closeTask = null;
-      CHAT.cancelShutdown();
+      await CHAT.cancelShutdown();
       JOB_MONITOR.start();
       if (!closingWindow.isDestroyed()) closingWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, { type: 'error', message: `The window is still open because its work could not be saved: ${error.message}` });
     });

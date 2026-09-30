@@ -2,6 +2,13 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const CHANNELS = Object.freeze({
   GET_SETTINGS: 'settings:get',
+  GET_AGENT_CONTROL: 'agent:control:get',
+  SET_AGENT_BACKEND: 'agent:control:select',
+  GET_MCP_CONNECTION: 'agent:mcp:connection',
+  CODEX_LOGIN: 'agent:codex:login',
+  CODEX_CANCEL_LOGIN: 'agent:codex:login:cancel',
+  CODEX_LOGOUT: 'agent:codex:logout',
+  SELECT_CODEX_MODEL: 'agent:codex:model',
   SAVE_SETTINGS: 'settings:save',
   SAVE_CONNECTION: 'connections:save',
   REMOVE_CONNECTION: 'connections:remove',
@@ -65,6 +72,13 @@ const CHANNELS = Object.freeze({
 function createBridge({ contextBridge: bridge, ipcRenderer: ipc }) {
   const api = Object.freeze({
     getSettings: () => ipc.invoke(CHANNELS.GET_SETTINGS),
+    getAgentControl: () => ipc.invoke(CHANNELS.GET_AGENT_CONTROL),
+    setAgentBackend: (backend) => ipc.invoke(CHANNELS.SET_AGENT_BACKEND, backend),
+    getMcpConnection: () => ipc.invoke(CHANNELS.GET_MCP_CONNECTION),
+    codexLogin: (input) => ipc.invoke(CHANNELS.CODEX_LOGIN, input),
+    codexCancelLogin: (loginId) => ipc.invoke(CHANNELS.CODEX_CANCEL_LOGIN, loginId),
+    codexLogout: () => ipc.invoke(CHANNELS.CODEX_LOGOUT),
+    selectCodexModel: (model) => ipc.invoke(CHANNELS.SELECT_CODEX_MODEL, model),
     saveConnection: (input) => ipc.invoke(CHANNELS.SAVE_CONNECTION, input),
     removeConnection: (id) => ipc.invoke(CHANNELS.REMOVE_CONNECTION, id),
     selectModel: (input) => ipc.invoke(CHANNELS.SELECT_MODEL, input),

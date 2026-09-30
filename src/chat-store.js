@@ -41,19 +41,43 @@ function createChatStore({ userDataPath, fileSystem = fs }) {
   function activate(id) {
     if (id) get(id);
     const index = readIndex();
-    write(indexPath, { ...index, activeId: id });
+    const backend = id ? get(id).backend || 'builtin' : 'builtin';
+    write(indexPath, { ...index, activeId: id, activeIds: { ...(index.activeIds || {}), [backend]: id } });
   }
 
-  function save({ id = crypto.randomUUID().replaceAll('-', ''), title, history }) {
+  function save({ id = crypto.randomUUID().replaceAll('-', ''), title, history, backend, codexThreadId, origin }) {
     if (!Array.isArray(history) || typeof title !== 'string') throw new Error('Chat history is invalid.');
+    if (backend !== undefined && !['builtin', 'codex', 'external'].includes(backend)) throw new Error('Chat backend is invalid.');
+    if (codexThreadId !== undefined && (typeof codexThreadId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(codexThreadId))) throw new Error('Codex thread ID is invalid.');
+    if (origin !== undefined && (!origin || typeof origin !== 'object' || Array.isArray(origin) || Buffer.byteLength(JSON.stringify(origin)) > 8000)) throw new Error('Chat origin is invalid.');
     const index = readIndex();
-    const metadata = { id, title: title.slice(0, 120), updatedAt: Date.now() };
+    const metadata = { id, title: title.slice(0, 120), updatedAt: Date.now(), ...(backend ? { backend } : {}), ...(codexThreadId ? { codexThreadId } : {}), ...(origin ? { origin } : {}) };
     write(filename(id), { ...metadata, history });
-    write(indexPath, { activeId: id, chats: [metadata, ...index.chats.filter((chat) => chat.id !== id)] });
+    write(indexPath, { ...index, activeId: id, activeIds: { ...(index.activeIds || {}), [backend || 'builtin']: id }, chats: [metadata, ...index.chats.filter((chat) => chat.id !== id)] });
     return metadata;
   }
 
+  function forBackend(backend) {
+    if (!['builtin', 'codex', 'external'].includes(backend)) throw new Error('Chat backend is invalid.');
+    return {
+      save: (input) => save({ ...input, backend }),
+      get: (id) => { const chat = get(id); if ((chat.backend || 'builtin') !== backend) throw new Error('This conversation uses another agent backend.'); return chat; },
+      list: () => readIndex().chats.filter((chat) => (chat.backend || 'builtin') === backend),
+      activate: (id) => {
+        if (id && (get(id).backend || 'builtin') !== backend) throw new Error('This conversation uses another agent backend.');
+        const index = readIndex();
+        write(indexPath, { ...index, activeId: id, activeIds: { ...(index.activeIds || {}), [backend]: id } });
+      },
+      getActive: () => {
+        const index = readIndex();
+        const id = index.activeIds?.[backend] ?? (index.activeId && (get(index.activeId).backend || 'builtin') === backend ? index.activeId : '');
+        return id ? get(id) : null;
+      },
+    };
+  }
+
   return {
+    forBackend,
     save,
     get,
     activate,

@@ -1,5 +1,6 @@
 const ID_PATTERN = /^[a-f0-9]{32}$/;
 const INPUT_ACTIONS = new Set(['clear', 'restorePreviousView', 'resetState']);
+const { validateInteractionOrigin } = require('./interaction-origin');
 
 function inputId(value, label) {
   if (typeof value !== 'string' || !ID_PATTERN.test(value)) throw new Error(`${label} is invalid.`);
@@ -39,6 +40,7 @@ function validateCanvasInputSubmission(input) {
 function canvasInputSummary(entry) {
   const keys = ['id', 'kind', 'canvasId', 'documentPath', 'chatId', 'question', 'options', 'afterSubmit', 'value', 'prompt', 'status', 'createdAt', 'answeredAt', 'completedAt', 'error', 'actionApplied', 'actionError'];
   const summary = Object.fromEntries(keys.filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]]));
+  if (entry.origin !== undefined) summary.origin = validateInteractionOrigin(entry.origin);
   if (entry.attachments) summary.attachments = entry.attachments.map(({ assetId, type, name, mimeType }) => ({ assetId, type, name, mimeType }));
   return summary;
 }

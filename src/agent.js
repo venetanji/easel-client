@@ -420,6 +420,160 @@ async function cachedVideoResult(messages, args, mediaAssetStore) {
   return null;
 }
 
+async function executeEaselTool(name, args, {
+  canvasController, presentCanvas, assetStore, mediaAssetStore = assetStore,
+  mcp, kits = [], onEvent, registerMediaJob, signal, messages = [], context = {},
+} = {}) {
+  let content;
+  let awaitingCanvasInput;
+  let awaitingMediaJob;
+  const liveCaptures = [];
+  throwIfAborted(signal);
+  if (name === 'request_canvas_input' || name === 'get_canvas_inputs') {
+    try {
+      if (!canvasController) throw new Error('Canvas input is unavailable.');
+      if (name === 'request_canvas_input') {
+        if (typeof canvasController.requestCanvasInput !== 'function') throw new Error('Canvas input is unavailable in this app version.');
+        const request = await canvasController.requestCanvasInput(validateCanvasInputRequest(args), context);
+        awaitingCanvasInput = request;
+        content = JSON.stringify({ ok: true, request: canvasInputSummary(request), waiting: true, message: context.origin?.backend === 'external'
+          ? 'End this turn. The click is saved to get_canvas_inputs and get_control_events. MCP resource notifications announce new events; your controller decides when to continue. Automatic conversation wakeup is not guaranteed. Do not poll.'
+          : 'The turn ends now. The user click is saved and resumes this same conversation automatically. Do not poll.', effects: { source: 'unchanged; choice overlay is temporary', runtime: 'choice overlay shown', persistence: 'request and submitted answer are stored locally' } });
+      } else {
+        if (typeof canvasController.getCanvasInputs !== 'function') throw new Error('Canvas input history is unavailable.');
+        content = JSON.stringify({ ok: true, ...await canvasController.getCanvasInputs(args, context) });
+      }
+    } catch (error) {
+      content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Canvas input failed.' });
+    }
+  } else if (name === 'create_canvas') {
+    if (!canvasController || typeof canvasController.createEmpty !== 'function') {
+      throw new Error('Canvas creation is unavailable.');
+    }
+    if (typeof args.title !== 'string' || !args.title.trim() || args.title.trim().length > 120) {
+      throw new Error('Canvas name is required and must be at most 120 characters.');
+    }
+    const selectedKits = [...new Set(Array.isArray(kits) ? kits.filter((kit) => ALLOWED_RUNTIME_KITS.has(kit)) : [])];
+    const created = await canvasController.createEmpty(args.title.trim(), selectedKits);
+    onEvent?.({ type: 'canvas', title: created.title, canvasId: created.id, projectId: created.id, projectTitle: created.projectTitle || created.title, documentPath: created.documentPath, documentTitle: created.documentTitle });
+    content = JSON.stringify({ ok: true, message: 'HTML canvas created and opened in the project.', projectId: created.id, canvasId: created.id, title: created.title, documentPath: created.documentPath, documentTitle: created.documentTitle });
+  } else if (name === 'present_canvas') {
+    try {
+      const html = args.html;
+      if (typeof html !== 'string' || !html.trim() || Buffer.byteLength(html, 'utf8') > MAX_CANVAS_HTML_BYTES) {
+        throw new Error('Canvas HTML is required and must be at most 1 MiB.');
+      }
+      if (args.title !== undefined && (typeof args.title !== 'string' || args.title.length > 120)) {
+        throw new Error('Canvas title is invalid.');
+      }
+      const sourceAssets = args.assets || [];
+      const canvasHtml = normalizeCanvasAssetReferences(html, sourceAssets);
+      const assets = await resolveCanvasAssets(assetStore, sourceAssets, signal);
+      throwIfAborted(signal);
+      const selectedKits = [...new Set(Array.isArray(kits) ? kits.filter((kit) => ALLOWED_RUNTIME_KITS.has(kit)) : [])];
+      const saved = await presentCanvas({ html: canvasHtml, title: args.title || 'Easel Canvas', ...(args.path ? { path: args.path } : {}), assets, kits: selectedKits });
+      onEvent?.({ type: 'canvas', title: saved?.title || args.title || 'Easel Canvas', canvasId: saved?.id || '', projectId: saved?.id || '', projectTitle: saved?.projectTitle || saved?.title, documentPath: saved?.documentPath, documentTitle: saved?.documentTitle });
+      content = JSON.stringify({ ok: true, message: 'Project document saved and opened.', projectId: saved?.id || '', canvasId: saved?.id || '', documentPath: saved?.documentPath, documentTitle: saved?.documentTitle });
+    } catch (error) {
+      content = JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : 'Canvas could not be opened.',
+        guidance: "Correct the canvas HTML or asset references. Use assets:[{name:'texture',assetId:'...'}], replacing ... with the full 32-character ID returned by an image tool, and reference that same asset://ID in HTML.",
+      });
+    }
+  } else if (name === 'inspect_canvas') {
+    if (!canvasController) throw new Error('Canvas controls are unavailable.');
+    content = await canvasController.inspect();
+  } else if (name === 'list_media_jobs' || name === 'forget_media_job') {
+    const method = name === 'list_media_jobs' ? 'listMediaJobs' : 'forgetMediaJob';
+    if (typeof canvasController?.[method] !== 'function') throw new Error('Media job monitor is unavailable.');
+    content = JSON.stringify(await canvasController[method](args, { signal }));
+  } else if (name === 'list_media_assets') {
+    if (typeof canvasController?.listMediaAssets !== 'function') throw new Error('Saved media browsing is unavailable.');
+    content = JSON.stringify({ ok: true, ...await canvasController.listMediaAssets(args) });
+  } else if (name === 'delete_media_asset') {
+    if (typeof canvasController?.deleteMediaAsset !== 'function') throw new Error('Confirmed media deletion is unavailable.');
+    content = JSON.stringify(await canvasController.deleteMediaAsset(args, { signal }));
+  } else if (name === 'inspect_media_asset') {
+    if (typeof canvasController?.readMediaAsset !== 'function') throw new Error('Saved media references are unavailable.');
+    const asset = await canvasController.readMediaAsset(args);
+    if (!IMAGE_TYPES.has(asset.mimeType)) throw new Error('Use get_video_frames for a captured video. This inspection accepts saved images.');
+    liveCaptures.push({ ...asset, assetId: args.assetId, canvasId: args.projectId || '', observation: `Saved image reference asset://${args.assetId}` });
+    content = JSON.stringify({ ok: true, assetId: args.assetId, mimeType: asset.mimeType, name: asset.name, bytes: asset.bytes, message: 'Saved image supplied as a temporary visual observation.' });
+  } else if (PROJECT_CANVAS_TOOLS.some((tool) => tool.function.name === name)) {
+    try {
+      const method = PROJECT_CANVAS_METHODS[name];
+      if (!canvasController || typeof canvasController[method] !== 'function') throw new Error('Canvas project tools are unavailable in this app version.');
+      const result = await canvasController[method](args, { signal });
+      content = typeof result === 'string' ? result : JSON.stringify(result);
+    } catch (error) {
+      content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Canvas project tool failed.', guidance: name === 'delete_canvas_file' ? 'Inspect the current files and revisions. Remove reported references before retrying. Deleting the last HTML offers project deletion. Deletion requires user confirmation and accepts no reload options.' : 'List the current project and read the affected file before retrying. A failed reload can leave a source edit saved; reload:false changes persisted files only.' });
+    }
+  } else if (SOURCE_CANVAS_TOOLS.some((tool) => tool.function.name === name)) {
+    try {
+      if (!canvasController) throw new Error('Canvas controls are unavailable.');
+      const methods = { get_canvas_source: 'getCanvasSource', apply_canvas_patch: 'applyCanvasPatch', adopt_canvas_runtime_dom: 'adoptCanvasDom', reload_canvas: 'reloadCanvas', validate_canvas: 'validateCanvas', capture_live_canvas: 'captureLiveCanvas', record_canvas_video: 'recordCanvasVideo', get_video_frames: 'getVideoFrames' };
+      const method = methods[name];
+      if (typeof canvasController[method] !== 'function') throw new Error('This canvas feature is unavailable in the current app version.');
+      const result = await canvasController[method](args, { signal });
+      if (name === 'capture_live_canvas') {
+        const { data, ...metadata } = result;
+        liveCaptures.push(result);
+        content = JSON.stringify({ ok: true, ...metadata, message: 'PNG captured from the current live canvas. The image is provided separately for visual inspection.' });
+      } else if (name === 'record_canvas_video' || name === 'get_video_frames') {
+        const { frames: videoFrames, data, thumbnail, ...metadata } = result;
+        for (const frame of videoFrames || []) liveCaptures.push({ ...frame, mimeType: 'image/jpeg', assetId: result.assetId, observation: `Recorded canvas asset://${result.assetId} at ${frame.timestamp.toFixed(2)} seconds. Silent video sampled as still frames.` });
+        content = JSON.stringify({ ok: true, ...metadata, sampledFrames: (videoFrames || []).map(({ timestamp }) => ({ timestamp })), message: 'Video references are reusable; sampled stills are provided separately for visual inspection.' });
+      } else content = typeof result === 'string' ? result : JSON.stringify(result);
+    } catch (error) {
+      content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Canvas tool failed.', guidance: 'Read or inspect the current canvas before retrying. Check the source/runtime persistence contract; a failed reload can leave a source edit saved.' });
+    }
+  } else if (name === 'execute_canvas_javascript') {
+    if (!canvasController) throw new Error('Canvas controls are unavailable.');
+    try {
+      if (typeof args.code !== 'string' || !args.code.trim() || Buffer.byteLength(args.code, 'utf8') > 16_384) {
+        throw new Error('Canvas JavaScript is required and must be at most 16 KiB.');
+      }
+      const result = await canvasController.execute(args.code);
+      content = JSON.stringify({ ok: true, result, effects: { source: 'unchanged; runtime probes are not persisted by Save. Use file/source tools for durable edits, or explicitly adopt_canvas_runtime_dom for a DOM snapshot.', runtime: 'JavaScript executed; may be changed. Runtime variables, renderers and audio nodes are not serialized.' }, contract: canvasController.getContract?.() || null });
+    } catch (error) {
+      content = JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : 'Canvas JavaScript failed.',
+        guidance: 'Inspect the canvas before retrying; the script may have partially changed it. Correct the JavaScript and try again. Code runs as an async function body with await and return support.',
+      });
+    }
+  } else if (name === 'add_image_to_canvas') {
+    if (!canvasController) throw new Error('Canvas controls are unavailable.');
+    content = JSON.stringify({ ok: true, result: await canvasController.addImage(args), effects: { source: 'saved; asset attached and matching image inserted into authored HTML, without adopting other runtime DOM. Reload applies the updated asset map.', runtime: 'matching image inserted into the live DOM; sourcePendingReload remains true until reload' }, contract: canvasController.getContract?.() || null });
+  } else {
+    const projectId = canvasController?.getCurrentCanvasId?.() || '';
+    const wireArgs = await resolveMediaToolArguments(name, args, async (reference) => {
+      if (typeof canvasController?.readMediaAsset === 'function') return canvasController.readMediaAsset(reference);
+      return assetStore.get(reference.assetId);
+    }, signal);
+    content = name === 'get_video' ? await cachedVideoResult(messages, args, mediaAssetStore) : null;
+    if (!content) {
+      const result = await awaitAbortable(mcp.callTool(name, wireArgs, { signal }).then(async (result) => {
+        if (!result.isError && result.structuredContent?.job && typeof registerMediaJob === 'function') {
+          const job = result.structuredContent.job;
+          const hasOutput = result.content?.some((item) => ['image', 'audio', 'resource'].includes(item.type)) || result.structuredContent.assets?.length;
+          if (!hasOutput && !['failed', 'cancelled'].includes(job.status)) {
+            awaitingMediaJob = await registerMediaJob({ job, modelId: job.modelId || args.model, mediaType: name === 'generate_video' || name === 'get_video' ? 'video' : 'image', projectId, prompt: args.prompt || '' });
+
+          }
+        }
+        return result;
+      }), signal);
+      throwIfAborted(signal);
+      content = await handleMcpResult(result, mediaAssetStore, onEvent, { generated: MEDIA_OUTPUT_TOOLS.has(name), projectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets });
+      if (awaitingMediaJob) content = JSON.stringify({ ...JSON.parse(content), monitoredJob: awaitingMediaJob, guidance: 'The host polls, downloads and saves this job across restarts. End the turn; do not poll or resubmit.' });
+    }
+  }
+
+  return { content, captures: liveCaptures, awaitingCanvasInput, awaitingMediaJob };
+}
+
 async function runAgentTurn({
   userMessage,
   mode = 'chat',
@@ -641,145 +795,15 @@ async function runAgentTurn({
       onEvent?.({ type: 'tool-start', name });
       throwIfAborted(signal);
       startedToolIds.add(call.id);
-      if (name === 'request_canvas_input' || name === 'get_canvas_inputs') {
-        try {
-          if (!canvasController) throw new Error('Canvas input is unavailable.');
-          if (name === 'request_canvas_input') {
-            if (typeof canvasController.requestCanvasInput !== 'function') throw new Error('Canvas input is unavailable in this app version.');
-            const request = await canvasController.requestCanvasInput(validateCanvasInputRequest(args));
-            awaitingCanvasInput = request;
-            content = JSON.stringify({ ok: true, request: canvasInputSummary(request), waiting: true, message: 'The turn ends now. The user click is saved and resumes this same conversation automatically. Do not poll.', effects: { source: 'unchanged; choice overlay is temporary', runtime: 'choice overlay shown', persistence: 'request and submitted answer are stored locally' } });
-          } else {
-            if (typeof canvasController.getCanvasInputs !== 'function') throw new Error('Canvas input history is unavailable.');
-            content = JSON.stringify({ ok: true, ...await canvasController.getCanvasInputs(args) });
-          }
-        } catch (error) {
-          content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Canvas input failed.' });
-        }
-      } else if (name === 'create_canvas') {
-        if (!canvasController || typeof canvasController.createEmpty !== 'function') {
-          throw new Error('Canvas creation is unavailable.');
-        }
-        if (typeof args.title !== 'string' || !args.title.trim() || args.title.trim().length > 120) {
-          throw new Error('Canvas name is required and must be at most 120 characters.');
-        }
-        const selectedKits = [...new Set(Array.isArray(kits) ? kits.filter((kit) => ALLOWED_RUNTIME_KITS.has(kit)) : [])];
-        const created = await canvasController.createEmpty(args.title.trim(), selectedKits);
-        onEvent?.({ type: 'canvas', title: created.title, canvasId: created.id, projectId: created.id, projectTitle: created.projectTitle || created.title, documentPath: created.documentPath, documentTitle: created.documentTitle });
-        content = JSON.stringify({ ok: true, message: 'HTML canvas created and opened in the project.', projectId: created.id, canvasId: created.id, title: created.title, documentPath: created.documentPath, documentTitle: created.documentTitle });
-      } else if (name === 'present_canvas') {
-        try {
-          const html = args.html;
-          if (typeof html !== 'string' || !html.trim() || Buffer.byteLength(html, 'utf8') > MAX_CANVAS_HTML_BYTES) {
-            throw new Error('Canvas HTML is required and must be at most 1 MiB.');
-          }
-          if (args.title !== undefined && (typeof args.title !== 'string' || args.title.length > 120)) {
-            throw new Error('Canvas title is invalid.');
-          }
-          const sourceAssets = args.assets || [];
-          const canvasHtml = normalizeCanvasAssetReferences(html, sourceAssets);
-          const assets = await resolveCanvasAssets(assetStore, sourceAssets, signal);
-          throwIfAborted(signal);
-          const selectedKits = [...new Set(Array.isArray(kits) ? kits.filter((kit) => ALLOWED_RUNTIME_KITS.has(kit)) : [])];
-          const saved = await presentCanvas({ html: canvasHtml, title: args.title || 'Easel Canvas', ...(args.path ? { path: args.path } : {}), assets, kits: selectedKits });
-          onEvent?.({ type: 'canvas', title: saved?.title || args.title || 'Easel Canvas', canvasId: saved?.id || '', projectId: saved?.id || '', projectTitle: saved?.projectTitle || saved?.title, documentPath: saved?.documentPath, documentTitle: saved?.documentTitle });
-          content = JSON.stringify({ ok: true, message: 'Project document saved and opened.', projectId: saved?.id || '', canvasId: saved?.id || '', documentPath: saved?.documentPath, documentTitle: saved?.documentTitle });
-        } catch (error) {
-          content = JSON.stringify({
-            ok: false,
-            error: error instanceof Error ? error.message : 'Canvas could not be opened.',
-            guidance: "Correct the canvas HTML or asset references. Use assets:[{name:'texture',assetId:'...'}], replacing ... with the full 32-character ID returned by an image tool, and reference that same asset://ID in HTML.",
-          });
-        }
-      } else if (name === 'inspect_canvas') {
-        if (!canvasController) throw new Error('Canvas controls are unavailable.');
-        content = await canvasController.inspect();
-      } else if (name === 'list_media_jobs' || name === 'forget_media_job') {
-        const method = name === 'list_media_jobs' ? 'listMediaJobs' : 'forgetMediaJob';
-        if (typeof canvasController?.[method] !== 'function') throw new Error('Media job monitor is unavailable.');
-        content = JSON.stringify(await canvasController[method](args, { signal }));
-      } else if (name === 'list_media_assets') {
-        if (typeof canvasController?.listMediaAssets !== 'function') throw new Error('Saved media browsing is unavailable.');
-        content = JSON.stringify({ ok: true, ...await canvasController.listMediaAssets(args) });
-      } else if (name === 'delete_media_asset') {
-        if (typeof canvasController?.deleteMediaAsset !== 'function') throw new Error('Confirmed media deletion is unavailable.');
-        content = JSON.stringify(await canvasController.deleteMediaAsset(args, { signal }));
-      } else if (name === 'inspect_media_asset') {
-        if (typeof canvasController?.readMediaAsset !== 'function') throw new Error('Saved media references are unavailable.');
-        const asset = await canvasController.readMediaAsset(args);
-        if (!IMAGE_TYPES.has(asset.mimeType)) throw new Error('Use get_video_frames for a captured video. This inspection accepts saved images.');
-        liveCaptures.push({ ...asset, assetId: args.assetId, canvasId: args.projectId || '', observation: `Saved image reference asset://${args.assetId}` });
-        content = JSON.stringify({ ok: true, assetId: args.assetId, mimeType: asset.mimeType, name: asset.name, bytes: asset.bytes, message: 'Saved image supplied as a temporary visual observation.' });
-      } else if (PROJECT_CANVAS_TOOLS.some((tool) => tool.function.name === name)) {
-        try {
-          const method = PROJECT_CANVAS_METHODS[name];
-          if (!canvasController || typeof canvasController[method] !== 'function') throw new Error('Canvas project tools are unavailable in this app version.');
-          const result = await canvasController[method](args, { signal });
-          content = typeof result === 'string' ? result : JSON.stringify(result);
-        } catch (error) {
-          content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Canvas project tool failed.', guidance: name === 'delete_canvas_file' ? 'Inspect the current files and revisions. Remove reported references before retrying. Deleting the last HTML offers project deletion. Deletion requires user confirmation and accepts no reload options.' : 'List the current project and read the affected file before retrying. A failed reload can leave a source edit saved; reload:false changes persisted files only.' });
-        }
-      } else if (SOURCE_CANVAS_TOOLS.some((tool) => tool.function.name === name)) {
-        try {
-          if (!canvasController) throw new Error('Canvas controls are unavailable.');
-          const methods = { get_canvas_source: 'getCanvasSource', apply_canvas_patch: 'applyCanvasPatch', adopt_canvas_runtime_dom: 'adoptCanvasDom', reload_canvas: 'reloadCanvas', validate_canvas: 'validateCanvas', capture_live_canvas: 'captureLiveCanvas', record_canvas_video: 'recordCanvasVideo', get_video_frames: 'getVideoFrames' };
-          const method = methods[name];
-          if (typeof canvasController[method] !== 'function') throw new Error('This canvas feature is unavailable in the current app version.');
-          const result = await canvasController[method](args, { signal });
-          if (name === 'capture_live_canvas') {
-            const { data, ...metadata } = result;
-            liveCaptures.push(result);
-            content = JSON.stringify({ ok: true, ...metadata, message: 'PNG captured from the current live canvas. The image is provided separately for visual inspection.' });
-          } else if (name === 'record_canvas_video' || name === 'get_video_frames') {
-            const { frames: videoFrames, data, thumbnail, ...metadata } = result;
-            for (const frame of videoFrames || []) liveCaptures.push({ ...frame, mimeType: 'image/jpeg', assetId: result.assetId, observation: `Recorded canvas asset://${result.assetId} at ${frame.timestamp.toFixed(2)} seconds. Silent video sampled as still frames.` });
-            content = JSON.stringify({ ok: true, ...metadata, sampledFrames: (videoFrames || []).map(({ timestamp }) => ({ timestamp })), message: 'Video references are reusable; sampled stills are provided separately for visual inspection.' });
-          } else content = typeof result === 'string' ? result : JSON.stringify(result);
-        } catch (error) {
-          content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Canvas tool failed.', guidance: 'Read or inspect the current canvas before retrying. Check the source/runtime persistence contract; a failed reload can leave a source edit saved.' });
-        }
-      } else if (name === 'execute_canvas_javascript') {
-        if (!canvasController) throw new Error('Canvas controls are unavailable.');
-        try {
-          if (typeof args.code !== 'string' || !args.code.trim() || Buffer.byteLength(args.code, 'utf8') > 16_384) {
-            throw new Error('Canvas JavaScript is required and must be at most 16 KiB.');
-          }
-          const result = await canvasController.execute(args.code);
-          content = JSON.stringify({ ok: true, result, effects: { source: 'unchanged; runtime probes are not persisted by Save. Use file/source tools for durable edits, or explicitly adopt_canvas_runtime_dom for a DOM snapshot.', runtime: 'JavaScript executed; may be changed. Runtime variables, renderers and audio nodes are not serialized.' }, contract: canvasController.getContract?.() || null });
-        } catch (error) {
-          content = JSON.stringify({
-            ok: false,
-            error: error instanceof Error ? error.message : 'Canvas JavaScript failed.',
-            guidance: 'Inspect the canvas before retrying; the script may have partially changed it. Correct the JavaScript and try again. Code runs as an async function body with await and return support.',
-          });
-        }
-      } else if (name === 'add_image_to_canvas') {
-        if (!canvasController) throw new Error('Canvas controls are unavailable.');
-        content = JSON.stringify({ ok: true, result: await canvasController.addImage(args), effects: { source: 'saved; asset attached and matching image inserted into authored HTML, without adopting other runtime DOM. Reload applies the updated asset map.', runtime: 'matching image inserted into the live DOM; sourcePendingReload remains true until reload' }, contract: canvasController.getContract?.() || null });
-      } else {
-        const projectId = canvasController?.getCurrentCanvasId?.() || '';
-        const wireArgs = await resolveMediaToolArguments(name, args, async (reference) => {
-          if (typeof canvasController?.readMediaAsset === 'function') return canvasController.readMediaAsset(reference);
-          return assetStore.get(reference.assetId);
-        }, signal);
-        content = name === 'get_video' ? await cachedVideoResult(messages, args, mediaAssetStore) : null;
-        if (!content) {
-          const result = await awaitAbortable(mcp.callTool(name, wireArgs, { signal }).then(async (result) => {
-            if (!result.isError && result.structuredContent?.job && typeof registerMediaJob === 'function') {
-              const job = result.structuredContent.job;
-              const hasOutput = result.content?.some((item) => ['image', 'audio', 'resource'].includes(item.type)) || result.structuredContent.assets?.length;
-              if (!hasOutput && !['failed', 'cancelled'].includes(job.status)) {
-                awaitingMediaJob = await registerMediaJob({ job, modelId: job.modelId || args.model, mediaType: name === 'generate_video' || name === 'get_video' ? 'video' : 'image', projectId, prompt: args.prompt || '' });
-                finalizing = true;
-              }
-            }
-            return result;
-          }), signal);
-          throwIfAborted(signal);
-          content = await handleMcpResult(result, mediaAssetStore, onEvent, { generated: MEDIA_OUTPUT_TOOLS.has(name), projectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets });
-          if (awaitingMediaJob) content = JSON.stringify({ ...JSON.parse(content), monitoredJob: awaitingMediaJob, guidance: 'The host polls, downloads and saves this job across restarts. End the turn; do not poll or resubmit.' });
-        }
-      }
+      const execution = await executeEaselTool(name, args, {
+        canvasController, presentCanvas, assetStore, mediaAssetStore, mcp, kits,
+        onEvent, registerMediaJob, signal, messages,
+      });
+      content = execution.content;
+      awaitingCanvasInput ||= execution.awaitingCanvasInput;
+      awaitingMediaJob ||= execution.awaitingMediaJob;
+      finalizing ||= Boolean(execution.awaitingMediaJob);
+      liveCaptures.push(...execution.captures);
       } catch (error) {
         content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error), ...(error?.code ? { code: error.code } : {}), ...(error?.stage ? { stage: error.stage, requestSent: error.requestSent } : {}) });
       }
@@ -818,6 +842,10 @@ async function runAgentTurn({
 
 module.exports = {
   buildUserContent,
+  executeEaselTool,
+  validateToolArguments,
+  toolCorrection,
+  SYSTEM_PROMPT,
   CANVAS_TOOLS,
   formatSkillInstructions,
   handleMcpResult,
