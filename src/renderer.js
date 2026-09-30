@@ -1190,6 +1190,10 @@ function wireRenderer({ document, client }) {
   async function handleDeletionEvent(event) {
     const selectedPath = currentFilePage?.path;
     await workspace.acceptDeletion(event);
+    if ((event.type === 'project-deleted' || event.projectDeleted) && canvasFilesDialog.open && filesCanvasId === event.projectId) {
+      canvasFilesDialog.close();
+      return;
+    }
     if (event.type === 'project-file-deleted' && canvasFilesDialog.open && filesCanvasId === event.projectId) {
       await openCanvasFiles(selectedPath === event.deletedPath ? event.documentPath : selectedPath, event.projectId);
     }
@@ -1205,8 +1209,8 @@ function wireRenderer({ document, client }) {
     try {
       const result = await client.deleteProjectFile(projectId, { path });
       if (!result?.deleted) return;
-      await handleDeletionEvent({ ...result, type: 'project-file-deleted', projectId, deletedPath: path });
-      setStatus(statusElement, `Deleted ${path}.`);
+      await handleDeletionEvent({ ...result, type: result.projectDeleted ? 'project-deleted' : 'project-file-deleted', projectId, deletedPath: path });
+      setStatus(statusElement, result.projectDeleted ? 'Project deleted.' : `Deleted ${path}.`);
     } catch (error) {
       setStatus(canvasFileStatus, error?.message || 'Could not delete this file. Try again.', true);
     } finally {
@@ -1630,9 +1634,10 @@ function wireRenderer({ document, client }) {
     const media = new Map((chat.media || []).map((asset) => [`${asset.requestId}:${asset.assetId}`, asset]));
     const generatedMedia = new Map((chat.media || []).filter((asset) => !asset.requestId).map((asset) => [asset.assetId, asset]));
     for (const message of chat.history || []) {
-      if (message.role === 'tool') {
+      if (message.role === 'tool' || message.mediaJobResult) {
         try {
-          const result = JSON.parse(message.content);
+          const result = message.mediaJobResult || JSON.parse(message.content);
+          if (message.mediaJobResult) appendTextMessage(document, messagesElement, 'assistant', result.status === 'ready' ? 'Your media is ready.' : `Generation failed: ${result.error || 'The service reported a failure.'}`, { copyText });
           for (const asset of result.assets || []) {
             const image = images.get(asset.assetId) || generatedMedia.get(asset.assetId);
             if (!image || assetPreviews.has(asset.assetId)) continue;
@@ -2157,7 +2162,36 @@ function wireRenderer({ document, client }) {
   });
 
   const unsubscribe = client.onAgentEvent((event) => {
-    if (event.type === 'project-file-deleted' || event.type === 'media-deleted') {
+    if (event.type === 'media-job') {
+      if (!workspace.updateMediaJob(event.job)) refreshAssets();
+      return;
+    }
+    if (event.type === 'media-job-removed' || event.type === 'media-job-ready') {
+      refreshAssets();
+      if (event.type === 'media-job-ready') receivedMessage();
+      return;
+    }
+    if (event.type === 'media-job-notification') {
+      if (event.chatId === activeChatId) appendTextMessage(document, messagesElement, 'assistant', event.text, { copyText });
+      return;
+    }
+    if (event.type === 'media-job-resume-start' || event.type === 'media-job-resume-end') {
+      if (event.chatId !== activeChatId) return;
+      const key = `media:${event.jobId}`;
+      if (event.type === 'media-job-resume-start') {
+        canvasResumeRequests.add(key);
+        activityLabel.textContent = 'Continuing with your generated media...';
+        activityElement.hidden = false;
+      } else {
+        canvasResumeRequests.delete(key);
+        if (event.error || event.saveWarning) setStatus(statusElement, event.error || event.saveWarning, true);
+      }
+      canvasResumeBusy = canvasResumeRequests.size > 0;
+      if (!canvasResumeBusy) { stopPending = false; if (!chatBusy) activityElement.hidden = true; }
+      updateSendState();
+      return;
+    }
+    if (event.type === 'project-deleted' || event.type === 'project-file-deleted' || event.type === 'media-deleted') {
       handleDeletionEvent(event).catch((error) => setStatus(statusElement, `Deleted, but the project list could not refresh: ${error.message}`, true));
       return;
     }

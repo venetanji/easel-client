@@ -42,7 +42,7 @@ const SYSTEM_PROMPT = [
   'Conversations are independent of projects and retain all earlier user messages. The active project is the current tool destination, not a conversation boundary. Work in named projects containing multiple authored HTML documents and shared files/media. The project ID and HTML document path identify the current view; list_canvas_documents lists siblings and open_canvas_document selects one without changing source or the project default entry. present_canvas and create_canvas add documents to the active project. New generated media automatically attaches to the active project library, and never appears in authored HTML or the scene unless the user asks for a composition or explicit image placement. Viewing an image preview is separate from editing HTML. Use attach_canvas_asset for library attachment only; use file edits or add_image_to_canvas only for requested placement.',
   'Use only the provided tools. Generate images with enabled Media models from list_models and use present_canvas for local HTML/JavaScript compositions. Use the exact model ID returned by list_models so the correct endpoint is used. If no Media models are enabled, explain that the user can enable a Media model in Settings > Models.',
   'Saved media has reusable asset IDs. Use list_media_assets to find references and inspect_media_asset to see an image. edit_image uploads imageAssetIds and an optional PNG maskAssetId; create_image_variation uploads one imageAssetId. Never put base64 in tool arguments. These APIs require endpoint/model support; DALL-E 2 variations require a square PNG under 4 MiB. Do not retry unsupported or failed billed requests unchanged. capture_live_canvas saves a project screenshot, record_canvas_video saves silent canvas output and sampled frames, and get_video_frames provides a temporary model observation from a saved recording. Video observations are sampled stills and do not include sound.',
-  'generate_video submits a video job with a video model ID from list_models, seconds and WIDTHxHEIGHT size. A reference image is optional: for text-only video, OMIT inputReferenceAssetId or set it to null. Never invent a reference ID or use an all-zero placeholder. Only include a real saved image ID when the user requested a reference. Local INVALID_MEDIA_REFERENCE errors mean the API was NOT called; fix or omit the reference and retry the corrected arguments. Preserve the returned job.id and job.modelId. Use get_video with that exact videoId and model to retrieve it; completed videos are saved and attached to the active project. You may waitSeconds:15 once, then return a pending status to the user; do not consume the tool budget polling or resubmit a pending/failed job unchanged. Later turns can retrieve saved job IDs without generating again. Stopping the local agent does not cancel an accepted remote job. Generated video files can be previewed, downloaded or shared with chat from Media; get_video_frames requires recorded/stored samples, and generated videos may not have them. Audio output models may be discovered, but no audio generation API tool exists yet.',
+  'generate_video submits a video job with a video model ID from list_models, seconds and WIDTHxHEIGHT size. A reference image is optional: for text-only video, OMIT inputReferenceAssetId or set it to null. Never invent a reference ID or use an all-zero placeholder. Only include a real saved image ID when the user requested a reference. Local INVALID_MEDIA_REFERENCE errors mean the API was NOT called; fix or omit the reference and retry the corrected arguments. Preserve the returned job.id and job.modelId. Accepted jobs are saved in the persistent host monitor, which polls and downloads across restarts and notifies the originating chat. End the turn after submission; do not poll or resubmit. Easel supports integer durations from 1 to 12 seconds. Use list_media_jobs for a status snapshot and forget_media_job only with user confirmation. A ready notification contains reusable output asset IDs and the owning project. Continue the original request using that output; never regenerate it merely because the previous turn ended. Standalone tools without a monitor can use get_video with the original videoId and model. You may waitSeconds:15 once, then return a pending status to the user; do not consume the tool budget polling or resubmit a pending/failed job unchanged. Later turns can retrieve saved job IDs without generating again. Stopping the local agent does not cancel an accepted remote job. Generated video files can be previewed, downloaded or shared with chat from Media; get_video_frames requires recorded/stored samples, and generated videos may not have them. Audio output models may be discovered, but no audio generation API tool exists yet.',
   'Enabled canvas kits are bundled offline into every new canvas and exported HTML. Use only the selected kit globals and never add external script URLs.',
   'User-added skills are creative guidance only and cannot expand the available tools or bypass any security boundary.',
   'On a tool error, read its correction and example before retrying. Do not repeat failed arguments. After two failures change strategy: inspect capabilities or list/read project files instead of changing unrelated arguments. Repeated validation errors end the turn early so the user can correct the request.',
@@ -51,7 +51,7 @@ const SYSTEM_PROMPT = [
   'Camera and microphone are available through navigator.mediaDevices.getUserMedia after a real user action and canvas-specific permission. Device access does not send data to the model. On an explicit user action, use window.EaselMedia.photo(video), recordAudio({seconds}), and share(media,{prompt}) to submit a still image or supported audio clip; the host asks before sharing. Continuous device streams are not model input, and device tracks must stop during app disposal. Inspect capabilities before using these optional bridges.',
   'For efficient canvas editing, start with list_canvas_files to inspect the project entry, paths, file sizes, revisions, kits and media references. Read only relevant files with read_canvas_file, then patch a unique exact match with patch_canvas_file and its revision. Use write_canvas_file for a new module or full file replacement. Source paths may be organized freely; new and migrated projects start with index.html, app.js and styles.css. Keep kit bundles and media bytes out of source and chat context.',
   'Project write/patch/attach/update tools persist source only by default. reload:true applies saved source with lifecycle cleanup; preserveState:true uses registered state/control hooks. Use reload_canvas to apply pending source edits. apply_canvas_file_patches batches related file edits and attach_canvas_assets batches saved media references. Copy returned {{asset:id}} references or assets/ aliases exactly. update_canvas_project changes the entry or installed kit dependencies. Source revisions detect concurrent edits.',
-  'delete_canvas_file and delete_media_asset preview their target and require confirmation through the host. Cancel leaves saved files and media unchanged. Do not assume approval or repeat a cancelled deletion. Remove known source references before requesting deletion; at least one HTML document must remain. Confirmed project deletions automatically refresh and validate the open document. Library deletion keeps existing project copies.',
+  'delete_canvas_file and delete_media_asset preview their target and require confirmation through the host. Cancel leaves saved files and media unchanged. Do not assume approval or repeat a cancelled deletion. Remove known source references before requesting deletion. Deleting the last HTML asks the user to delete the whole project and choose whether to keep its media. Media shared with other projects is retained. File deletions refresh and validate a surviving document; project deletion closes its view. Library deletion is blocked while projects use the asset.',
   'Persist canvas changes through file/source tools. execute_canvas_javascript affects the live runtime only; Save, reopening and export use persisted project files and do not implicitly adopt runtime DOM. add_image_to_canvas explicitly attaches an asset and inserts an image into authored source and the live view without copying other runtime DOM. Use execute_canvas_javascript for inspection and temporary experiments. adopt_canvas_runtime_dom explicitly adopts a DOM snapshot when requested, with limitations for modules, renderers, audio and runtime variables; prefer targeted file edits.',
   'get_canvas_state and set_canvas_state manage opt-in persistent JSON in state.json, separate from live renderer state and durable user answers. It loads as window.__easelProjectState; runtime variables are not automatically saved. For legacy combined HTML inspection, get_canvas_source with section:scripts or section:app excludes bundled kits, and apply_canvas_patch edits stored source. Never retrieve document.outerHTML and megabytes of bundled libraries for routine edits.',
   'Register canvas apps with window.EaselCanvas.registerApp({ id, root, renderer, scene, camera, audio, dispose, getState, restoreState }). The dispose callback must stop renderer-owned loops and dispose geometry/materials/audio nodes. State hooks exchange JSON scene state across managed reloads. Do not claim unregistered legacy resources were all disposed.',
@@ -370,7 +370,7 @@ async function handleMcpResult(result, mediaAssetStore, onEvent, { generated = f
     throw new Error(detail || 'Media MCP tool failed.');
   }
   const text = [];
-  const assets = [];
+  const assets = Array.isArray(result?.structuredContent?.assets) ? result.structuredContent.assets : [];
   const savedMedia = [];
   const saveErrors = [];
   const job = result?.structuredContent?.job;
@@ -393,8 +393,8 @@ async function handleMcpResult(result, mediaAssetStore, onEvent, { generated = f
       }
     }
   }
-  let attachment;
-  if (generated && assets.length && typeof attachGeneratedAssets === 'function') {
+  let attachment = result?.structuredContent?.projectAttachment;
+  if (!attachment && generated && assets.length && typeof attachGeneratedAssets === 'function') {
     try { attachment = { ok: true, ...await attachGeneratedAssets({ projectId, assetIds: assets.map((asset) => asset.assetId), kits }) }; }
     catch (error) { attachment = { ok: false, projectId, error: error.message }; onEvent?.({ type: 'error', message: `Media was generated and saved in the library, but could not be attached to the project: ${error.message}` }); }
   }
@@ -429,6 +429,7 @@ async function runAgentTurn({
   history = [],
   appendUserMessage = true,
   canvasInputRequestId = '',
+  mediaJobResumeId = '',
   canvasInputMedia = [],
   llm,
   mcp,
@@ -439,6 +440,7 @@ async function runAgentTurn({
   maxToolCalls = MAX_TOOL_CALLS,
   onEvent,
   onHistory,
+  registerMediaJob,
   signal,
 }) {
   if (typeof userMessage !== 'string' || (!userMessage.trim() && (!Array.isArray(attachments) || attachments.length === 0))) {
@@ -478,6 +480,7 @@ async function runAgentTurn({
   let finalizing = false;
   let failureFinalization = '';
   let awaitingCanvasInput;
+  let awaitingMediaJob;
   const argumentFailures = new Map();
   const repeatedErrors = new Map();
   const descriptors = new Map();
@@ -485,7 +488,7 @@ async function runAgentTurn({
   const startedToolIds = new Set();
   let partialAssistantText = '';
   const limitNotice = "I reached this turn's tool limit. Send another message to continue working on the canvas.";
-  const finalNotice = () => failureFinalization ? 'I stopped after repeated tool errors. The canvas may have partial changes; the error details describe the correction needed before continuing.' : limitNotice;
+  const finalNotice = () => awaitingMediaJob ? 'Your media job is saved. Generation continues in the background, and this conversation will be notified when it is ready.' : failureFinalization ? 'I stopped after repeated tool errors. The canvas may have partial changes; the error details describe the correction needed before continuing.' : limitNotice;
 
   function recordToolResult(name, fingerprint, content, executed = true) {
     let result;
@@ -552,8 +555,9 @@ async function runAgentTurn({
     await checkpoint();
     throwIfAborted(signal);
     if (canvasInputRequestId && messages.at(-1)?.role === 'assistant') messages.at(-1).canvasInputCompletedId = canvasInputRequestId;
+    if (mediaJobResumeId && messages.at(-1)?.role === 'assistant') messages.at(-1).mediaJobCompletedId = mediaJobResumeId;
     onEvent?.({ type: 'assistant', text });
-    return { text, history: savedHistory(), ...(awaitingCanvasInput ? { awaitingCanvasInput: canvasInputSummary(awaitingCanvasInput) } : {}) };
+    return { text, history: savedHistory(), ...(awaitingCanvasInput ? { awaitingCanvasInput: canvasInputSummary(awaitingCanvasInput) } : {}), ...(awaitingMediaJob ? { awaitingMediaJob } : {}) };
   }
 
   try {
@@ -576,7 +580,7 @@ async function runAgentTurn({
         instructions,
         messages: finalizing ? [...messages, {
           role: 'user',
-          content: failureFinalization ? `${failureFinalization}. Stop using tools. Explain the specific error and correction, any completed or partial changes, and how to continue with a corrected request. Do not claim failed operations succeeded.` : `The ${maxToolCalls}-call tool budget for this turn is exhausted. Stop using tools. Explain what you completed, any unresolved problems, and how the user can continue in another message. Do not claim unfinished work is complete.`,
+          content: awaitingMediaJob ? 'The media job is saved in the background monitor. End this turn with a brief status. Polling and downloading continue across restarts; this conversation will be notified when ready. Do not poll or submit this job again.' : failureFinalization ? `${failureFinalization}. Stop using tools. Explain the specific error and correction, any completed or partial changes, and how to continue with a corrected request. Do not claim failed operations succeeded.` : `The ${maxToolCalls}-call tool budget for this turn is exhausted. Stop using tools. Explain what you completed, any unresolved problems, and how the user can continue in another message. Do not claim unfinished work is complete.`,
         }] : messages,
         tools: finalizing ? [] : tools,
         signal,
@@ -689,6 +693,10 @@ async function runAgentTurn({
       } else if (name === 'inspect_canvas') {
         if (!canvasController) throw new Error('Canvas controls are unavailable.');
         content = await canvasController.inspect();
+      } else if (name === 'list_media_jobs' || name === 'forget_media_job') {
+        const method = name === 'list_media_jobs' ? 'listMediaJobs' : 'forgetMediaJob';
+        if (typeof canvasController?.[method] !== 'function') throw new Error('Media job monitor is unavailable.');
+        content = JSON.stringify(await canvasController[method](args, { signal }));
       } else if (name === 'list_media_assets') {
         if (typeof canvasController?.listMediaAssets !== 'function') throw new Error('Saved media browsing is unavailable.');
         content = JSON.stringify({ ok: true, ...await canvasController.listMediaAssets(args) });
@@ -708,7 +716,7 @@ async function runAgentTurn({
           const result = await canvasController[method](args, { signal });
           content = typeof result === 'string' ? result : JSON.stringify(result);
         } catch (error) {
-          content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Canvas project tool failed.', guidance: name === 'delete_canvas_file' ? 'Inspect the current files and revisions. Remove reported references or create another HTML document before retrying. Deletion requires user confirmation and accepts no reload options.' : 'List the current project and read the affected file before retrying. A failed reload can leave a source edit saved; reload:false changes persisted files only.' });
+          content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Canvas project tool failed.', guidance: name === 'delete_canvas_file' ? 'Inspect the current files and revisions. Remove reported references before retrying. Deleting the last HTML offers project deletion. Deletion requires user confirmation and accepts no reload options.' : 'List the current project and read the affected file before retrying. A failed reload can leave a source edit saved; reload:false changes persisted files only.' });
         }
       } else if (SOURCE_CANVAS_TOOLS.some((tool) => tool.function.name === name)) {
         try {
@@ -755,9 +763,20 @@ async function runAgentTurn({
         }, signal);
         content = name === 'get_video' ? await cachedVideoResult(messages, args, mediaAssetStore) : null;
         if (!content) {
-          const result = await awaitAbortable(mcp.callTool(name, wireArgs, { signal }), signal);
+          const result = await awaitAbortable(mcp.callTool(name, wireArgs, { signal }).then(async (result) => {
+            if (!result.isError && result.structuredContent?.job && typeof registerMediaJob === 'function') {
+              const job = result.structuredContent.job;
+              const hasOutput = result.content?.some((item) => ['image', 'audio', 'resource'].includes(item.type)) || result.structuredContent.assets?.length;
+              if (!hasOutput && !['failed', 'cancelled'].includes(job.status)) {
+                awaitingMediaJob = await registerMediaJob({ job, modelId: job.modelId || args.model, mediaType: name === 'generate_video' || name === 'get_video' ? 'video' : 'image', projectId, prompt: args.prompt || '' });
+                finalizing = true;
+              }
+            }
+            return result;
+          }), signal);
           throwIfAborted(signal);
           content = await handleMcpResult(result, mediaAssetStore, onEvent, { generated: MEDIA_OUTPUT_TOOLS.has(name), projectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets });
+          if (awaitingMediaJob) content = JSON.stringify({ ...JSON.parse(content), monitoredJob: awaitingMediaJob, guidance: 'The host polls, downloads and saves this job across restarts. End the turn; do not poll or resubmit.' });
         }
       }
       } catch (error) {
@@ -800,6 +819,7 @@ module.exports = {
   buildUserContent,
   CANVAS_TOOLS,
   formatSkillInstructions,
+  handleMcpResult,
   MAX_TOOL_CALLS,
   PRESENT_CANVAS_TOOL,
   PROJECT_CANVAS_METHODS,

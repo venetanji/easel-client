@@ -47,6 +47,16 @@ With this configuration, media tools require the exact `id` returned by `list_mo
 
 ## Video jobs
 
+In Easel client, accepted jobs are stored under `media-jobs` before ending the agent turn. The host polls about every five seconds, with backoff up to one minute on retrieval errors, and resumes polling on app restart. It retrieves using the original endpoint, model and current credentials; changing/removing that endpoint retains the ID but blocks retrieval. A disabled model does not prevent downloading its accepted jobs. Downloaded asset references are checkpointed before project attachment, so an attachment retry does not download another copy.
+
+Generating cards appear in the original project's media and All media. `/v1/videos/queue/{video_id}` supplies optional queue position and estimated completion time; `get_video({includeQueue:true})` requests those diagnostics and falls back to normal status if unavailable. Estimates are supplied by the service and may be absent or change. Deleting a card requires confirmation, stops monitoring and forgets its monitor ID; it does not cancel the server job or delete downloaded files. Recovery requires the remote job ID.
+
+Completion queues a durable notification for the originating conversation. The idle original conversation resumes automatically only while its original project and Agent endpoint/model are selected. Otherwise it receives the completion in its next turn. Stop ends/pause agent continuation but accepted jobs keep polling. Interrupted continuations are not automatically replayed on restart, since previous tool effects may have occurred.
+
+### Queued Image Contract (Proposed)
+
+Image generation/edit/variation requests send `Prefer: respond-async`. Existing synchronous `data:[{b64_json}]` responses remain supported. A queue-capable endpoint can return HTTP 202 with `{id,status,progress}` and optional `queue_position`, `queue_ahead`, `estimated_wait_seconds`, `estimated_completion_at` (Unix seconds). The adapter preserves that receipt in the shared monitor. Proposed `GET /v1/images/jobs/{id}` returns the same job status and, when completed, `data:[{b64_json}]`. This retrieval path requires upstream support and is used only after receiving an actual image job ID. Audio jobs can reuse the shared receipt/status/storage lifecycle once their generation endpoint is implemented.
+
 Easel's live API exposes multipart `POST /v1/videos`, JSON `GET /v1/videos/{video_id}` and binary `GET /v1/videos/{video_id}/content`. Public server source may lag the deployed API. Video requests use shared endpoint normalization, credentials, cancellation, error handling and bounded download helpers with the image transport.
 
 ```json
@@ -72,7 +82,7 @@ Retrieve using `get_video`:
 
 Use the **same model ID** to select the original endpoint and credentials. `waitSeconds` is 0-15 (default 0), with checks every three seconds. Return pending work to the user instead of repeatedly polling or resubmitting it. Later chat turns retain the compact job reference. Completed jobs download by default; `download:false` only checks status. A completed result contains an embedded resource with `mimeType` and `blob`, plus structured job metadata. The host saves media locally, attaches it to the active project and displays a chat preview. Repeated completed retrievals reuse an existing asset reference from this conversation if it still exists. Video bytes never enter saved tool messages.
 
-- Defaults are 4 seconds and 1280x720. Easel accepts 4, 8, or 12 seconds, so its shortest video is four seconds. The generic tool allows 1-60 seconds for other endpoints; actual model duration, resolution and reference support depend on the endpoint.
+- Defaults are 4 seconds and 1280x720. Easel accepts integer durations from 1 to 12 seconds. The generic tool allows 1-60 seconds for other endpoints; actual model duration, resolution and reference support depend on the endpoint.
 - Each video operation has an overall 45-second timeout and respects MCP cancellation. Stop ends local requests/waits; the API does not expose remote job cancellation, so accepted jobs may continue.
 - Downloads are limited to 32 MiB and must match MP4/WebM file signatures and their declared MIME type. Credentials never follow HTTP redirects or arbitrary result URLs. Retry a failed download using the job ID instead of creating another job.
 - Live OpenAPI currently omits response schemas. The parser accepts `id`/`video_id`, an optional `data` wrapper, and common queued/running/completed/failed status names. Unrecognized statuses are reported without claiming completion.

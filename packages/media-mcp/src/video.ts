@@ -1,9 +1,10 @@
+import { MEDIA_JOB_ID_PATTERN, parseMediaJob, type MediaJob as VideoJob } from './media-job.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { appendImage, decodeImageUpload, type ImageUpload } from './image-upload.js';
-import { headers, normalizeEaselBaseUrl, requestBinary, requestJson, requestSignal, safeErrorMessage, type ProviderOptions } from './media-http.js';
+import { headers, normalizeEaselBaseUrl, requestBinary, requestJson, requestSignal, type ProviderOptions } from './media-http.js';
 
 export const MAX_VIDEO_BYTES = 32 * 1_048_576;
-export const VIDEO_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
+export const VIDEO_ID_PATTERN = MEDIA_JOB_ID_PATTERN;
 
 export interface GenerateVideoInput {
   prompt: string;
@@ -19,39 +20,13 @@ export interface GetVideoInput {
   model?: string;
   waitSeconds?: number;
   download?: boolean;
+  includeQueue?: boolean;
   signal?: AbortSignal;
 }
 
-export interface VideoJob {
-  id: string;
-  status: string;
-  providerStatus: string;
-  progress?: number;
-  seconds?: number;
-  size?: string;
-  error?: string;
-}
+export type { MediaJob as VideoJob } from './media-job.js';
 
 export interface VideoResult { job: VideoJob; media?: { data: string; mimeType: 'video/mp4' | 'video/webm' } }
-
-function videoJob(payload: any, apiKey: string, expectedId?: string): VideoJob {
-  const value = payload?.data && !Array.isArray(payload.data) ? payload.data : payload;
-  const id = value?.id ?? value?.video_id;
-  if (typeof id !== 'string' || !VIDEO_ID_PATTERN.test(id) || (expectedId && id !== expectedId)) {
-    throw new Error('The video endpoint returned an invalid or mismatched job ID. Do not resubmit a generation automatically.');
-  }
-  const raw = value.status;
-  if (typeof raw !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(raw)) throw new Error(`Video job ${id} returned no usable status. Retrieve this job again; do not resubmit it.`);
-  const normalized = raw.toLowerCase();
-  const aliases: Record<string, string> = { pending: 'queued', created: 'queued', running: 'in_progress', processing: 'in_progress', succeeded: 'completed', ready: 'completed', done: 'completed', error: 'failed', canceled: 'cancelled' };
-  const job: VideoJob = { id, status: aliases[normalized] || normalized, providerStatus: raw };
-  if (typeof value.progress === 'number' && Number.isFinite(value.progress)) job.progress = Math.max(0, Math.min(100, value.progress));
-  const seconds = Number(value.seconds);
-  if (Number.isFinite(seconds) && seconds > 0 && seconds <= 3_600) job.seconds = seconds;
-  if (typeof value.size === 'string' && /^\d{2,5}x\d{2,5}$/.test(value.size)) job.size = value.size;
-  if (value.error) job.error = safeErrorMessage(value.error?.message || value.error, apiKey, 500);
-  return job;
-}
 
 export async function generateVideo(options: GenerateVideoInput & ProviderOptions): Promise<VideoJob> {
   options.signal?.throwIfAborted();
@@ -73,7 +48,7 @@ export async function generateVideo(options: GenerateVideoInput & ProviderOption
   const result = await requestJson(`${normalizeEaselBaseUrl(options.baseUrl)}/v1/videos`, {
     method: 'POST', headers: headers(apiKey), body: form, signal: requestSignal(options.signal, 45_000),
   }, apiKey, options.fetchImpl || globalThis.fetch, { label: 'Video generation', path: '/v1/videos', model });
-  return videoJob(result, apiKey);
+  return parseMediaJob(result, apiKey);
 }
 
 export async function getVideo(options: GetVideoInput & ProviderOptions): Promise<VideoResult> {
@@ -88,11 +63,23 @@ export async function getVideo(options: GetVideoInput & ProviderOptions): Promis
   const deadline = Date.now() + waitSeconds * 1_000;
   let job: VideoJob;
   do {
-    job = videoJob(await requestJson(url, { method: 'GET', headers: headers(apiKey), signal }, apiKey, fetchImpl,
+    job = parseMediaJob(await requestJson(url, { method: 'GET', headers: headers(apiKey), signal }, apiKey, fetchImpl,
       { label: 'Video job retrieval', path, model: options.model }), apiKey, options.videoId);
     if (!['queued', 'in_progress'].includes(job.status) || Date.now() >= deadline) break;
     await delay(Math.min(3_000, Math.max(1, deadline - Date.now())), undefined, { signal });
   } while (Date.now() <= deadline);
+  if (options.includeQueue && ['queued', 'in_progress'].includes(job.status)) {
+    // Queue diagnostics are optional; their absence must not block job retrieval.
+    try {
+      const queue = await requestJson(normalizeEaselBaseUrl(options.baseUrl) + '/v1/videos/queue/' + encodeURIComponent(options.videoId),
+        { method: 'GET', headers: headers(apiKey), signal }, apiKey, fetchImpl, { label: 'Video queue', path: '/v1/videos/queue', model: options.model });
+      if (queue?.id === job.id) {
+        for (const [remote, local] of Object.entries({ queue_position: 'queuePosition', queue_ahead: 'queueAhead', estimated_wait_seconds: 'estimatedWaitSeconds', estimated_completion_at: 'estimatedCompletionAt' })) {
+          if (typeof queue[remote] === 'number' && Number.isFinite(queue[remote]) && queue[remote] >= 0) (job as any)[local] = queue[remote];
+        }
+      }
+    } catch { signal.throwIfAborted(); }
+  }
   if (job.status !== 'completed' || options.download === false) return { job };
   const { bytes, mimeType } = await requestBinary(url + '/content', {
     method: 'GET', headers: headers(apiKey, 'video/mp4, video/webm, application/octet-stream'), signal,

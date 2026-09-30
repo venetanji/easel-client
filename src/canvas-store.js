@@ -117,6 +117,20 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
   const canvasesPath = path.join(userDataPath, 'canvases');
   const dependenciesPath = path.join(canvasesPath, '.dependencies');
   const projectAssetsPath = path.join(canvasesPath, '.assets');
+  const libraryMediaFilename = path.join(canvasesPath, '.library-media.json');
+  const mediaMetadataCache = new Map();
+  const mediaThumbnailCache = new Map();
+  let thumbnailCacheBytes = 0;
+
+  function cachedMediaMetadata(filename, read) {
+    const stat = fileSystem.statSync(filename);
+    const signature = `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}:${stat.ino}`;
+    const cached = mediaMetadataCache.get(filename);
+    if (cached?.signature === signature) return cached.value;
+    const value = read();
+    mediaMetadataCache.set(filename, { signature, value });
+    return value;
+  }
 
   function getFilename(id) {
     if (typeof id !== 'string' || !ID_PATTERN.test(id)) throw new Error('Canvas ID is invalid.');
@@ -512,7 +526,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     const nextEntry = name === previousEntry ? documents[0]?.path || null : previousEntry;
     const referencingFiles = Object.entries(project.files).filter(([file, content]) => file !== name && referencesProjectItem(content, file, name)).map(([file]) => file).sort();
     const summary = { id, path: name, title: project.title, bytes: Buffer.byteLength(project.files[name]), revision: digest(project.files[name]), projectRevision: projectRevision(project), isDocument, isEntry: name === previousEntry, previousEntry, nextEntry, remainingDocuments: documents, referencingFiles, ok: false };
-    if (isDocument && !documents.length) return { project, summary: { ...summary, reason: 'The last HTML document cannot be deleted. Create another HTML document first.' } };
+    if (isDocument && !documents.length) return { project, summary: { ...summary, requiresProjectDeletion: true, reason: 'Deleting the last HTML document requires deleting the project. Confirm project deletion and whether its media should be kept.' } };
     if (referencingFiles.length) return { project, summary: { ...summary, reason: `File ${name} is still referenced by: ${referencingFiles.join(', ')}. Remove these source references first.` } };
     delete project.files[name];
     project.manifest.entry = nextEntry;
@@ -539,6 +553,173 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return { ...commitProject(id, project), path: summary.path, deletedPath: summary.path, deleted: true, isDocument: summary.isDocument, isEntry: summary.isEntry, previousEntry: summary.previousEntry, nextEntry: summary.nextEntry, documents: projectDocuments(project), effects: { source: 'file removed from the project; a surviving HTML document remains the entry', runtime: 'unchanged until host reload' } };
   }
 
+  function readLibraryMedia() {
+    if (!fileSystem.existsSync(libraryMediaFilename)) return [];
+    return cachedMediaMetadata(libraryMediaFilename, () => {
+      const record = JSON.parse(fileSystem.readFileSync(libraryMediaFilename, 'utf8'));
+      if (record?.version !== 1 || !Array.isArray(record.assets) || record.assets.length > 20_000) throw new Error('Saved library media manifest is invalid.');
+      const ids = new Set();
+      for (const asset of record.assets) {
+        validateProject({ version: 1, files: { 'index.html': '' }, manifest: { entry: 'index.html', kits: [], assets: [asset] } });
+        if (ids.has(asset.id)) throw new Error('Saved library media IDs must be unique.');
+        ids.add(asset.id);
+      }
+      return record.assets;
+    });
+  }
+
+  function writeLibraryMedia(assets) {
+    writeAtomic(libraryMediaFilename, JSON.stringify({ version: 1, assets }));
+  }
+
+  function retainLibraryMedia(assets) {
+    const retained = new Map(readLibraryMedia().map((asset) => [asset.id, asset]));
+    for (const asset of assets) {
+      const previous = retained.get(asset.id);
+      if (previous && previous.digest !== asset.digest) throw new Error('The same library media ID refers to different bytes.');
+      retained.set(asset.id, { ...asset, updatedAt: asset.updatedAt || Date.now() });
+    }
+    if (assets.length) writeLibraryMedia([...retained.values()]);
+  }
+
+  function mediaReferences() {
+    const references = new Map();
+    if (!fileSystem.existsSync(canvasesPath)) return references;
+    const filenames = fileSystem.readdirSync(canvasesPath);
+    const liveMetadata = new Set([libraryMediaFilename]);
+    for (const filename of filenames.filter((name) => /^[a-f0-9]{32}\.project\.json$/.test(name))) {
+      const id = filename.slice(0, 32);
+      const projectFile = projectFilename(id);
+      liveMetadata.add(projectFile);
+      let assets;
+      try {
+        assets = cachedMediaMetadata(projectFile, () => {
+          const project = loadProject(id, { readOnly: true });
+          return project.manifest.assets.map((asset) => ({ ...asset, updatedAt: project.updatedAt }));
+        });
+      }
+      catch (error) { throw new Error(`Cannot inspect media references for project ${id}: ${error.message}`); }
+      references.set(id, assets);
+    }
+    // Unmigrated documents can still own shared media; inspect without writing project metadata.
+    for (const filename of filenames.filter((name) => /^[a-f0-9]{32}\.html$/.test(name) && !references.has(name.slice(0, 32)))) {
+      const htmlFile = path.join(canvasesPath, filename);
+      liveMetadata.add(htmlFile);
+      const assets = cachedMediaMetadata(htmlFile, () => {
+        const html = fileSystem.readFileSync(htmlFile, 'utf8');
+        const found = [...html.matchAll(/(?<![a-f0-9])([a-f0-9]{64}|[a-f0-9]{32})(?![a-f0-9])/gi)].map((match) => ({ id: match[1].toLowerCase(), ...(match[1].length === 64 ? { digest: match[1].toLowerCase() } : {}) }));
+        for (const match of html.matchAll(/data:([a-z0-9.+-]+\/[a-z0-9.+-]+)(?:;[a-z0-9=.+-]+)*;base64,([a-z0-9+/=]+)/gi)) found.push({ digest: digest(Buffer.from(match[2], 'base64')) });
+        return found;
+      });
+      references.set(filename.slice(0, 32), assets);
+    }
+    for (const filename of mediaMetadataCache.keys()) if (!liveMetadata.has(filename)) mediaMetadataCache.delete(filename);
+    return references;
+  }
+
+  function assetReferenceIds(asset, references, excludedId) {
+    return [...references].filter(([projectId, assets]) => projectId !== excludedId && assets.some((candidate) => candidate.id === asset.id || candidate.digest && candidate.digest === asset.digest)).map(([projectId]) => projectId).sort();
+  }
+
+  function listLibraryAssets({ thumbnail = false } = {}) {
+    if (typeof thumbnail !== 'boolean') throw new Error('Library media thumbnail option is invalid.');
+    const references = mediaReferences();
+    const assets = new Map(readLibraryMedia().map((asset) => [asset.id, asset]));
+    for (const projectAssets of references.values()) {
+      for (const asset of projectAssets) {
+        if (!asset.mimeType) continue;
+        const existing = assets.get(asset.id);
+        if (existing && existing.digest !== asset.digest) throw new Error('The same library media ID refers to different bytes.');
+        assets.set(asset.id, existing ? { ...existing, updatedAt: Math.max(existing.updatedAt || 0, asset.updatedAt || 0) } : asset);
+      }
+    }
+    return [...assets.values()].map((asset) => {
+      const projectIds = assetReferenceIds(asset, references);
+      let preview = {};
+      if (thumbnail && /^image\//i.test(asset.mimeType)) preview = { thumbnail: assetThumbnail(asset) };
+      return { ...asset, name: asset.name || path.posix.basename(asset.path), ...preview, projectIds, referenceCount: projectIds.length, orphaned: !projectIds.length };
+    });
+  }
+
+  function getLibraryAsset(assetId, { thumbnail = false } = {}) {
+    if (typeof assetId !== 'string' || !ATTACHED_ID_PATTERN.test(assetId)) throw new Error('Library media ID is invalid.');
+    if (typeof thumbnail !== 'boolean') throw new Error('Library media thumbnail option is invalid.');
+    const asset = listLibraryAssets().find((candidate) => candidate.id === assetId);
+    if (!asset) throw new Error('Library media was not found.');
+    return thumbnail ? { ...asset, thumbnail: /^image\//i.test(asset.mimeType) ? assetThumbnail(asset) : '' } : { ...asset, data: assetBytes(asset).toString('base64') };
+  }
+
+  async function resolveLibraryAsset(assetId) {
+    if (ID_PATTERN.test(assetId) && assetStore && typeof assetStore.get === 'function') {
+      try { return await assetStore.get(assetId); }
+      catch (error) { if (!/not found/i.test(error.message)) throw error; }
+    }
+    return getLibraryAsset(assetId);
+  }
+
+  function libraryMediaRevision(asset, references) {
+    return digest(JSON.stringify({ asset, projectIds: assetReferenceIds(asset, references) }));
+  }
+
+  function inspectLibraryAssetDeletion(assetId) {
+    if (typeof assetId !== 'string' || !ATTACHED_ID_PATTERN.test(assetId)) throw new Error('Library media ID is invalid.');
+    const references = mediaReferences();
+    const asset = listLibraryAssets().find((candidate) => candidate.id === assetId);
+    if (!asset) throw new Error('Library media was not found.');
+    const projectIds = assetReferenceIds(asset, references);
+    return { asset, assetId, projectIds, referenceCount: projectIds.length, libraryRevision: libraryMediaRevision(asset, references), ok: !projectIds.length, ...(projectIds.length ? { reason: `This media is used by ${projectIds.length} project${projectIds.length === 1 ? '' : 's'}. Remove it from those projects before deleting it from the library.` } : {}) };
+  }
+
+  function unlinkAssetBlobIfUnused(asset) {
+    const references = mediaReferences();
+    if (assetReferenceIds(asset, references).length || readLibraryMedia().some((candidate) => candidate.digest === asset.digest)) return false;
+    const target = path.resolve(projectAssetsPath, asset.digest);
+    if (!/^[a-f0-9]{64}$/.test(asset.digest) || path.dirname(target) !== path.resolve(projectAssetsPath)) throw new Error('Media path is outside the project asset cache.');
+    if (fileSystem.existsSync(target)) fileSystem.unlinkSync(target);
+    return true;
+  }
+
+  function removeLibraryAsset(assetId, { expectedLibraryRevision } = {}) {
+    const info = inspectLibraryAssetDeletion(assetId);
+    if (expectedLibraryRevision !== undefined && info.libraryRevision !== expectedLibraryRevision) throw new Error('Library media changed. Inspect it again before deleting.');
+    if (!info.ok) throw deletionError(info);
+    writeLibraryMedia(readLibraryMedia().filter((asset) => asset.id !== assetId));
+    const blobDeleted = unlinkAssetBlobIfUnused(info.asset);
+    return { assetId, id: assetId, deleted: true, blobDeleted };
+  }
+
+  function inspectProjectDeletion(id, args = {}) {
+    const project = loadProject(id, { readOnly: true });
+    checkRevisions(project, undefined, args);
+    const references = mediaReferences();
+    const assets = project.manifest.assets.map((asset) => {
+      const projectIds = assetReferenceIds(asset, references, id);
+      return { ...asset, projectIds, otherProjectCount: projectIds.length, shared: !!projectIds.length };
+    });
+    return { id, projectId: id, title: project.title, projectRevision: projectRevision(project), ok: true, files: Object.entries(project.files).map(([file, content]) => ({ path: file, bytes: Buffer.byteLength(content), isDocument: /\.html?$/i.test(file) })), documents: projectDocuments(project), assets, fileCount: Object.keys(project.files).length, documentCount: projectDocuments(project).length, mediaCount: assets.length, sharedMediaCount: assets.filter((asset) => asset.shared).length, exclusiveMediaCount: assets.filter((asset) => !asset.shared).length };
+  }
+
+  function deleteProject(id, { expectedProjectRevision, deleteMedia = false } = {}) {
+    if (typeof deleteMedia !== 'boolean') throw new Error('Project media deletion option is invalid.');
+    const info = inspectProjectDeletion(id, { expectedProjectRevision });
+    const records = [getFilename(id), projectFilename(id)].filter((filename) => fileSystem.existsSync(filename));
+    const root = path.resolve(canvasesPath);
+    for (const filename of records) {
+      if (path.dirname(path.resolve(filename)) !== root || !fileSystem.lstatSync(filename).isFile()) throw new Error('Project record is not a file inside the canvas store.');
+    }
+    const keep = info.assets.filter((asset) => !deleteMedia || asset.shared);
+    retainLibraryMedia(keep);
+    if (deleteMedia) writeLibraryMedia(readLibraryMedia().filter((asset) => !info.assets.some((candidate) => !candidate.shared && candidate.id === asset.id)));
+    for (const filename of records) fileSystem.unlinkSync(filename);
+    const removed = info.assets.filter((asset) => deleteMedia && !asset.shared);
+    const mediaWarnings = [];
+    for (const asset of removed) {
+      try { unlinkAssetBlobIfUnused(asset); }
+      catch (error) { mediaWarnings.push({ assetId: asset.id, message: `Unused media cache could not be removed: ${error.message}` }); }
+    }
+    return { id, projectId: id, title: info.title, deleted: true, projectDeleted: true, deletedFiles: info.files.map((file) => file.path), keptAssetIds: keep.map((asset) => asset.id), deletedAssetIds: removed.map((asset) => asset.id), keptMediaCount: keep.length, deletedMediaCount: removed.length, sharedAssetIds: info.assets.filter((asset) => asset.shared).map((asset) => asset.id), mediaDeletionCandidates: removed.filter((asset) => ID_PATTERN.test(asset.id)).map((asset) => asset.id), ...(mediaWarnings.length ? { mediaWarnings } : {}), effects: { source: 'project and all authored files deleted', media: deleteMedia ? 'exclusive media deleted; media used by other projects retained' : 'media retained in the global library', runtime: 'unchanged until host closes the deleted project' } };
+  }
+
   function assetDeletionPlan(id, args = {}) {
     if (typeof args.assetId !== 'string' || !ATTACHED_ID_PATTERN.test(args.assetId)) throw new Error('Project asset ID is invalid.');
     const project = loadProject(id, { readOnly: true });
@@ -561,6 +742,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
   function detachAsset(id, args = {}) {
     const { project, summary } = assetDeletionPlan(id, args);
     if (!summary.ok) throw deletionError(summary);
+    retainLibraryMedia([summary.asset]);
     return { ...commitProject(id, project), assetId: summary.assetId, detachedAssetId: summary.assetId, detached: true, asset: summary.asset, documents: projectDocuments(project), effects: { source: 'project attachment removed; shared library media and cached blobs are preserved', runtime: 'unchanged until host reload' } };
   }
 
@@ -587,6 +769,25 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return bytes;
   }
 
+  function assetThumbnail(asset) {
+    const stat = fileSystem.statSync(path.join(projectAssetsPath, asset.digest));
+    const key = `${asset.digest}:${asset.mimeType}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}:${stat.ino}`;
+    if (mediaThumbnailCache.has(key)) return mediaThumbnailCache.get(key);
+    const preview = thumbnailFactory(assetBytes(asset), asset.mimeType);
+    if (typeof preview !== 'string' || (preview && !/^data:image\/[a-z0-9.+-]+;base64,/i.test(preview))) throw new Error('Project media thumbnail is invalid.');
+    const bytes = Buffer.byteLength(preview);
+    if (bytes <= 8 * 1_048_576) {
+      while (mediaThumbnailCache.size >= 128 || thumbnailCacheBytes + bytes > 8 * 1_048_576) {
+        const oldest = mediaThumbnailCache.keys().next().value;
+        thumbnailCacheBytes -= Buffer.byteLength(mediaThumbnailCache.get(oldest));
+        mediaThumbnailCache.delete(oldest);
+      }
+      mediaThumbnailCache.set(key, preview);
+      thumbnailCacheBytes += bytes;
+    }
+    return preview;
+  }
+
   function listAssets(id, { offset = 0, limit = 200 } = {}) {
     if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error('Project asset list offset/limit is invalid.');
     const project = loadProject(id);
@@ -599,14 +800,13 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     const project = loadProject(id);
     const asset = project.manifest.assets.find((candidate) => candidate.id === assetId);
     if (!asset) throw new Error('This media asset is not attached to the selected project.');
-    const bytes = assetBytes(asset);
     const metadata = { ...asset, name: asset.name || path.posix.basename(asset.path), projectId: id };
     if (thumbnail) {
-      const preview = /^image\//i.test(asset.mimeType) ? thumbnailFactory(bytes, asset.mimeType) : '';
+      const preview = /^image\//i.test(asset.mimeType) ? assetThumbnail(asset) : '';
       if (typeof preview !== 'string' || (preview && !/^data:image\/[a-z0-9.+-]+;base64,/i.test(preview))) throw new Error('Project media thumbnail is invalid.');
       return { ...metadata, thumbnail: preview };
     }
-    return { ...metadata, data: bytes.toString('base64') };
+    return { ...metadata, data: assetBytes(asset).toString('base64') };
   }
 
   async function attachAsset(id, args = {}) {
@@ -622,9 +822,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
       saved = { ...previous, ...imageDimensions(bytes, previous.mimeType), path: args.path || previous.path };
       project.manifest.assets[project.manifest.assets.indexOf(previous)] = saved;
     } else {
-      if (!ID_PATTERN.test(args.assetId)) throw new Error('This digest media ID is not attached to the selected project.');
-      if (!assetStore || typeof assetStore.get !== 'function') throw new Error('Shared media asset storage is unavailable.');
-      const asset = await assetStore.get(args.assetId);
+      const asset = await resolveLibraryAsset(args.assetId);
       if (!asset || asset.id !== args.assetId || typeof asset.data !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.data)) throw new Error('Shared media asset is invalid.');
       if (projectRevision(loadProject(id)) !== initialRevision) throw new Error('Project changed while loading media. Retry with the latest revision.');
       saved = saveAsset(Buffer.from(asset.data, 'base64'), asset.mimeType, { ...asset, id: asset.id, assetPath: args.path });
@@ -648,9 +846,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
         assets.push(existing);
         continue;
       }
-      if (!ID_PATTERN.test(assetId)) throw new Error(`Digest asset ${assetId} is not attached to this project. Use an ID from the shared asset library.`);
-      if (!assetStore || typeof assetStore.get !== 'function') throw new Error('Shared media asset storage is unavailable.');
-      const asset = await assetStore.get(assetId);
+      const asset = await resolveLibraryAsset(assetId);
       if (!asset || asset.id !== assetId || typeof asset.data !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.data)) throw new Error(`Shared asset ${assetId} is invalid. No attachments were saved.`);
       const saved = saveAsset(Buffer.from(asset.data, 'base64'), asset.mimeType, { ...asset, id: assetId });
       project.manifest.assets.push(saved);
@@ -678,9 +874,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     let asset;
     if (previous) asset = { ...previous, data: assetBytes(previous).toString('base64') };
     else {
-      if (!ID_PATTERN.test(args.assetId)) throw new Error('This digest media ID is not attached to the selected project.');
-      if (!assetStore || typeof assetStore.get !== 'function') throw new Error('Shared media asset storage is unavailable.');
-      asset = await assetStore.get(args.assetId);
+      asset = await resolveLibraryAsset(args.assetId);
     }
     if (!asset || asset.id !== args.assetId || !['image/png', 'image/jpeg', 'image/webp'].includes(asset.mimeType) || typeof asset.data !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.data)) throw new Error('Canvas image must be a valid saved PNG, JPEG, or WebP asset.');
     if (projectRevision(loadProject(id)) !== initialRevision) throw new Error('Canvas source changed while adding the image. Retry from its latest revision.');
@@ -800,7 +994,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return { ...archive, id, title: project.title, fileName: `${slug}.zip`, bytes: archive.data.length, documents, manifest, contributions };
   }
 
-  return { attachAsset, attachAssets, createDocument, createEmpty, createProject, deleteFile, detachAsset, exportProject, get, getAsset, getDocument, getProject, inspectAssetDeletion, inspectDeletion, insertImage, list, listAssets, listDocuments, listFiles, migrateAssetReferences, patchFile, patchFiles, readAsset: getAsset, readFile, readProjectState, renameProject, save, saveProjectState, update, updateManifest, writeFile };
+  return { attachAsset, attachAssets, createDocument, createEmpty, createProject, deleteFile, deleteProject, detachAsset, exportProject, get, getAsset, getDocument, getLibraryAsset, getProject, inspectAssetDeletion, inspectDeletion, inspectLibraryAssetDeletion, inspectProjectDeletion, insertImage, list, listAssets, listDocuments, listFiles, listLibraryAssets, migrateAssetReferences, patchFile, patchFiles, readAsset: getAsset, readFile, readProjectState, removeLibraryAsset, renameProject, save, saveProjectState, update, updateManifest, writeFile };
 }
 
 module.exports = { EMPTY_CANVAS_HTML, MAX_DOCUMENT_EXPORT_BYTES, MAX_PROJECT_EXPORT_BYTES, createCanvasStore };

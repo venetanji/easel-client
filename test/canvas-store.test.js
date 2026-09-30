@@ -90,7 +90,7 @@ test('preflights entry deletion without mutation and selects another HTML docume
   assert.deepEqual(deleted.documents.map(({ path: documentPath }) => documentPath), ['a.htm', 'b.html']);
 });
 
-test('refuses deleting the last HTML document and leaves source unchanged', (t) => {
+test('offers project deletion for the last HTML document without deleting it implicitly', (t) => {
   const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-delete-last-'));
   t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
   const store = createCanvasStore({ userDataPath });
@@ -98,6 +98,7 @@ test('refuses deleting the last HTML document and leaves source unchanged', (t) 
   const before = store.getProject(created.id);
   const inspected = store.inspectDeletion(created.id, { path: before.manifest.entry });
   assert.equal(inspected.ok, false);
+  assert.equal(inspected.requiresProjectDeletion, true);
   assert.match(inspected.reason, /last HTML document/);
   assert.throws(() => store.deleteFile(created.id, { path: before.manifest.entry }), /last HTML document/);
   assert.equal(store.getProject(created.id).projectRevision, before.projectRevision);
@@ -228,4 +229,154 @@ test('delete tool requires host confirmation and only accepts revision options',
   assert.match(descriptor.description, /user confirmation/);
   assert.equal(descriptor.parameters.additionalProperties, false);
   assert.deepEqual(Object.keys(descriptor.parameters.properties).sort(), ['path', 'expectedRevision', 'expectedProjectRevision'].sort());
+});
+
+test('deletes a project while retaining embedded media IDs in the global library', async (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-delete-project-keep-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const store = createCanvasStore({ userDataPath });
+  const created = store.save({ title: 'Texture study', html: '<img src="{{asset:cover}}">', assets: [{ name: 'cover', data: 'YWJj', mimeType: 'image/png' }] });
+  const asset = store.listAssets(created.id).assets[0];
+  const inspected = store.inspectProjectDeletion(created.id);
+  assert.equal(inspected.documentCount, 1);
+  assert.equal(inspected.mediaCount, 1);
+  assert.equal(inspected.exclusiveMediaCount, 1);
+  assert.equal(fs.existsSync(path.join(userDataPath, 'canvases', '.library-media.json')), false);
+  const deleted = store.deleteProject(created.id, { expectedProjectRevision: inspected.projectRevision });
+  assert.equal(deleted.projectDeleted, true);
+  assert.deepEqual(deleted.keptAssetIds, [asset.id]);
+  assert.deepEqual(store.list(), []);
+  assert.equal(store.getLibraryAsset(asset.id).data, 'YWJj');
+  assert.equal(store.listLibraryAssets()[0].orphaned, true);
+  const restarted = createCanvasStore({ userDataPath });
+  assert.equal(restarted.getLibraryAsset(asset.id).data, 'YWJj');
+  const next = restarted.createEmpty('New study');
+  await restarted.attachAssets(next.id, { assetIds: [asset.id] });
+  assert.equal(restarted.getAsset(next.id, asset.id).data, 'YWJj');
+  assert.equal(restarted.listLibraryAssets()[0].referenceCount, 1);
+});
+
+test('global media shares IDs across projects and preserves other project media on project deletion', async (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-delete-project-shared-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const sharedId = 'd'.repeat(32);
+  const exclusiveId = 'e'.repeat(32);
+  const store = createCanvasStore({ userDataPath, assetStore: { async get(id) { return { id, data: id === exclusiveId ? 'ZGVm' : 'YWJj', mimeType: 'image/png' }; } } });
+  const first = store.createEmpty('First');
+  const second = store.createEmpty('Second');
+  await store.attachAssets(first.id, { assetIds: [sharedId, exclusiveId] });
+  await store.attachAsset(second.id, { assetId: sharedId });
+  const list = store.listLibraryAssets();
+  assert.equal(list.length, 2);
+  assert.deepEqual(list.find((asset) => asset.id === sharedId).projectIds, [first.id, second.id].sort());
+  const inspected = store.inspectProjectDeletion(first.id);
+  assert.equal(inspected.sharedMediaCount, 1);
+  assert.equal(inspected.exclusiveMediaCount, 1);
+  const deleted = store.deleteProject(first.id, { deleteMedia: true });
+  assert.deepEqual(deleted.sharedAssetIds, [sharedId]);
+  assert.deepEqual(deleted.deletedAssetIds, [exclusiveId]);
+  assert.deepEqual(deleted.mediaDeletionCandidates, [exclusiveId]);
+  assert.equal(store.getAsset(second.id, sharedId).data, 'YWJj');
+  assert.equal(store.getLibraryAsset(sharedId).data, 'YWJj');
+  assert.throws(() => store.getLibraryAsset(exclusiveId), /not found/);
+  assert.equal(store.listLibraryAssets().length, 1);
+});
+
+test('project deletion preserves shared bytes referenced under another ID', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-delete-project-alias-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const store = createCanvasStore({ userDataPath });
+  const firstId = 'f'.repeat(32);
+  const secondId = 'a'.repeat(32);
+  const first = store.save({ html: '<h1>First</h1>', assets: [{ assetId: firstId, name: 'texture', data: 'YWJj', mimeType: 'image/png' }] });
+  const second = store.save({ html: '<h1>Second</h1>', assets: [{ assetId: secondId, name: 'texture', data: 'YWJj', mimeType: 'image/png' }] });
+  assert.equal(store.inspectProjectDeletion(first.id).sharedMediaCount, 1);
+  assert.deepEqual(store.deleteProject(first.id, { deleteMedia: true }).deletedAssetIds, []);
+  assert.equal(store.getAsset(second.id, secondId).data, 'YWJj');
+});
+
+test('checks project revisions after confirmation and guards deletion paths', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-delete-project-revision-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const store = createCanvasStore({ userDataPath });
+  const created = store.createEmpty('Revision');
+  const before = store.inspectProjectDeletion(created.id);
+  store.writeFile(created.id, { path: 'notes.txt', content: 'Changed while confirming' });
+  assert.throws(() => store.deleteProject(created.id, { expectedProjectRevision: before.projectRevision }), /project changed/);
+  assert.equal(store.list().length, 1);
+  assert.throws(() => store.deleteProject('../settings'), /ID is invalid/);
+  assert.throws(() => store.deleteProject(created.id, { deleteMedia: 'yes' }), /option is invalid/);
+  assert.equal(store.list().length, 1);
+});
+
+test('blocks orphan media deletion if another project attaches it during confirmation', async (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-delete-orphan-revision-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const store = createCanvasStore({ userDataPath });
+  const first = store.save({ html: '<h1>Texture</h1>', assets: [{ name: 'texture', data: 'YWJj', mimeType: 'image/png' }] });
+  const asset = store.listAssets(first.id).assets[0];
+  store.deleteProject(first.id);
+  const inspected = store.inspectLibraryAssetDeletion(asset.id);
+  assert.equal(inspected.ok, true);
+  const second = store.createEmpty('Attach during confirmation');
+  await store.attachAsset(second.id, { assetId: asset.id });
+  assert.throws(() => store.removeLibraryAsset(asset.id, { expectedLibraryRevision: inspected.libraryRevision }), /media changed/);
+  assert.equal(store.inspectLibraryAssetDeletion(asset.id).ok, false);
+  assert.throws(() => store.removeLibraryAsset(asset.id), /used by 1 project/);
+  store.deleteProject(second.id);
+  const orphan = store.inspectLibraryAssetDeletion(asset.id);
+  const removed = store.removeLibraryAsset(asset.id, { expectedLibraryRevision: orphan.libraryRevision });
+  assert.equal(removed.blobDeleted, true);
+  assert.deepEqual(store.listLibraryAssets(), []);
+});
+
+test('retains detached project-only media as global media', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-detach-orphan-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const store = createCanvasStore({ userDataPath });
+  const created = store.save({ html: '<h1>Unused attachment</h1>', assets: [{ name: 'texture', data: 'YWJj', mimeType: 'image/png' }] });
+  const asset = store.listAssets(created.id).assets[0];
+  store.detachAsset(created.id, { assetId: asset.id });
+  assert.equal(store.getLibraryAsset(asset.id).data, 'YWJj');
+  assert.equal(store.listLibraryAssets()[0].orphaned, true);
+});
+
+test('unreadable other projects prevent unsafe deletion and legacy references protect media', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-delete-project-reference-integrity-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const store = createCanvasStore({ userDataPath });
+  const created = store.save({ html: '<h1>Texture</h1>', assets: [{ assetId: 'b'.repeat(32), name: 'texture', data: 'YWJj', mimeType: 'image/png' }] });
+  const directory = path.join(userDataPath, 'canvases');
+  const otherId = 'c'.repeat(32);
+  fs.writeFileSync(path.join(directory, `${otherId}.project.json`), 'corrupted');
+  assert.throws(() => store.deleteProject(created.id, { deleteMedia: true }), /Cannot inspect media references/);
+  assert.equal(store.get(created.id).id, created.id);
+  fs.unlinkSync(path.join(directory, `${otherId}.project.json`));
+  const legacyHtml = '<html><body><img src="asset://' + 'b'.repeat(32) + '"></body></html>';
+  fs.writeFileSync(path.join(directory, `${otherId}.html`), legacyHtml);
+  assert.equal(store.inspectProjectDeletion(created.id).sharedMediaCount, 1);
+  assert.deepEqual(store.deleteProject(created.id, { deleteMedia: true }).deletedAssetIds, []);
+  assert.equal(fs.readFileSync(path.join(directory, `${otherId}.html`), 'utf8'), legacyHtml);
+});
+
+test('reuses cached reference metadata and thumbnails while noticing atomic project changes', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-library-cache-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  let metadataReads = 0;
+  let thumbnails = 0;
+  const countedFs = { ...fs, readFileSync(filename, ...args) { if (filename.endsWith('.project.json')) metadataReads += 1; return fs.readFileSync(filename, ...args); } };
+  const store = createCanvasStore({ userDataPath, fileSystem: countedFs, thumbnailFactory(bytes) { thumbnails += 1; return `data:image/png;base64,${bytes.toString('base64')}`; } });
+  const created = store.save({ html: '<h1>Texture</h1>', assets: [{ name: 'texture', data: 'YWJj', mimeType: 'image/png' }] });
+  const first = store.listLibraryAssets({ thumbnail: true });
+  const afterFirst = metadataReads;
+  store.listLibraryAssets({ thumbnail: true });
+  assert.equal(metadataReads, afterFirst);
+  assert.equal(thumbnails, 1);
+  assert.equal(store.getAsset(created.id, first[0].id, { thumbnail: true }).thumbnail, first[0].thumbnail);
+  assert.equal(thumbnails, 1);
+  store.writeFile(created.id, { path: 'notes.txt', content: 'Changed' });
+  const beforeRefresh = metadataReads;
+  store.listLibraryAssets({ thumbnail: true });
+  assert.ok(metadataReads > beforeRefresh);
+  assert.equal(thumbnails, 1);
 });

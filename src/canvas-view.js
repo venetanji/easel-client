@@ -711,8 +711,8 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     return { ...mediaPermissions.inspect(), stoppedTracks: Number(stopped) };
   }
 
-  async function closeCurrent() {
-    if (currentCanvasId) await saveCurrent();
+  async function closeCurrent({ save = true } = {}) {
+    if (save && currentCanvasId) await saveCurrent();
     if (currentUrl) await cleanupForReload();
     mediaPermissions.revoke();
     runtimeGeneration += 1;

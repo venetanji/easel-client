@@ -24,15 +24,18 @@ Audio generation tools are not available yet, even if discovery lists audio outp
 
 1. Select a video model using its exact `list_models` ID. In-app tools resolve credentials from that model's endpoint.
 2. Submit `generate_video` once. Optional `inputReferenceAssetId` identifies a saved PNG/JPEG/WebP image in the app; standalone MCP uses an `inputReference` upload object.
-3. Preserve `job.id` and `job.modelId`. Call `get_video` with that same `videoId` and `model`, optionally `waitSeconds:15` once.
-4. If pending, return the status to the user and retrieve it in a later turn. Never consume the tool budget polling, or resubmit merely because a job or download is unfinished.
-5. Completed video downloads are saved to Media and attached to the active project. They can be previewed, downloaded and shared with chat as sampled frames. Saved tool messages contain job/asset references, not binary media.
+3. In Easel client, accepted jobs are saved in the host monitor before the turn ends. Return a brief generating status; the host polls and downloads across app restarts without spending agent tool calls. `list_media_jobs` gives a status snapshot.
+4. The originating conversation receives a durable completion notification. If it is idle, its original project is open, and its Agent model/endpoint has not changed, the host resumes it automatically. Otherwise the next message receives the notification. Stop pauses agent continuation while polling continues.
+5. Completed downloads are saved to Media and attached to the original project. Use the notification's asset IDs to continue the original request; never regenerate a completed job. Removing a job asks the user to confirm losing the monitor's ID; it does not cancel server generation or remove downloaded files.
+6. Standalone MCP without the host monitor can retrieve with `get_video`, using the same `videoId` and `model`. Preserve IDs and never resubmit a pending job.
 
 For text-only video, omit `inputReferenceAssetId` or set it to `null`. Never invent an asset ID or use all-zero placeholders. A local `INVALID_MEDIA_REFERENCE` error means the API was not called; correct the reference or omit it and retry the corrected request.
 
-Stop cancels local work, not an accepted remote job. Easel accepts 4, 8, or 12 seconds; other endpoint limits depend on the model. Defaults are 4 seconds and 1280x720. Downloads are bounded to 32 MiB. See the package README for endpoint contracts and limits.
+Stop cancels local work, not an accepted remote job. Easel accepts integer durations from 1 to 12 seconds; other endpoint limits depend on the model. Defaults are 4 seconds and 1280x720. Downloads are bounded to 32 MiB. See the package README for endpoint contracts and limits.
 
 ## Image workflow
+
+Image endpoints may honor `Prefer: respond-async` and return an accepted `{id,status}` job receipt instead of immediate image bytes. Those receipts use the same persistent monitor. Synchronous image responses continue to work. Queued image retrieval uses the proposed `GET /v1/images/jobs/{id}` contract, which requires upstream API support; never claim support without a receipt. Completed results include `data:[{b64_json}]`. Audio job submission is not implemented yet.
 
 1. Preserve the user's subject, intended use, and named visual references.
 2. Ask a concise follow-up only when a missing choice would materially change the result.

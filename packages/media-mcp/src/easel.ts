@@ -5,6 +5,7 @@ import {
 } from './image-upload.js';
 
 import { headers, normalizeEaselBaseUrl, requestJson, requestSignal, type MediaOperation, type ProviderOptions } from './media-http.js';
+import { parseMediaJob, MEDIA_JOB_ID_PATTERN, type MediaJob } from './media-job.js';
 export { DEFAULT_EASEL_BASE_URL, normalizeEaselBaseUrl } from './media-http.js';
 
 export interface EaselImage {
@@ -13,6 +14,13 @@ export interface EaselImage {
 }
 
 const MAX_IMAGES = 4;
+export type ImageResult = EaselImage[] | { job: MediaJob };
+
+function queuedImageResult(payload: any, apiKey: string): { job: MediaJob } | null {
+  const value = payload?.job || payload;
+  if (typeof value?.id !== 'string' || typeof value?.status !== 'string') return null;
+  return { job: parseMediaJob(value, apiKey) };
+}
 
 export interface GenerateImageInput {
   prompt: string;
@@ -52,7 +60,7 @@ export async function listModels(options: ProviderOptions = {}): Promise<string[
   return models;
 }
 
-export async function generateImages(options: GenerateImageInput & ProviderOptions): Promise<EaselImage[]> {
+export async function generateImages(options: GenerateImageInput & ProviderOptions): Promise<ImageResult> {
   options.signal?.throwIfAborted();
   const prompt = typeof options.prompt === 'string' ? options.prompt.trim() : '';
   if (!prompt) throw new Error('Prompt is required.');
@@ -76,13 +84,15 @@ export async function generateImages(options: GenerateImageInput & ProviderOptio
     `${normalizeEaselBaseUrl(options.baseUrl)}/v1/images/generations`,
     {
       method: 'POST',
-      headers: { ...headers(apiKey), 'Content-Type': 'application/json' },
+      headers: { ...headers(apiKey), 'Content-Type': 'application/json', Prefer: 'respond-async' },
       body: JSON.stringify(payload),
       signal: requestSignal(options.signal, 180_000),
     },
     apiKey,
     fetchImpl,
   );
+  const queued = queuedImageResult(result, apiKey);
+  if (queued && !Array.isArray(result?.data)) return queued;
   if (!Array.isArray(result?.data) || result.data.length === 0) throw new Error('Easel returned no images.');
   if (result.data.length > MAX_IMAGES) throw new Error('Easel returned too many images.');
 
@@ -139,7 +149,7 @@ async function requestImageUpload(
   options: ProviderOptions & { model?: string; size?: string },
   form: FormData,
   operation: MediaOperation,
-): Promise<EaselImage[]> {
+): Promise<ImageResult> {
   if (options.model?.trim()) form.append('model', options.model.trim());
   if (options.size) form.append('size', options.size);
   // GPT image models always return base64 and reject the legacy response_format field.
@@ -147,16 +157,16 @@ async function requestImageUpload(
   const apiKey = options.apiKey || '';
   const result = await requestJson(
     `${normalizeEaselBaseUrl(options.baseUrl)}${operation.path}`,
-    { method: 'POST', headers: headers(apiKey), body: form, signal: requestSignal(options.signal, 180_000) },
+    { method: 'POST', headers: { ...headers(apiKey), Prefer: 'respond-async' }, body: form, signal: requestSignal(options.signal, 180_000) },
     apiKey,
     options.fetchImpl || globalThis.fetch,
     operation,
   );
   options.signal?.throwIfAborted();
-  return parseEditedImages(result);
+  return (!Array.isArray(result?.data) && queuedImageResult(result, apiKey)) || parseEditedImages(result);
 }
 
-export async function editImages(options: EditImageInput & ProviderOptions): Promise<EaselImage[]> {
+export async function editImages(options: EditImageInput & ProviderOptions): Promise<ImageResult> {
   options.signal?.throwIfAborted();
   const prompt = typeof options.prompt === 'string' ? options.prompt.trim() : '';
   if (!prompt) throw new Error('Prompt is required.');
@@ -196,7 +206,7 @@ export async function editImages(options: EditImageInput & ProviderOptions): Pro
   return requestImageUpload(options, form, { label: 'Image editing', path: '/v1/images/edits', model: options.model });
 }
 
-export async function createImageVariations(options: ImageVariationInput & ProviderOptions): Promise<EaselImage[]> {
+export async function createImageVariations(options: ImageVariationInput & ProviderOptions): Promise<ImageResult> {
   options.signal?.throwIfAborted();
   const n = validateImageOptions(options, false);
   const image = decodeImageUpload(options.image, 'Variation image', isDallE2(options.model) ? LEGACY_IMAGE_BYTES : MAX_IMAGE_BYTES);
@@ -205,4 +215,15 @@ export async function createImageVariations(options: ImageVariationInput & Provi
   form.append('n', String(n));
   appendImage(form, 'image', image);
   return requestImageUpload(options, form, { label: 'Image variations', path: '/v1/images/variations', model: options.model });
+}
+
+export async function getImageJob(options: ProviderOptions & { jobId: string; model?: string; signal?: AbortSignal }): Promise<{ job: MediaJob; images?: EaselImage[] }> {
+  if (!MEDIA_JOB_ID_PATTERN.test(options.jobId)) throw new Error('Use the exact queued image job ID from the submission receipt.');
+  const apiKey = options.apiKey || '';
+  const endpoint = '/v1/images/jobs/' + encodeURIComponent(options.jobId);
+  const payload = await requestJson(normalizeEaselBaseUrl(options.baseUrl) + endpoint,
+    { method: 'GET', headers: headers(apiKey), signal: requestSignal(options.signal, 45000) }, apiKey, options.fetchImpl || globalThis.fetch,
+    { label: 'Queued image retrieval', path: endpoint, model: options.model });
+  const job = parseMediaJob(payload.job || payload, apiKey, options.jobId);
+  return { job, ...(job.status === 'completed' ? { images: parseEditedImages(payload) } : {}) };
 }

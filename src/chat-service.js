@@ -1,6 +1,6 @@
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { buildUserContent, runAgentTurn } = require('./agent');
+const { buildUserContent, handleMcpResult, runAgentTurn } = require('./agent');
 const { createLiteLLMClient } = require('./litellm-client');
 const { createMediaMcpClient } = require('./media-mcp-client');
 const { validateChatMessage } = require('./ipc-contract');
@@ -16,7 +16,7 @@ function defaultMcpLaunchOptions(settings, secrets, { isPackaged = false, resour
   const mediaConfiguration = mediaModels?.flatMap((model) => {
     const connection = settings.connections.find((entry) => entry.id === model.connectionId);
     if (!connection) return [];
-    return [{ id: `${connection.id}:${model.model}`, model: model.model, name: model.name, endpointName: connection.name, baseUrl: connection.baseUrl, apiKey: secrets.connectionKeys?.[connection.id] || '', ...(model.mediaTypes?.length ? { mediaTypes: model.mediaTypes } : {}) }];
+    return [{ id: `${connection.id}:${model.model}`, model: model.model, name: model.name || model.model, endpointName: connection.name, baseUrl: connection.baseUrl, apiKey: secrets.connectionKeys?.[connection.id] || '', ...(model.mediaTypes?.length ? { mediaTypes: model.mediaTypes } : {}) }];
   });
   return {
     command: process.execPath,
@@ -41,6 +41,8 @@ function createChatService({
   assetStore,
   chatStore,
   inputStore,
+  mediaJobStore,
+  registerMediaJob,
   mediaAssetStore = assetStore,
   llmFactory = createLiteLLMClient,
   mcpFactory = createMediaMcpClient,
@@ -57,11 +59,13 @@ function createChatService({
   let loadError = '';
   let pendingSave = false;
   let drainingInputs = false;
+  let drainingMedia = false;
   let inputDrainScheduled = false;
   let activeTurn = null;
   let shuttingDown = false;
   let inputQueuePaused = false;
   let lastTurnOptions = { mode: 'chat', size: '1024x1024', skills: [], kits: [] };
+  const pendingSubmissions = new Set();
   try {
     const saved = chatStore?.getActive();
     if (saved) {
@@ -91,11 +95,11 @@ function createChatService({
   }
 
   function scheduleCanvasInputs() {
-    if (!inputStore || inputDrainScheduled || shuttingDown || inputQueuePaused) return;
+    if ((!inputStore && !mediaJobStore) || inputDrainScheduled || shuttingDown || inputQueuePaused) return;
     inputDrainScheduled = true;
     queueMicrotask(() => {
       inputDrainScheduled = false;
-      drainCanvasInputs().catch((error) => onEvent?.({ type: 'error', message: `Canvas response queue: ${error.message}` }));
+      drainCanvasInputs().then(drainMediaJobs).catch((error) => onEvent?.({ type: 'error', message: `Response queue: ${error.message}` }));
     });
   }
 
@@ -114,7 +118,7 @@ function createChatService({
   }
 
   function stopAgent() {
-    const active = Boolean(activeTurn || busy || drainingInputs);
+    const active = Boolean(activeTurn || busy || drainingInputs || drainingMedia);
     inputQueuePaused = true;
     activeTurn?.controller.abort();
     return { ok: true, stopping: Boolean(activeTurn?.controller.signal.aborted), active };
@@ -125,6 +129,7 @@ function createChatService({
     const turn = activeTurn;
     stopAgent();
     if (turn) await turn.done;
+    await Promise.allSettled([...pendingSubmissions]);
     if (pendingSave) saveHistory();
   }
 
@@ -179,7 +184,7 @@ function createChatService({
       } else userMessage = validateChatMessage(input);
     }
     if (!userMessage && (!Array.isArray(attachments) || attachments.length === 0)) throw new Error('Message or attachment is required.');
-    if (busy || (drainingInputs && !canvasResume)) throw new Error('A chat turn is already running.');
+    if (busy || ((drainingInputs || drainingMedia) && !canvasResume)) throw new Error('A chat turn is already running.');
     const turn = resumeTurn || beginTurn(canvasResume?.id || '');
     if (!canvasResume) inputQueuePaused = false;
     const signal = turn.controller.signal;
@@ -206,6 +211,7 @@ function createChatService({
       const turnOptions = { mode, size, skills, kits };
       lastTurnOptions = turnOptions;
       if (!canvasResume) {
+        deliverMediaNotifications({ consume: true });
         const text = userMessage || 'Review the attached media and respond with what you find.';
         const requestText = mode === 'image' ? `Create one image with size ${size}. Use the generate_image tool with n=1. User brief:\n${text}` : text;
         history.push({ role: 'user', content: attachments.length ? buildUserContent(requestText, attachments) : requestText });
@@ -227,7 +233,43 @@ function createChatService({
         signal,
       });
       const launchOptions = mcpLaunchOptions(settings, secrets, runtime);
-      const mcp = await mcpFactory({ ...launchOptions, signal });
+      const trackJob = registerMediaJob ? (input) => registerMediaJob({ ...input, chatId: turnChatId, turnOptions,
+        approvedAgent: { connectionId: settings.activeConnectionId, model: settings.litellmModel, baseUrl: settings.litellmBaseUrl } }) : undefined;
+      const rawMcp = await mcpFactory({ ...launchOptions, signal });
+      const mcp = {
+        listTools: (...args) => rawMcp.listTools(...args),
+        close: () => rawMcp.close(),
+        callTool: (name, args, options) => {
+          if (trackJob && ['generate_video', 'generate_image', 'edit_image', 'create_image_variation'].includes(name)) {
+            const submittedProjectId = canvasController?.getCurrentCanvasId?.() || '';
+            // Stop ends the agent turn; shutdown still waits for an accepted receipt to be saved.
+            const submission = (async () => {
+              const submissionMcp = await mcpFactory(launchOptions);
+              try {
+                const result = await submissionMcp.callTool(name, args);
+                if (!result.isError && result.structuredContent?.job) await trackJob({ job: result.structuredContent.job,
+                  modelId: result.structuredContent.job.modelId || args.model, mediaType: name === 'generate_video' ? 'video' : 'image',
+                  projectId: submittedProjectId, prompt: args.prompt || '' });
+                else if (!result.isError) {
+                  const saved = JSON.parse(await handleMcpResult(result, mediaAssetStore, (event) => {
+                    if (chatId === turnChatId && !shuttingDown) onEvent?.(event);
+                  }, { generated: true, projectId: submittedProjectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets }));
+                  return { content: (result.content || []).filter((item) => item.type === 'text'), structuredContent: saved };
+                }
+                return result;
+              } finally { await submissionMcp.close(); }
+            })();
+            pendingSubmissions.add(submission);
+            submission.then(() => pendingSubmissions.delete(submission), () => pendingSubmissions.delete(submission));
+            return submission;
+          }
+          const remoteId = name === 'get_video' ? args.videoId : name === 'get_image_job' ? args.jobId : '';
+          const saved = remoteId && mediaJobStore?.list({ raw: true }).find((entry) => entry.remoteId === remoteId && entry.modelId === args.model);
+          if (!saved) return rawMcp.callTool(name, args, options);
+          const job = { id: saved.remoteId, modelId: saved.modelId, status: saved.status === 'ready' ? 'completed' : saved.status === 'failed' ? 'failed' : 'in_progress', progress: saved.progress, ...(saved.error ? { error: saved.error } : {}) };
+          return Promise.resolve({ content: [{ type: 'text', text: 'This job is managed by the persistent host monitor. Do not resubmit or poll it in the agent turn.' }], structuredContent: { job, ...(saved.status === 'ready' ? { assets: saved.assets } : {}) } });
+        },
+      };
       let result;
       try {
         signal.throwIfAborted();
@@ -240,7 +282,8 @@ function createChatService({
           attachments,
           history,
           appendUserMessage: false,
-          canvasInputRequestId: canvasResume?.id || '',
+          canvasInputRequestId: canvasResume?.kind === 'job' ? '' : canvasResume?.id || '',
+          mediaJobResumeId: canvasResume?.kind === 'job' ? canvasResume.id : '',
           canvasInputMedia: canvasResume?.kind === 'media' ? attachments : [],
           llm,
           mcp,
@@ -251,6 +294,7 @@ function createChatService({
           onEvent,
           signal,
           onHistory: checkpoint,
+          registerMediaJob: trackJob,
         });
         checkpoint(result.history);
         if (!chatTitle) chatTitle = userMessage.replace(/\s+/g, ' ').slice(0, 120) || 'Attached media';
@@ -340,7 +384,7 @@ function createChatService({
   }
 
   async function drainCanvasInputs() {
-    if (!inputStore || busy || drainingInputs || !chatId || shuttingDown || inputQueuePaused) return;
+    if (!inputStore || busy || drainingInputs || drainingMedia || !chatId || shuttingDown || inputQueuePaused) return;
     drainingInputs = true;
     try {
       const queue = inputStore.list({ chatId, status: ['answered', 'queued'], limit: 200, raw: true }).reverse();
@@ -371,6 +415,57 @@ function createChatService({
       drainingInputs = false;
       if (chatId && inputStore.list({ chatId, status: ['answered', 'queued'], limit: 200, raw: true }).some(matchingCanvas)) scheduleCanvasInputs();
     }
+  }
+
+  function completedMediaJobs() {
+    return mediaJobStore?.list({ chatId, raw: true }).filter((entry) => ['ready', 'failed'].includes(entry.status) && ['pending', 'delivered'].includes(entry.notification)) || [];
+  }
+
+  function deliverMediaNotifications({ consume = false } = {}) {
+    if (!chatId || !mediaJobStore) return [];
+    const entries = completedMediaJobs().reverse();
+    for (const entry of entries) {
+      const result = { jobId: entry.remoteId, modelId: entry.modelId, projectId: entry.projectId, status: entry.status, assets: entry.assets, ...(entry.error ? { error: entry.error } : {}) };
+      if (!history.some((message) => message.mediaJobId === entry.id)) {
+        history.push({ role: 'user', content: `Background ${entry.mediaType} job ${entry.status === 'ready' ? 'is ready' : 'failed'}. This is an automatic host notification, not a new user request.\n${JSON.stringify(result)}\nContinue the original request using the saved output when useful. Do not generate a replacement or retrieve this completed output again. The output belongs to the listed project; do not edit a different project.`, mediaJobId: entry.id, mediaJobResult: result });
+        pendingSave = true;
+        saveHistory();
+        onEvent?.({ type: 'media-job-notification', chatId, job: entry, text: entry.status === 'ready' ? `Your ${entry.mediaType} is ready.` : `${entry.mediaType[0].toUpperCase() + entry.mediaType.slice(1)} generation failed: ${entry.error}` });
+      }
+      mediaJobStore.update(entry.id, { notification: consume ? 'responded' : 'delivered' });
+    }
+    return entries;
+  }
+
+  async function drainMediaJobs() {
+    if (!mediaJobStore || busy || drainingInputs || drainingMedia || !chatId || shuttingDown || inputQueuePaused) return;
+    drainingMedia = true;
+    try {
+      const settings = settingsStore.loadPublic();
+      for (const entry of completedMediaJobs().reverse()) {
+        const sameAgent = entry.approvedAgent && entry.approvedAgent.connectionId === settings.activeConnectionId && entry.approvedAgent.model === settings.litellmModel && entry.approvedAgent.baseUrl === settings.litellmBaseUrl;
+        const sameProject = !entry.projectId || !canvasController?.getCurrentCanvasId || canvasController.getCurrentCanvasId() === entry.projectId;
+        if (!sameAgent || !sameProject || activeTurn || shuttingDown || inputQueuePaused) continue;
+        deliverMediaNotifications();
+        if (history.some((message) => message.mediaJobCompletedId === entry.id)) { mediaJobStore.update(entry.id, { notification: 'responded' }); continue; }
+        const turn = beginTurn();
+        mediaJobStore.update(entry.id, { notification: 'dispatching' });
+        onEvent?.({ type: 'media-job-resume-start', chatId, jobId: entry.id });
+        try {
+          const result = await sendMessage('Continue from the completed background media job.', entry.turnOptions || {}, { id: entry.id, kind: 'job' }, turn);
+          mediaJobStore.update(entry.id, { notification: result.cancelled ? 'interrupted' : 'responded', ...(result.saveWarning ? { notificationError: result.saveWarning } : {}) });
+          onEvent?.({ type: 'media-job-resume-end', chatId, jobId: entry.id, cancelled: result.cancelled, saveWarning: result.saveWarning });
+        } catch (error) {
+          mediaJobStore.update(entry.id, { notification: 'interrupted', notificationError: String(error.message).slice(0, 1000) });
+          onEvent?.({ type: 'media-job-resume-end', chatId, jobId: entry.id, error: error.message });
+        } finally { finishTurn(turn); }
+      }
+    } finally { drainingMedia = false; }
+  }
+
+  function notifyMediaJob(job) {
+    onEvent?.({ type: 'media-job-ready', job, chatId: job.chatId });
+    scheduleCanvasInputs();
   }
 
   async function submitCanvasInput(input) {
@@ -465,7 +560,7 @@ function createChatService({
   }
 
   function clearHistory() {
-    if (busy || drainingInputs) throw new Error('Wait for the current reply before starting a new chat.');
+    if (busy || drainingInputs || drainingMedia) throw new Error('Wait for the current reply before starting a new chat.');
     if (pendingSave) saveHistory();
     chatStore?.activate('');
     history.splice(0, history.length);
@@ -475,7 +570,7 @@ function createChatService({
   }
 
   function openChat(id) {
-    if (busy || drainingInputs) throw new Error('Wait for the current reply before opening another chat.');
+    if (busy || drainingInputs || drainingMedia) throw new Error('Wait for the current reply before opening another chat.');
     if (!chatStore) throw new Error('Chat history is unavailable.');
     if (pendingSave) saveHistory();
     const saved = chatStore.get(id);
@@ -489,6 +584,13 @@ function createChatService({
   }
 
   async function getCurrentChat() {
+    if (!busy && !drainingMedia && mediaJobStore) {
+      for (const entry of mediaJobStore.list({ chatId, raw: true }).filter((job) => job.notification === 'dispatching')) {
+        mediaJobStore.update(entry.id, { notification: history.some((message) => message.mediaJobCompletedId === entry.id) ? 'responded' : 'interrupted' });
+      }
+    }
+    if (!busy && !drainingMedia) deliverMediaNotifications();
+    scheduleCanvasInputs();
     const currentId = chatId;
     const currentTitle = chatTitle;
     const currentHistory = [...history];
@@ -516,9 +618,9 @@ function createChatService({
       }
     }
     for (const message of currentHistory) {
-      if (message.role !== 'tool' || typeof message.content !== 'string') continue;
+      if ((message.role !== 'tool' && !message.mediaJobResult) || typeof message.content !== 'string') continue;
       try {
-        const result = JSON.parse(message.content);
+        const result = message.mediaJobResult || JSON.parse(message.content);
         const references = [...(Array.isArray(result.assets) ? result.assets : []), ...(result.assetId ? [{ assetId: result.assetId }] : [])];
         for (const asset of references) {
           if (!/^[a-f0-9]{32}$/.test(asset.assetId || '') || images.has(asset.assetId)) continue;
@@ -541,7 +643,7 @@ function createChatService({
     return { id: currentId, title: currentTitle, history: currentHistory, images: [...images.values()], media, mediaTruncated, canvasInputs: inputStore && currentId ? inputStore.list({ chatId: currentId, limit: 50 }) : [], ...(loadError ? { error: loadError } : {}) };
   }
 
-  return { sendMessage, stopAgent, shutdown, cancelShutdown, submitCanvasInput, submitCanvasMedia, cancelCanvasInput, retryCanvasInput, recoverCanvasInputs, getCanvasInputs: (query) => inputStore?.list(query) || [], clearHistory, openChat, getCurrentChat, getActiveChatId: () => chatId, listChats: () => chatStore?.list() || [], isBusy: () => busy || drainingInputs };
+  return { sendMessage, stopAgent, shutdown, cancelShutdown, notifyMediaJob, submitCanvasInput, submitCanvasMedia, cancelCanvasInput, retryCanvasInput, recoverCanvasInputs, getCanvasInputs: (query) => inputStore?.list(query) || [], clearHistory, openChat, getCurrentChat, getActiveChatId: () => chatId, listChats: () => chatStore?.list() || [], isBusy: () => busy || drainingInputs || drainingMedia };
 }
 
 module.exports = { createChatService, defaultMcpLaunchOptions };

@@ -1,6 +1,6 @@
 const { throwIfAborted } = require('./turn-abort');
 
-function createDeletionService({ canvasStore, mediaStore, confirm, previewFile, previewMedia, recordUndo, onChanged, onEvent }) {
+function createDeletionService({ canvasStore, mediaStore, confirm, previewFile, previewMedia, recordUndo, onChanged, onEvent, onProjectDeleted }) {
   function allowed(info) {
     if (info.ok === false) throw new Error(info.reason || 'This item cannot be deleted.');
     return info;
@@ -27,7 +27,13 @@ function createDeletionService({ canvasStore, mediaStore, confirm, previewFile, 
 
   async function deleteProjectFile(controller, projectId, args, { preview = false, signal } = {}) {
     throwIfAborted(signal);
-    const info = allowed(canvasStore.inspectDeletion(projectId, args));
+    const inspected = canvasStore.inspectDeletion(projectId, args);
+    if (inspected.requiresProjectDeletion) {
+      if (preview) await previewFile?.(controller, projectId, inspected);
+      throwIfAborted(signal);
+      return deleteProject(controller, projectId, { expectedProjectRevision: inspected.projectRevision }, { signal, lastFile: inspected.path, preview });
+    }
+    const info = allowed(inspected);
     if (preview) await previewFile?.(controller, projectId, info);
     throwIfAborted(signal);
     const confirmed = await confirm({ kind: 'file', projectId, name: info.path, info }, { signal });
@@ -40,6 +46,29 @@ function createDeletionService({ canvasStore, mediaStore, confirm, previewFile, 
     const event = { type: 'project-file-deleted', projectId, canvasId: projectId, deletedPath: info.path, ...opened };
     onEvent?.(event);
     return { ...result, ...opened, ok: true, deleted: true, projectId, deletedPath: info.path, confirmation: 'user approved', effects: { source: 'file deleted from the project', runtime: opened.runtimeWarning ? 'refresh failed; reopen the document' : opened.documentPath ? 'current document reloaded' : 'unchanged; another project is open' } };
+  }
+
+  async function deleteProject(controller, projectId, args = {}, { signal, lastFile, preview = false } = {}) {
+    throwIfAborted(signal);
+    const info = allowed(canvasStore.inspectProjectDeletion(projectId, args));
+    const answer = await confirm({ kind: 'project', projectId, name: info.title, info, ...(lastFile ? { lastFile } : {}) }, { signal });
+    throwIfAborted(signal);
+    const confirmed = answer === true || answer?.confirmed === true;
+    if (!confirmed) return { ok: true, deleted: false, canceled: true, projectId, ...(lastFile ? { path: lastFile } : {}), effects: { source: 'unchanged', runtime: preview ? 'target previewed for confirmation' : 'unchanged' } };
+    const result = canvasStore.deleteProject(projectId, { expectedProjectRevision: info.projectRevision, deleteMedia: answer?.deleteMedia === true });
+    let runtimeWarning;
+    try {
+      if (onProjectDeleted) await onProjectDeleted(controller, projectId, result);
+      else if (controller.getCurrentCanvasId() === projectId) await controller.closeCurrent?.({ save: false });
+    } catch (error) { runtimeWarning = `The project is deleted. Close its remaining preview. ${error.message}`; }
+    const mediaWarnings = [...(result.mediaWarnings || [])];
+    for (const assetId of result.mediaDeletionCandidates || []) {
+      try { await mediaStore.remove(assetId); }
+      catch (error) { if (!/not found/i.test(error.message)) mediaWarnings.push({ assetId, message: error.message }); }
+    }
+    const response = { ...result, ok: true, deleted: true, projectDeleted: true, projectId, ...(lastFile ? { deletedPath: lastFile } : {}), confirmation: 'user approved', ...(mediaWarnings.length ? { mediaWarnings } : {}), ...(runtimeWarning ? { runtimeWarning } : {}), effects: { ...result.effects, runtime: runtimeWarning ? 'preview cleanup failed' : 'deleted project closed if active' } };
+    onEvent?.({ type: 'project-deleted', canvasId: projectId, ...response });
+    return response;
   }
 
   async function deleteMedia(controller, { projectId, assetId, scope = 'project' }, { preview = false, signal } = {}) {
@@ -65,7 +94,7 @@ function createDeletionService({ canvasStore, mediaStore, confirm, previewFile, 
     return { ...result, ...opened, ok: true, deleted: true, projectId, assetId, scope, confirmation: 'user approved', effects: { source: scope === 'project' ? 'project attachment removed; shared copies retained' : 'library copy deleted; project copies retained', runtime: opened.runtimeWarning ? 'refresh failed; reopen the document' : opened.documentPath ? 'current document reloaded' : preview ? 'target previewed for confirmation' : 'unchanged' } };
   }
 
-  return { deleteProjectFile, deleteMedia };
+  return { deleteProject, deleteProjectFile, deleteMedia };
 }
 
 module.exports = { createDeletionService };

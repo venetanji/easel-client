@@ -40,6 +40,27 @@ function createFakeViewDependencies() {
   return { state, WebContentsView, session };
 }
 
+test('closes a deleted project without trying to save its removed source', async () => {
+  const fake = createFakeViewDependencies();
+  let deleted = false;
+  const canvas = await createCanvasView({
+    WebContentsView: fake.WebContentsView,
+    sessionFactory: async () => ({ session: fake.session }),
+    canvasStore: {
+      save: () => ({ id: 'c'.repeat(32), title: 'Disposable project' }),
+      get: () => { if (deleted) throw new Error('Project removed'); return { id: 'c'.repeat(32), title: 'Disposable project', html: '<main>Test</main>' }; },
+    },
+  });
+  await canvas.present({ title: 'Disposable project', html: '<main>Test</main>', assets: [] });
+  deleted = true;
+  assert.deepEqual(await canvas.closeCurrent({ save: false }), { closed: true });
+  assert.equal(canvas.getCurrentCanvasId(), '');
+  assert.equal(canvas.getCurrentDocumentPath(), '');
+  assert.equal(fake.state.url, 'about:blank');
+  assert.equal(fake.state.visible, false);
+  canvas.destroy();
+});
+
 test('embeds the canvas in an isolated web contents and scopes CDP to it', async () => {
   const fake = createFakeViewDependencies();
   const largeHtml = `<html><body><img src="data:image/png;base64,${'A'.repeat(2_100_000)}"></body></html>`;

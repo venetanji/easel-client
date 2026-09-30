@@ -1,8 +1,16 @@
 const ASSET_ID = { type: 'string', pattern: '^(?!0+$)(?:[a-f0-9]{32}|[a-f0-9]{64})$' };
 const PROJECT_ID = { type: 'string', pattern: '^[a-f0-9]{32}$', description: 'Optional project containing digest asset IDs. Omit for shared library assets or the active project.' };
 const IMAGE_OUTPUT_TOOLS = new Set(['generate_image', 'edit_image', 'create_image_variation']);
-const MEDIA_OUTPUT_TOOLS = new Set([...IMAGE_OUTPUT_TOOLS, 'get_video']);
+const MEDIA_OUTPUT_TOOLS = new Set([...IMAGE_OUTPUT_TOOLS, 'get_video', 'get_image_job']);
 const MEDIA_REFERENCE_TOOLS = Object.freeze([
+  { type: 'function', function: {
+    name: 'list_media_jobs', description: 'List saved media jobs and queue estimates. The host polls pending jobs across app restarts and notifies this conversation when ready. Do not spend the tool budget polling.',
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+  } },
+  { type: 'function', function: {
+    name: 'forget_media_job', description: 'Ask the user to confirm removing a media job from the persistent monitor. This forgets its saved ID and stops polling; it does not cancel the server job or delete downloaded files. Retrieval requires the remote ID. Never assume confirmation.',
+    parameters: { type: 'object', additionalProperties: false, required: ['jobId'], properties: { jobId: { type: 'string', pattern: '^[a-f0-9]{32}$' } } },
+  } },
   { type: 'function', function: {
     name: 'list_media_assets',
     description: 'List saved images, canvas screenshots, recordings and audio as compact asset references. Chats are independent of projects. No binary data is returned.',

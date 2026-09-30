@@ -33,6 +33,17 @@ test('uses a physical working directory for the packaged MCP process', () => {
   assert.equal(options.args[0], path.join(resourcesPath, 'app.asar.unpacked', 'packages', 'media-mcp', 'dist', 'cli.js'));
 });
 
+test('polling model configurations include a name without a discovered catalog entry', () => {
+  const connectionId = 'c'.repeat(32);
+  const launch = defaultMcpLaunchOptions({
+    connections: [{ id: connectionId, name: 'Local GPU', baseUrl: 'http://localhost:8000/v1' }],
+    models: [{ connectionId, model: 'ltx-2.5', enabled: true, roles: ['media'], mediaTypes: ['video'] }],
+  }, { connectionKeys: { [connectionId]: '' } });
+  const [model] = JSON.parse(launch.env.EASEL_MEDIA_MODELS);
+  assert.equal(model.name, 'ltx-2.5');
+  assert.equal(model.id, connectionId + ':ltx-2.5');
+});
+
 test('loads secrets only in main, keeps session history, and closes the MCP process', async () => {
   const completions = [];
   const mcpOptions = [];

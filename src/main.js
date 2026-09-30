@@ -40,6 +40,8 @@ const { createChatStore } = require('./chat-store');
 const { createCanvasInputStore } = require('./canvas-input-store');
 const { renderCanvasInputScript, dismissCanvasInputScript } = require('./canvas-input-runtime');
 const { createCanvasMediaStore } = require('./canvas-media-store');
+const { createMediaJobStore, mediaJobSummary } = require('./media-job-store');
+const { createMediaJobMonitor } = require('./media-job-monitor');
 const { createDeletionService } = require('./deletion-service');
 const { validateFilePath } = require('./canvas-project');
 const { createLiteLLMModelService } = require('./litellm-models');
@@ -76,13 +78,27 @@ const ASSETS = createAssetStore({
 const CANVAS_KIT_BUNDLES = loadCanvasKitBundles(path.join(app.getAppPath(), 'canvas-kits'));
 const CANVAS_INPUTS = createCanvasInputStore({ userDataPath: app.getPath('userData') });
 const CAPTURE_MEDIA = createCanvasMediaStore({ userDataPath: app.getPath('userData') });
+const MEDIA_JOBS = createMediaJobStore({ userDataPath: app.getPath('userData') });
 const MEDIA_ASSETS = {
   save: (media) => media.mimeType?.startsWith('image/') ? ASSETS.save(media) : CAPTURE_MEDIA.save(media),
-  get: async (id) => { try { return await ASSETS.get(id); } catch { return CAPTURE_MEDIA.get(id); } },
+  get: async (id) => {
+    try { return await ASSETS.get(id); } catch {}
+    try { return await CAPTURE_MEDIA.get(id); } catch {}
+    return CANVASES.getLibraryAsset(id);
+  },
   remove: async (id) => {
+    let usage;
+    try { usage = CANVASES.inspectLibraryAssetDeletion(id); }
+    catch (error) { if (!/Library media was not found/.test(error.message)) throw error; }
+    if (usage?.ok === false) throw new Error(usage.reason);
+    if (id.length === 64) return CANVASES.removeLibraryAsset(id);
     let image = false;
     try { await ASSETS.get(id); image = true; } catch {}
-    return image ? ASSETS.remove(id) : CAPTURE_MEDIA.remove(id);
+    let result;
+    try { result = image ? await ASSETS.remove(id) : await CAPTURE_MEDIA.remove(id); }
+    catch (error) { if (!usage?.asset) throw error; return CANVASES.removeLibraryAsset(id); }
+    if (usage?.asset) CANVASES.removeLibraryAsset(id);
+    return result;
   },
 };
 const CANVASES = createCanvasStore({ userDataPath: app.getPath('userData'), kitBundles: CANVAS_KIT_BUNDLES, assetStore: MEDIA_ASSETS, thumbnailFactory: projectThumbnail });
@@ -169,6 +185,14 @@ const DELETIONS = createDeletionService({
   mediaStore: MEDIA_ASSETS,
   recordUndo: (id, snapshot) => CANVAS_HISTORY.record(id, snapshot),
   onChanged: emitCanvasSaved,
+  onProjectDeleted: async (controller, id) => {
+    CANVAS_HISTORY.clear(id);
+    for (const job of MEDIA_JOBS.list({ projectId: id, raw: true })) {
+      MEDIA_JOBS.update(job.id, { projectId: '', notification: 'interrupted' });
+    }
+    if (controller.getCurrentCanvasId() === id) return controller.closeCurrent({ save: false });
+    return { closed: false };
+  },
   onEvent: (event) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, event); },
   previewFile: async (controller, id, info) => {
     if (info.isDocument) emitCanvasSaved(await controller.openSaved(id, info.path));
@@ -183,6 +207,12 @@ const DELETIONS = createDeletionService({
   },
   confirm: async ({ kind, projectId, scope, name, info }, { signal } = {}) => {
     const projectTitle = projectId ? CANVASES.getProject(projectId).title : '';
+    if (kind === 'project') {
+      const result = await dialog.showMessageBox(mainWindow, { type: 'warning', title: 'Delete project', message: `Delete ${projectTitle}?`,
+        detail: 'This deletes every file in the project. You can keep its media in All media, or delete media that no other project uses. Media shared with other projects is kept. Pending generation jobs continue in All media. This cannot be undone.',
+        buttons: ['Delete project, keep media', 'Delete project and media', 'Cancel'], defaultId: 2, cancelId: 2, noLink: true, ...(signal ? { signal } : {}) });
+      return { confirmed: result.response !== 2, deleteMedia: result.response === 1 };
+    }
     const action = kind === 'media' && scope === 'project' ? 'Remove' : 'Delete';
     const detail = kind === 'file'
       ? `This deletes ${name} from ${projectTitle}.${info.isEntry ? ` The new default document will be ${info.nextEntry}.` : ''}`
@@ -196,16 +226,29 @@ const DELETIONS = createDeletionService({
 
 async function listStoredMedia() {
   const [images, captures] = await Promise.all([ASSETS.list(), CAPTURE_MEDIA.list()]);
-  return [...images, ...captures].sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 200);
+  const shared = CANVASES.listLibraryAssets({ thumbnail: true });
+  const assets = new Map(shared.map((asset) => [asset.id, asset]));
+  for (const asset of [...images, ...captures]) assets.set(asset.id, { ...assets.get(asset.id), ...asset });
+  return [...jobCards(), ...assets.values()].sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 200);
+}
+
+function jobCards(projectId) {
+  return MEDIA_JOBS.list({ ...(projectId ? { projectId } : {}) }).filter((job) => job.status !== 'ready').map((job) => ({ id: job.id, name: job.name, mimeType: job.mediaType === 'video' ? 'video/mp4' : job.mediaType === 'audio' ? 'audio/wav' : 'image/png', updatedAt: job.updatedAt, projectId: job.projectId, kind: 'job', job }));
+}
+
+async function forgetMediaJob(id, { signal } = {}) {
+  const job = MEDIA_JOBS.get(validateOpaqueId(id, 'Media job ID'));
+  const answer = await dialog.showMessageBox(mainWindow, { type: 'warning', title: 'Remove generation job', message: `Remove ${job.name}?`,
+    detail: `This removes the saved job ID and stops monitoring. It does not cancel generation on the server. Media cannot be retrieved without its job ID; keep a copy before removing it. Any files already downloaded are kept.\n\nJob ID: ${job.remoteId}`,
+    buttons: ['Remove job', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, ...(signal ? { signal } : {}) });
+  return answer.response === 0 ? JOB_MONITOR.forget(job.id) : { deleted: false, canceled: true };
 }
 
 async function readMediaReference({ assetId, projectId } = {}) {
   const id = validateProjectAssetId(assetId);
   if (projectId !== undefined) validateOpaqueId(projectId, 'Project ID');
-  if (id.length === 32) {
-    try { return await MEDIA_ASSETS.get(id); }
-    catch (error) { if (!projectId && !canvasView?.getCurrentCanvasId()) throw error; }
-  }
+  try { return await MEDIA_ASSETS.get(id); }
+  catch (error) { if (!projectId && !canvasView?.getCurrentCanvasId()) throw error; }
   const owner = projectId || canvasView?.getCurrentCanvasId();
   if (!owner) throw new Error('Specify the project containing this saved media reference.');
   return CANVASES.getAsset(owner, id);
@@ -239,6 +282,26 @@ const CHAT = createChatService({
   assetStore: ASSETS,
   chatStore: createChatStore({ userDataPath: app.getPath('userData') }),
   inputStore: CANVAS_INPUTS,
+  mediaJobStore: MEDIA_JOBS,
+  registerMediaJob: async (input) => {
+    const settings = SETTINGS.loadPublic();
+    const connection = settings.connections.find((entry) => input.modelId?.startsWith(entry.id + ':'));
+    if (!connection) throw new Error(`Job ${input.job.id} was accepted, but its endpoint could not be saved. Keep its ID; do not generate a replacement.`);
+    let projectId = input.projectId;
+    const projectDeleted = projectId && !CANVASES.list().some((project) => project.id === projectId);
+    if (projectDeleted) projectId = '';
+    else if (!projectId) {
+      try { projectId = await withCanvas(async (controller) => (await controller.ensureProject({ kits: input.turnOptions?.kits || [] })).id); }
+      catch { /* An accepted job must remain retrievable even if its project cannot be created. */ }
+    }
+    try {
+      const tracked = JOB_MONITOR.track({ ...input, projectId, baseUrl: connection.baseUrl });
+      if (projectDeleted) MEDIA_JOBS.update(tracked.id, { notification: 'interrupted' });
+      return tracked;
+    } catch (error) {
+      throw new Error(`Job ${input.job.id} was accepted, but its receipt could not be saved: ${error.message}. Keep this remote ID to retrieve it; do not resubmit generation.`);
+    }
+  },
   mediaAssetStore: MEDIA_ASSETS,
   runtime: { isPackaged: app.isPackaged, resourcesPath: process.resourcesPath },
   presentCanvas: (artifact) => withCanvas(async (controller) => {
@@ -262,6 +325,8 @@ const CHAT = createChatService({
     getCurrentCanvasId: () => requireCanvasView().getCurrentCanvasId(),
     getCurrentDocumentPath: () => requireCanvasView().getCurrentDocumentPath(),
     getDefaultDocumentPath: () => CANVASES.getProject(requireCanvasView().getCurrentCanvasId()).manifest.entry,
+    listMediaJobs: () => ({ jobs: MEDIA_JOBS.list(), polling: 'The host polls and downloads pending jobs across restarts. Do not resubmit.' }),
+    forgetMediaJob: ({ jobId }, context) => forgetMediaJob(jobId, context),
     listCanvasDocuments: () => withCanvas((controller) => controller.listCanvasDocuments()),
     openCanvasDocument: (args) => withCanvas(async (controller) => {
       const result = await controller.openCanvasDocument({ path: validateDocumentPath(args.path) });
@@ -303,7 +368,7 @@ const CHAT = createChatService({
     readMediaAsset: readMediaReference,
     listMediaAssets: async ({ scope = 'library', projectId, limit = 30 } = {}) => {
       if (!['library', 'project'].includes(scope) || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Choose library/project scope and a limit from 1 to 100.');
-      const assets = scope === 'project' ? CANVASES.listAssets(validateOpaqueId(projectId || requireCanvasView().getCurrentCanvasId(), 'Project ID')).assets : await listStoredMedia();
+      const assets = scope === 'project' ? CANVASES.listAssets(validateOpaqueId(projectId || requireCanvasView().getCurrentCanvasId(), 'Project ID')).assets : (await listStoredMedia()).filter((asset) => asset.kind !== 'job');
       return { scope, assets: assets.slice(0, limit).map(({ id, name, mimeType, bytes, width, height, duration, codec, projectId: owner }) => ({ assetId: id, name, mimeType, bytes, width, height, duration, codec, ...(owner ? { projectId: owner } : {}) })), truncated: assets.length > limit };
     },
     adoptCanvasDom: (options) => projectMutation('adoptCanvasDom', options),
@@ -344,6 +409,17 @@ const CHAT = createChatService({
   onEvent: (event) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, event);
   },
+});
+
+const JOB_MONITOR = createMediaJobMonitor({
+  store: MEDIA_JOBS, settingsStore: SETTINGS, mediaAssetStore: MEDIA_ASSETS,
+  runtime: { isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, userDataPath: app.getPath('userData') },
+  attachAssets: (projectId, assetIds) => withCanvas((controller) => {
+    if (!CANVASES.list().some((project) => project.id === projectId)) return { projectDeleted: true };
+    return attachProjectAssets(controller, projectId, assetIds);
+  }),
+  onEvent: (event) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, event); },
+  onReady: (job) => CHAT.notifyMediaJob(job),
 });
 
 function registerIpcHandlers() {
@@ -461,7 +537,7 @@ function registerIpcHandlers() {
       const preview = await CANVASES.getAsset(projectId, asset.id, { thumbnail: true });
       return { ...asset, thumbnail: preview.thumbnail || '' };
     }));
-    return { ...result, projectId, projectTitle: result.title, assets };
+    return { ...result, projectId, projectTitle: result.title, assets: [...jobCards(projectId), ...assets] };
   });
   ipcMain.handle(IPC_CHANNELS.GET_PROJECT_ASSET, async (event, id, assetId) => {
     assertTrustedSender(event, mainWindow);
@@ -469,11 +545,11 @@ function registerIpcHandlers() {
   });
   ipcMain.handle(IPC_CHANNELS.GET_LIBRARY_ASSET, async (event, id) => {
     assertTrustedSender(event, mainWindow);
-    return publicAsset(await MEDIA_ASSETS.get(validateOpaqueId(id, 'Asset ID')));
+    return publicAsset(await MEDIA_ASSETS.get(validateProjectAssetId(id)));
   });
   ipcMain.handle(IPC_CHANNELS.SAVE_LIBRARY_ASSET, async (event, id) => {
     assertTrustedSender(event, mainWindow);
-    return saveAssetDownload(await MEDIA_ASSETS.get(validateOpaqueId(id, 'Asset ID')));
+    return saveAssetDownload(await MEDIA_ASSETS.get(validateProjectAssetId(id)));
   });
   canvasHandle(IPC_CHANNELS.ATTACH_PROJECT_ASSET, async (event, id, assetId) => {
     assertTrustedSender(event, mainWindow);
@@ -496,6 +572,11 @@ function registerIpcHandlers() {
     if (CHAT.isBusy()) throw new Error('Stop the agent or wait for its reply before deleting a file.');
     return DELETIONS.deleteProjectFile(requireCanvasView(), validateOpaqueId(id, 'Project ID'), validateFileDeletion(input));
   });
+  canvasHandle(IPC_CHANNELS.DELETE_PROJECT, (event, id) => {
+    assertTrustedSender(event, mainWindow);
+    if (CHAT.isBusy()) throw new Error('Stop the agent or wait for its reply before deleting a project.');
+    return DELETIONS.deleteProject(requireCanvasView(), validateOpaqueId(id, 'Project ID'));
+  });
   canvasHandle(IPC_CHANNELS.DELETE_PROJECT_ASSET, (event, id, assetId) => {
     assertTrustedSender(event, mainWindow);
     if (CHAT.isBusy()) throw new Error('Stop the agent or wait for its reply before removing media.');
@@ -504,7 +585,7 @@ function registerIpcHandlers() {
   canvasHandle(IPC_CHANNELS.DELETE_LIBRARY_ASSET, (event, assetId) => {
     assertTrustedSender(event, mainWindow);
     if (CHAT.isBusy()) throw new Error('Stop the agent or wait for its reply before deleting media.');
-    return DELETIONS.deleteMedia(requireCanvasView(), { assetId: validateOpaqueId(assetId, 'Asset ID'), scope: 'library' });
+    return DELETIONS.deleteMedia(requireCanvasView(), { assetId: validateProjectAssetId(assetId), scope: 'library' });
   });
   ipcMain.handle(IPC_CHANNELS.LIST_CANVAS_INPUTS, (event) => {
     assertTrustedSender(event, mainWindow);
@@ -632,6 +713,9 @@ function registerIpcHandlers() {
     assertTrustedSender(event, mainWindow);
     return listStoredMedia();
   });
+  ipcMain.handle(IPC_CHANNELS.LIST_MEDIA_JOBS, (event) => { assertTrustedSender(event, mainWindow); return MEDIA_JOBS.list(); });
+  ipcMain.handle(IPC_CHANNELS.DELETE_MEDIA_JOB, (event, id) => { assertTrustedSender(event, mainWindow); return forgetMediaJob(id); });
+  ipcMain.handle(IPC_CHANNELS.RETRY_MEDIA_JOB, (event, id) => { assertTrustedSender(event, mainWindow); return JOB_MONITOR.retry(validateOpaqueId(id, 'Media job ID')); });
   ipcMain.handle(IPC_CHANNELS.LIST_CANVASES, (event) => {
     assertTrustedSender(event, mainWindow);
     return CANVASES.list();
@@ -748,7 +832,6 @@ async function createWindow() {
       sandbox: true,
     },
   });
-
   if (process.platform !== 'darwin') mainWindow.removeMenu();
 
   canvasView = await createCanvasView({
@@ -795,6 +878,7 @@ async function createWindow() {
     closeTask = (async () => {
       // Keep the native view alive until the stopped turn finishes its host edits.
       await CHAT.shutdown();
+      await JOB_MONITOR.stop();
       await withCanvas(async (controller) => {
         if (controller.getCurrentCanvasId()) await controller.saveCurrent();
       });
@@ -803,6 +887,7 @@ async function createWindow() {
     })().catch((error) => {
       closeTask = null;
       CHAT.cancelShutdown();
+      JOB_MONITOR.start();
       if (!closingWindow.isDestroyed()) closingWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, { type: 'error', message: `The window is still open because its work could not be saved: ${error.message}` });
     });
   });
@@ -812,6 +897,7 @@ async function createWindow() {
     mainWindow = null;
   });
   mainWindow.loadURL(entryUrl);
+  JOB_MONITOR.start();
   return mainWindow;
 }
 

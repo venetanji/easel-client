@@ -42,6 +42,31 @@ test('a pending job returns its status without downloading or resubmitting', asy
   assert.equal(result.media, undefined);
 });
 
+test('optional Easel queue diagnostics include position and completion estimate', async () => {
+  const urls: string[] = [];
+  const result = await getVideo({ videoId: id, includeQueue: true, fetchImpl: async (url) => {
+    urls.push(String(url));
+    return urls.length === 1 ? Response.json({ id, status: 'queued' }) : Response.json({ id, queue_position: 2, queue_ahead: 2, estimated_wait_seconds: 72, estimated_completion_at: 1790000072 });
+  } });
+  assert.equal(urls.length, 2);
+  assert.ok(urls[1].endsWith('/v1/videos/queue/' + id));
+  assert.equal(result.job.queuePosition, 2);
+  assert.equal(result.job.estimatedWaitSeconds, 72);
+});
+
+test('an endpoint without queue diagnostics still returns its ordinary job status', async () => {
+  const result = await getVideo({ videoId: id, includeQueue: true, fetchImpl: async (url) => String(url).includes('/queue/') ? Response.json({}, { status: 404 }) : Response.json({ id, status: 'queued' }) });
+  assert.equal(result.job.status, 'queued');
+  assert.equal(result.job.estimatedWaitSeconds, undefined);
+});
+
+test('submits one and twelve second durations without adjustment', async () => {
+  for (const seconds of [1, 12]) await generateVideo({ prompt: 'A cat', model: 'ltx-2.5', seconds, fetchImpl: async (_url, init) => {
+    assert.equal((init?.body as FormData).get('seconds'), String(seconds));
+    return Response.json({ id, status: 'queued' });
+  } });
+});
+
 test('completed video downloads validated bytes from the configured endpoint', async () => {
   const urls: string[] = [];
   const result = await getVideo({ videoId: id, baseUrl: 'https://media.example/v1', fetchImpl: async (url, init) => {

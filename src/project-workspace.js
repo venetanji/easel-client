@@ -19,8 +19,10 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   const picker = document.getElementById('project-select');
   const drawer = document.querySelector('.library');
   const drawerToggle = document.getElementById('nav-explorer');
-  const scope = document.getElementById('project-media-scope');
+  const mediaDrawer = document.getElementById('media-drawer');
+  const mediaDrawerToggle = document.getElementById('nav-media');
   const mediaList = document.getElementById('media-list');
+  const allMediaList = document.getElementById('all-media-list');
   const documentsList = document.getElementById('canvases-list');
   const tabsElement = document.getElementById('open-canvas-tabs');
   const preview = document.getElementById('image-viewer');
@@ -34,6 +36,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   let projectId = '';
   let documents = [];
   let assets = [];
+  let libraryAssets = [];
   let activeTab = null;
   let restored = false;
   let operation = false;
@@ -102,18 +105,29 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     svg.append(path);
     return svg;
   }
-  function setDrawer(open, focus = true) {
-    drawer.hidden = !open;
+  function setDrawer(open, focus = true, kind = 'files') {
+    const showMedia = open && kind === 'media';
+    const showFiles = open && !showMedia;
+    const target = kind === 'media' ? mediaDrawer : drawer;
+    const toggle = kind === 'media' ? mediaDrawerToggle : drawerToggle;
+    drawer.hidden = !showFiles;
+    drawer.inert = !showFiles;
+    mediaDrawer.hidden = !showMedia;
+    mediaDrawer.inert = !showMedia;
     document.querySelector('.conversation').inert = open;
-    drawerToggle.setAttribute('aria-expanded', String(open));
-    drawerToggle.setAttribute('aria-pressed', String(open));
-    drawerToggle.setAttribute('aria-label', open ? 'Hide project drawer' : 'Show project drawer');
-    onDrawerChange?.(open);
+    drawerToggle.setAttribute('aria-expanded', String(showFiles));
+    drawerToggle.setAttribute('aria-pressed', String(showFiles));
+    drawerToggle.setAttribute('aria-label', showFiles ? 'Hide project files' : 'Show project files');
+    mediaDrawerToggle.setAttribute('aria-expanded', String(showMedia));
+    mediaDrawerToggle.setAttribute('aria-pressed', String(showMedia));
+    mediaDrawerToggle.setAttribute('aria-label', showMedia ? 'Hide media' : 'Show media');
+    onDrawerChange?.(open, kind);
     if (focus) {
-      if (open) drawer.querySelector('select, button')?.focus();
-      else drawerToggle.focus();
+      if (open) (target.querySelector('button') || target).focus();
+      else toggle.focus();
     }
   }
+  function setMediaDrawer(open, focus = true) { setDrawer(open, focus, 'media'); }
   function hideMedia() {
     previewImage.onload = null;
     previewImage.onerror = null;
@@ -212,47 +226,93 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   }
   async function refreshAssets() {
     const owner = projectId;
-    const library = scope.value === 'library';
     const version = ++mediaVersion;
-    const current = owner ? await client.getProjectAssets(owner) : [];
+    const [current, all] = await Promise.all([owner ? client.getProjectAssets(owner) : [], client.listAssets()]);
     if (version !== mediaVersion || owner !== projectId) return;
     assets = Array.isArray(current) ? current : current.assets || [];
-    const all = library ? await client.listAssets() : assets;
-    if (version !== mediaVersion || owner !== projectId) return;
+    libraryAssets = Array.isArray(all) ? all : all.assets || [];
+    renderAssets();
+  }
+  function renderAssets() {
     const attached = new Set(assets.map((asset) => asset.id));
-    mediaList.replaceChildren(...all.filter((asset) => mediaKind(asset)).map((asset) => {
-      const inProject = attached.has(asset.id);
-      const kind = mediaKind(asset);
-      const figure = node('article', 'project-media-item');
-      const thumbnail = button('', 'project-thumbnail', () => openMedia(asset, !inProject), `Open ${asset.name || kind} in viewer`);
-      const poster = asset.thumbnail || asset.thumbnailDataUrl;
-      if (poster) {
-        const image = node('img');
-        image.src = poster;
-        image.alt = '';
-        image.loading = 'lazy';
-        thumbnail.append(image);
-      } else thumbnail.append(mediaIcon(kind, 'project-thumbnail-placeholder'));
-      if (kind !== 'image') {
-        const badge = node('span', 'project-thumbnail-kind');
-        badge.append(mediaIcon(kind), node('span', '', durationLabel(asset.duration) || (kind === 'video' ? 'Video' : 'Audio')));
-        thumbnail.append(badge);
-      }
-      const label = node('p', 'project-media-name', asset.name || `Media ${asset.id.slice(0, 8)}`);
-      label.title = label.textContent;
-      const actions = node('div', 'project-media-actions');
-      if (!inProject) actions.append(button('Add to project', 'button quiet small', () => addToProject(asset)));
-      actions.append(button('Use in chat', 'button quiet small', () => attachMedia(asset, !inProject)));
-      actions.append(button('Download', 'button quiet small', () => downloadMedia(asset.id, !inProject)));
-      const heading = node('div', 'project-media-heading');
-      heading.append(label, deleteButton(`${library ? 'Delete from library' : 'Remove from project'}: ${label.textContent}`, () => deleteMedia(asset.id, library)));
-      figure.append(thumbnail, heading, actions);
-      return figure;
-    }));
+    const current = assets.filter((asset) => mediaKind(asset));
+    const all = libraryAssets.filter((asset) => mediaKind(asset));
+    mediaList.replaceChildren(...current.map((asset) => asset.kind === 'job' ? jobCard(asset) : mediaCard(asset, false, true)));
+    allMediaList.replaceChildren(...all.map((asset) => asset.kind === 'job' ? jobCard(asset) : mediaCard(asset, true, attached.has(asset.id))));
     const empty = document.getElementById('media-empty');
-    empty.hidden = mediaList.children.length > 0;
-    empty.textContent = scope.value === 'library' ? 'No saved media yet.' : owner ? 'Generated media and captures appear here. Browse All media to add an existing asset.' : 'Open or create a project to collect its files and media.';
-    document.getElementById('project-image-count').textContent = String(assets.filter((asset) => mediaKind(asset)).length);
+    empty.hidden = current.length > 0;
+    empty.textContent = projectId ? 'Generated media appears here. Add a reference from All media below.' : 'Select a project to collect media. All media is available below.';
+    document.getElementById('all-media-empty').hidden = all.length > 0;
+    document.getElementById('project-image-count').textContent = String(current.length);
+    document.getElementById('all-media-count').textContent = String(all.length);
+  }
+  function mediaCard(asset, library, inProject) {
+    const kind = mediaKind(asset);
+    const figure = node('article', 'project-media-item');
+    figure.dataset.assetId = asset.id;
+    const thumbnail = button('', 'project-thumbnail', () => openMedia(asset, library), `Open ${asset.name || kind} in viewer`);
+    const poster = asset.thumbnail || asset.thumbnailDataUrl;
+    if (poster) {
+      const image = node('img');
+      image.src = poster;
+      image.alt = '';
+      image.loading = 'lazy';
+      thumbnail.append(image);
+    } else thumbnail.append(mediaIcon(kind, 'project-thumbnail-placeholder'));
+    if (kind !== 'image') {
+      const badge = node('span', 'project-thumbnail-kind');
+      badge.append(mediaIcon(kind), node('span', '', durationLabel(asset.duration) || (kind === 'video' ? 'Video' : 'Audio')));
+      thumbnail.append(badge);
+    }
+    const label = node('p', 'project-media-name', asset.name || `Media ${asset.id.slice(0, 8)}`);
+    label.title = label.textContent;
+    const actions = node('div', 'project-media-actions');
+    if (library) {
+      if (inProject) {
+        const attached = node('span', 'media-in-project', 'In project');
+        const check = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        for (const [name, value] of Object.entries({ viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) check.setAttribute(name, value);
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', 'm3 8 3 3 7-7');
+        check.append(path);
+        attached.append(check);
+        actions.append(attached);
+      }
+      else {
+        const add = button('Add to project', 'button quiet small', () => addToProject(asset));
+        add.dataset.requiresProject = 'true';
+        add.disabled ||= !projectId;
+        if (!projectId) add.title = 'Select a project first';
+        actions.append(add);
+      }
+    }
+    actions.append(button('Use in chat', 'button quiet small', () => attachMedia(asset, library)));
+    actions.append(button('Download', 'button quiet small', () => downloadMedia(asset.id, library)));
+    const heading = node('div', 'project-media-heading');
+    const trash = deleteButton(`${library ? 'Delete from library' : 'Remove from project'}: ${label.textContent}`, () => deleteMedia(asset.id, library));
+    if (library && (inProject || asset.referenceCount > 0 || asset.projectIds?.length)) {
+      trash.dataset.referenced = 'true';
+      trash.disabled = true;
+      trash.title = 'Remove this media from its projects before deleting it from the library.';
+    }
+    heading.append(label, trash);
+    figure.append(thumbnail, heading, actions);
+    return figure;
+  }
+  function updateMediaJob(job) {
+    if (!job?.id || job.status === 'ready') return false;
+    let found = false;
+    let updated;
+    for (const collection of [assets, libraryAssets]) {
+      const asset = collection.find((item) => item.kind === 'job' && item.job.id === job.id);
+      if (asset) { asset.job = { ...asset.job, ...job }; updated = asset.job; found = true; }
+    }
+    if (!found) return false;
+    for (const list of [mediaList, allMediaList]) {
+      const card = [...list.children].find((item) => item.dataset.jobId === job.id);
+      if (card) updateJobCard(card, updated);
+    }
+    return true;
   }
   async function addToProject(asset) {
     guard();
@@ -274,8 +334,62 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     guard();
     const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm', 'audio/mpeg': 'mp3', 'audio/wav': 'wav' }[full.mimeType];
     const name = full.name || asset.name || `Media-${asset.id.slice(0, 8)}.${extension}`;
-    setDrawer(false);
+    setDrawer(false, false);
     onAttach(new File([mediaBlob(full)], name, { type: full.mimeType }));
+  }
+  function jobCard(asset) {
+    const job = asset.job;
+    const figure = node('article', 'project-media-item media-job');
+    figure.dataset.jobId = job.id;
+    const visual = node('div', 'project-thumbnail media-job-preview');
+    const cog = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    for (const [name, value] of Object.entries({ class: 'media-job-cog', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) cog.setAttribute(name, value);
+    const cogPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    cogPath.setAttribute('d', 'm9.5 2.5-.5 2.4-1.7 1-2.3-.8-2.5 4.3 1.8 1.6v2L2.5 14.5 5 18.8l2.3-.8 1.7 1 .5 2.5h5l.5-2.5 1.7-1 2.3.8 2.5-4.3-1.8-1.5v-2l1.8-1.6L19 5.1l-2.3.8-1.7-1-.5-2.4Z');
+    const cogCenter = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    cogCenter.setAttribute('cx', '12');
+    cogCenter.setAttribute('cy', '12');
+    cogCenter.setAttribute('r', '3');
+    cog.append(cogPath, cogCenter);
+    const progress = node('progress', 'media-job-progress');
+    progress.max = 100;
+    visual.append(mediaIcon(job.mediaType, 'project-thumbnail-placeholder'), cog, node('strong', 'media-job-status'), progress);
+    const heading = node('div', 'project-media-heading');
+    const name = node('p', 'project-media-name', asset.name);
+    name.title = asset.name;
+    heading.append(name, deleteButton(`Remove generation job: ${asset.name}`, async () => {
+      const result = await client.deleteMediaJob(job.id);
+      if (result?.deleted) await refreshAssets();
+    }));
+    const detail = node('p', 'media-job-detail');
+    figure.append(visual, heading, detail);
+    figure.append(node('p', 'media-job-error'));
+    const actions = node('div', 'media-job-recovery');
+    actions.append(button('Check now', 'button quiet small', () => client.retryMediaJob(job.id)));
+    figure.append(actions);
+    updateJobCard(figure, job);
+    return figure;
+  }
+  function updateJobCard(figure, job) {
+    const status = job.status === 'failed' ? 'Generation failed' : job.status === 'downloading' ? 'Saving media' : job.providerStatus === 'queued' ? 'Queued' : 'Generating';
+    figure.querySelector('.media-job-status').textContent = status;
+    const cog = figure.querySelector('.media-job-cog');
+    if (job.status === 'failed') cog.setAttribute('hidden', '');
+    else cog.removeAttribute('hidden');
+    const progress = figure.querySelector('.media-job-progress');
+    progress.hidden = !(job.progress > 0 && job.progress < 100);
+    progress.value = job.progress || 0;
+    progress.setAttribute('aria-label', `${status}: ${job.progress || 0}%`);
+    const details = [];
+    if (Number.isInteger(job.queuePosition) && job.queuePosition > 0) details.push(`Queue position ${job.queuePosition}`);
+    if (Number.isFinite(job.estimatedWaitSeconds)) details.push(job.estimatedWaitSeconds < 60 ? `About ${Math.max(1, Math.round(job.estimatedWaitSeconds))} seconds` : `About ${Math.ceil(job.estimatedWaitSeconds / 60)} min`);
+    else if (job.status !== 'failed') details.push('Estimating completion');
+    figure.querySelector('.media-job-detail').textContent = details.join(' / ');
+    const error = figure.querySelector('.media-job-error');
+    error.hidden = !job.error;
+    error.textContent = job.status === 'failed' ? job.error || '' : 'Retrieval will retry. Job ID is saved.';
+    error.title = job.error || '';
+    figure.querySelector('.media-job-recovery').hidden = !job.error || job.status === 'failed';
   }
   async function downloadMedia(id, library = false) {
     const result = library ? await client.saveLibraryAsset(id) : await client.saveProjectAsset(projectId, id);
@@ -292,13 +406,33 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       const result = await client.deleteProjectFile(owner, { path });
       if (!result?.deleted) return;
       deleted = true;
-      await acceptDeletion({ ...result, type: 'project-file-deleted', projectId: owner, deletedPath: path });
-      onStatus(`Deleted ${path}.`);
+      await acceptDeletion({ ...result, type: result.projectDeleted ? 'project-deleted' : 'project-file-deleted', projectId: owner, deletedPath: path });
+      if (result.projectDeleted) reportProjectDeletion(result);
+      else onStatus([`Deleted ${path}.`, result.runtimeWarning].filter(Boolean).join(' '), Boolean(result.runtimeWarning));
     } finally {
       operation = false;
       updateBusy();
       if (deleted && owner === projectId && !drawer.hidden) documentsList.querySelector('button')?.focus();
     }
+  }
+  function reportProjectDeletion(result) {
+    const warnings = [...(result.mediaWarnings || []), result.runtimeWarning].filter(Boolean);
+    const count = result.deletedAssetIds?.length || 0;
+    const media = count ? `${count} unshared media ${count === 1 ? 'asset' : 'assets'} deleted. Remaining media is available in All media.` : 'Saved media is available in All media.';
+    onStatus(['Project deleted.', media, ...warnings].join(' '), warnings.length > 0);
+  }
+  async function deleteProject() {
+    guard();
+    const owner = projectId;
+    if (!owner) return;
+    operation = true;
+    updateBusy();
+    try {
+      const result = await client.deleteProject(owner);
+      if (!result?.deleted) return;
+      await acceptDeletion({ ...result, type: 'project-deleted', projectId: owner });
+      reportProjectDeletion(result);
+    } finally { operation = false; updateBusy(); }
   }
   async function deleteMedia(assetId, library) {
     guard();
@@ -315,7 +449,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     } finally {
       operation = false;
       updateBusy();
-      if (deleted && owner === projectId && !drawer.hidden) (mediaList.querySelector('button') || scope).focus();
+      if (deleted && owner === projectId && !mediaDrawer.hidden) (mediaList.querySelector('button') || allMediaList.querySelector('button') || mediaDrawerToggle).focus();
     }
   }
   function renderDocuments() {
@@ -343,6 +477,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     }));
     picker.value = projectId;
     document.getElementById('project-rename').disabled = !projectId || operation || Boolean(isBusy?.());
+    document.getElementById('project-delete').disabled = !projectId || operation || Boolean(isBusy?.());
   }
   function renderTabs() {
     const visible = [...tabs.values()].filter((tab) => tab.projectId === projectId);
@@ -438,6 +573,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     projects = await client.listCanvases();
     renderPicker();
     if (projectId) await loadProjectContents(projectId);
+    else await refreshAssets();
     if (restore && !restored) {
       restored = true;
       const legacy = read('easel-studio.open-canvases.v1', []).at(-1);
@@ -484,6 +620,24 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   }
   function acceptDeletion(event) {
     const update = async () => {
+      if (event.type === 'project-deleted' || event.projectDeleted) {
+        for (const [key, tab] of tabs) if (tab.projectId === event.projectId) tabs.delete(key);
+        if (event.projectId === projectId) {
+          selectionVersion += 1;
+          mediaVersion += 1;
+          projectId = '';
+          documents = [];
+          assets = [];
+          hideMedia();
+          document.getElementById('project-source-files').replaceChildren();
+          renderDocuments();
+          select(null, { projectDeleted: true, deletedProjectId: event.projectId });
+        } else { writeState(); renderTabs(); }
+        await refreshProjects(false);
+        updateBusy();
+        onBounds();
+        return;
+      }
       const file = event.type === 'project-file-deleted';
       if (event.scope === 'library' || event.projectId === projectId) selectionVersion += 1;
       const matches = (tab) => file
@@ -496,7 +650,6 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
         select(null);
       } else { writeState(); renderTabs(); }
       await refreshProjects(false);
-      if (!projectId) await refreshAssets();
       if (event.projectId === projectId && file) {
         const opened = event.opened || event;
         const path = opened.documentPath;
@@ -553,27 +706,34 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     }
     const busy = operation || Boolean(isBusy?.());
     picker.disabled = busy;
-    for (const element of document.querySelectorAll('.project-document, .project-source-file, .library .delete-control, .project-media-actions button, .project-thumbnail, .canvas-tab button, #project-new, #project-rename, #drawer-new-document')) element.disabled = busy;
+    for (const element of document.querySelectorAll('.project-document, .project-source-file, .library .delete-control, .media-drawer .delete-control, .project-media-actions button, .media-job-recovery button, button.project-thumbnail, .canvas-tab button, #project-new, #project-rename, #drawer-new-document')) {
+      element.disabled = busy || element.dataset.referenced === 'true' || (element.dataset.requiresProject === 'true' && !projectId);
+    }
     document.getElementById('project-rename').disabled = busy || !projectId;
+    document.getElementById('project-delete').disabled = busy || !projectId;
     document.getElementById('image-use-chat').disabled = busy || !isMediaTab();
   }
   drawerToggle.addEventListener('click', () => setDrawer(drawer.hidden));
   document.getElementById('library-collapse').addEventListener('click', () => setDrawer(false));
+  mediaDrawerToggle.addEventListener('click', () => setMediaDrawer(mediaDrawer.hidden));
+  document.getElementById('media-collapse').addEventListener('click', () => setMediaDrawer(false));
   document.getElementById('project-new').addEventListener('click', () => onCreate('project'));
   document.getElementById('project-rename').addEventListener('click', () => onCreate('rename', title()));
+  document.getElementById('project-delete').addEventListener('click', () => run(deleteProject));
   document.getElementById('drawer-new-document').addEventListener('click', () => onCreate('document'));
   picker.addEventListener('change', () => run(async () => { try { await openProject(picker.value); } finally { picker.value = projectId; } }));
-  scope.addEventListener('change', () => run(refreshAssets));
   document.getElementById('image-use-chat').addEventListener('click', () => run(() => attachMedia({ id: activeTab.resource, name: activeTab.title }, activeTab.library)));
   document.getElementById('image-size-toggle').addEventListener('click', () => {
     zoomed = !zoomed;
     preview.dataset.zoom = zoomed ? 'actual' : 'fit';
     document.getElementById('image-size-toggle').textContent = zoomed ? 'Fit image' : 'Actual size';
   });
-  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !drawer.hidden && !document.querySelector('dialog[open]')) setDrawer(false); });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && (!drawer.hidden || !mediaDrawer.hidden) && !document.querySelector('dialog[open]')) setDrawer(false, true, drawer.hidden ? 'media' : 'files');
+  });
   setDrawer(false, false);
-  return { refreshProjects, refreshAssets, openProject, openDocument, changed, assetsChanged, acceptDeletion, previewMedia, create, exportCurrent, updateBusy,
-    getProjectId: () => projectId, getPreviewKind: () => activeTab?.kind || 'empty', isOperating: () => operation, setDrawer };
+  return { refreshProjects, refreshAssets, updateMediaJob, openProject, openDocument, changed, assetsChanged, acceptDeletion, previewMedia, create, exportCurrent, updateBusy,
+    getProjectId: () => projectId, getPreviewKind: () => activeTab?.kind || 'empty', isOperating: () => operation, setDrawer, setMediaDrawer };
 }
 
 if (typeof module !== 'undefined') module.exports = { createDeleteButton, createProjectWorkspace };

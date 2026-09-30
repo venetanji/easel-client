@@ -81,3 +81,27 @@ test('rejects invalid and missing removal IDs before changing image library file
   await assert.rejects(store.remove('b'.repeat(32)), /not found/i);
   assert.equal((await store.get(id)).data, 'YWJj');
 });
+
+test('reuses unchanged thumbnails and refreshes only changed image files', async (t) => {
+  const temporaryRoot = path.resolve(os.tmpdir());
+  const userDataPath = fs.mkdtempSync(path.join(temporaryRoot, 'easel-assets-cache-'));
+  t.after(() => {
+    assert.equal(path.dirname(path.resolve(userDataPath)), temporaryRoot);
+    fs.rmSync(userDataPath, { recursive: true, force: true });
+  });
+  let thumbnailCalls = 0;
+  const id = 'a'.repeat(32);
+  const store = createAssetStore({ userDataPath, idFactory: () => id, thumbnailFactory: () => {
+    thumbnailCalls++;
+    return 'data:image/png;base64,dGh1bWI=';
+  } });
+  await store.save({ data: 'YWJj', mimeType: 'image/png' });
+  await store.list();
+  await store.list();
+  assert.equal(thumbnailCalls, 1);
+  fs.writeFileSync(path.join(userDataPath, 'assets', id + '.png'), 'changed');
+  await store.list();
+  assert.equal(thumbnailCalls, 2);
+  await store.remove(id);
+  assert.deepEqual(await store.list(), []);
+});

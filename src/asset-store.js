@@ -19,6 +19,7 @@ function createAssetStore({
   thumbnailFactory = (bytes, mimeType) => `data:${mimeType};base64,${bytes.toString('base64')}`,
 }) {
   const assetsPath = path.join(userDataPath, 'assets');
+  const thumbnails = new Map();
 
   async function save({ data, mimeType } = {}) {
     if (!Object.hasOwn(FORMATS, mimeType)) throw new Error('Unsupported image type.');
@@ -73,6 +74,7 @@ function createAssetStore({
     }
     if (!filenames.length) throw new Error('Asset was not found.');
     for (const filename of filenames) fileSystem.unlinkSync(filename);
+    for (const filename of filenames) thumbnails.delete(path.basename(filename));
     return { id, deleted: true };
   }
 
@@ -81,16 +83,23 @@ function createAssetStore({
     const mimeTypes = new Map(Object.entries(FORMATS).map(([mimeType, extension]) => [extension, mimeType]));
     const filenames = fileSystem.readdirSync(assetsPath)
       .filter((filename) => /^[a-f0-9]{32}\.(?:png|jpg|webp)$/.test(filename))
-      .map((filename) => ({ filename, updatedAt: fileSystem.statSync(path.join(assetsPath, filename)).mtimeMs }))
+      .map((filename) => {
+        const stat = fileSystem.statSync(path.join(assetsPath, filename));
+        return { filename, updatedAt: stat.mtimeMs, bytes: stat.size };
+      })
       .sort((left, right) => right.updatedAt - left.updatedAt)
       .slice(0, MAX_ASSET_LIST_ITEMS);
-    return filenames.flatMap(({ filename, updatedAt }) => {
+    const visible = new Set(filenames.map((entry) => entry.filename));
+    for (const filename of thumbnails.keys()) if (!visible.has(filename)) thumbnails.delete(filename);
+    return filenames.flatMap(({ filename, updatedAt, bytes: size }) => {
       const match = filename.match(/^([a-f0-9]{32})\.(png|jpg|webp)$/);
       const mimeType = mimeTypes.get(match?.[2]);
       if (!match || !mimeType) return [];
-      const bytes = fileSystem.readFileSync(path.join(assetsPath, filename));
-      const thumbnail = thumbnailFactory(bytes, mimeType);
+      const cached = thumbnails.get(filename);
+      const thumbnail = cached?.updatedAt === updatedAt && cached.bytes === size ? cached.thumbnail
+        : thumbnailFactory(fileSystem.readFileSync(path.join(assetsPath, filename)), mimeType);
       if (typeof thumbnail !== 'string' || !thumbnail.startsWith('data:image/')) return [];
+      thumbnails.set(filename, { thumbnail, updatedAt, bytes: size });
       return [{ id: match[1], mimeType, thumbnail, updatedAt }];
     });
   }

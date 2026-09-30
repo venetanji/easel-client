@@ -2,17 +2,18 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod/v4';
 import { captureCanvasScreenshot, type CanvasScreenshot } from './canvas.js';
 import {
-  createImageVariations, editImages, generateImages, listModels,
-  type EaselImage, type EditImageInput, type GenerateImageInput, type ImageVariationInput,
+  createImageVariations, editImages, generateImages, getImageJob, listModels,
+  type EaselImage, type ImageResult, type EditImageInput, type GenerateImageInput, type ImageVariationInput,
 } from './easel.js';
 import { MAX_IMAGE_BASE64_CHARS, MAX_IMAGE_INPUTS } from './image-upload.js';
 import { generateVideo, getVideo, VIDEO_ID_PATTERN, type GenerateVideoInput, type GetVideoInput, type VideoJob, type VideoResult } from './video.js';
 
 interface EaselClient {
   listModels: (input?: { signal?: AbortSignal }) => Promise<string[]>;
-  generateImages: (input: GenerateImageInput) => Promise<EaselImage[]>;
-  editImages?: (input: EditImageInput) => Promise<EaselImage[]>;
-  createImageVariations?: (input: ImageVariationInput) => Promise<EaselImage[]>;
+  generateImages: (input: GenerateImageInput) => Promise<ImageResult>;
+  editImages?: (input: EditImageInput) => Promise<ImageResult>;
+  createImageVariations?: (input: ImageVariationInput) => Promise<ImageResult>;
+  getImageJob?: (input: { jobId: string; model?: string; signal?: AbortSignal }) => Promise<{ job: VideoJob; images?: EaselImage[] }>;
   generateVideo?: (input: GenerateVideoInput) => Promise<VideoJob>;
   getVideo?: (input: GetVideoInput) => Promise<VideoResult>;
 }
@@ -50,7 +51,7 @@ const ImageVariationInput = GenerateImageInput.omit({ prompt: true }).extend({
 const GenerateVideoInput = z.object({
   prompt: GenerateImageInput.shape.prompt,
   model: z.string().trim().min(1).max(320),
-  seconds: z.number().int().min(1).max(60).describe('Duration depends on the endpoint. Easel accepts 4, 8, or 12 seconds; use the 4-second default for its shortest video and explain any adjustment from the user request.').optional(),
+  seconds: z.number().int().min(1).max(60).describe('Duration depends on the endpoint. Easel accepts integer durations from 1 to 12 seconds.').optional(),
   size: GenerateImageInput.shape.size,
   inputReference: ImageUploadInput.optional(),
 }).strict();
@@ -59,6 +60,7 @@ const GetVideoInput = z.object({
   model: z.string().trim().min(1).max(320).optional(),
   waitSeconds: z.number().int().min(0).max(15).optional(),
   download: z.boolean().optional(),
+  includeQueue: z.boolean().describe('Include queue position and estimated completion time when the endpoint supports /v1/videos/queue/{id}.').optional(),
 }).strict();
 const ConfiguredMediaModels = z.array(z.object({
   id: z.string().min(1).max(320),
@@ -106,6 +108,7 @@ export function registerMediaTools(
     generateImages: (input) => generateImages({ ...input, ...providerFor(input.model) }),
     editImages: (input) => editImages({ ...input, ...providerFor(input.model) }),
     createImageVariations: (input) => createImageVariations({ ...input, ...providerFor(input.model) }),
+    getImageJob: (input) => getImageJob({ ...input, ...providerFor(input.model) }),
     generateVideo: (input) => {
       const provider = providerFor(input.model, 'video');
       return generateVideo({ ...input, ...provider, model: provider.model! });
@@ -135,24 +138,32 @@ export function registerMediaTools(
     server.registerTool('generate_image', {
       description: 'Generate images with an enabled Media model. Use the exact model ID returned by list_models; its endpoint credentials are applied automatically.',
       inputSchema: GenerateImageInput.extend({ model }).strict(),
-    }, async (input, extra) => imageToolResult(await easel.generateImages({ ...input, signal: extra?.signal }), 'Generated'));
+    }, async (input, extra) => imageToolResult(await easel.generateImages({ ...input, signal: extra?.signal }), 'Generated', input.model));
+    if (easel.getImageJob) server.registerTool('get_image_job', {
+      description: 'Retrieve an accepted queued image job using its original ID and model. Uses the proposed /v1/images/jobs/{id} contract; only use for an endpoint that returned a queued image receipt. Pending jobs are monitored automatically in Easel client. Never resubmit a queued image job.',
+      inputSchema: z.object({ jobId: z.string().regex(VIDEO_ID_PATTERN), model }).strict(),
+    }, async (input, extra) => {
+      const result = await easel.getImageJob!({ ...input, signal: extra?.signal });
+      const output = imageToolResult(result.images || { job: result.job }, 'Generated', input.model);
+      return { ...output, structuredContent: { ...output.structuredContent, job: { ...result.job, modelId: input.model } } };
+    });
 
     if (easel.editImages) server.registerTool('edit_image', {
       description: 'Edit 1-16 supplied reference images with a prompt using the selected Media model and its endpoint credentials. Accepts PNG/JPEG/WebP base64 bytes, at most 32 MiB combined. Optional PNG mask must match the first image and be smaller than 4 MiB; mask support depends on the provider. Easel supports reference edits and rejects masks. dall-e-2 requires one square PNG smaller than 4 MiB.',
       inputSchema: EditImageInput.extend({ model }).strict(),
-    }, async (input, extra) => imageToolResult(await easel.editImages!({ ...input, signal: extra?.signal }), 'Edited'));
+    }, async (input, extra) => imageToolResult(await easel.editImages!({ ...input, signal: extra?.signal }), 'Edited', input.model));
 
     if (easel.createImageVariations) server.registerTool('create_image_variation', {
       description: 'Create variations from one PNG/JPEG/WebP reference image (at most 32 MiB) using the selected Media model and its endpoint credentials. Provider support varies. Easel accepts portrait and JPEG references; dall-e-2 requires a square PNG smaller than 4 MiB and a 256x256, 512x512, or 1024x1024 output size.',
       inputSchema: ImageVariationInput.extend({ model }).strict(),
-    }, async (input, extra) => imageToolResult(await easel.createImageVariations!({ ...input, signal: extra?.signal }), 'Created variations of'));
+    }, async (input, extra) => imageToolResult(await easel.createImageVariations!({ ...input, signal: extra?.signal }), 'Created variations of', input.model));
   }
 
   const videoModels = modelsFor('video');
   if (!videoModels || videoModels.length) {
     const model = videoModels ? z.enum(videoModels.map((model) => model.id)) : GenerateVideoInput.shape.model;
     if (easel.generateVideo) server.registerTool('generate_video', {
-      description: 'Submit one video generation job using a video Media model. Optional inputReference is a PNG/JPEG/WebP upload; omit it for text-only video. Defaults: 4 seconds, 1280x720. Easel durations are 4, 8, or 12 seconds; other endpoint limits depend on the model. Returns a job ID, not video bytes. Keep that ID and use get_video with the same model; never resubmit merely because a job is pending. Stopping local work does not cancel an accepted server job.',
+      description: 'Submit one video generation job using a video Media model. Optional inputReference is a PNG/JPEG/WebP upload; omit it for text-only video. Defaults: 4 seconds, 1280x720. Easel durations are integers from 1 to 12 seconds; other endpoint limits depend on the model. Returns a job ID, not video bytes. The Easel client saves and monitors accepted jobs across restarts. Never resubmit a pending job. Stopping local work does not cancel an accepted server job.',
       inputSchema: GenerateVideoInput.extend({ model }).strict(),
     }, async (input, extra) => videoToolResult({ job: await easel.generateVideo!({ ...input, signal: extra?.signal }) }, input.model));
     if (easel.getVideo) server.registerTool('get_video', {
@@ -176,7 +187,8 @@ export function registerMediaTools(
   });
 }
 
-function imageToolResult(images: EaselImage[], verb: string) {
+function imageToolResult(images: ImageResult, verb: string, modelId?: string) {
+  if (!Array.isArray(images)) return videoToolResult({ job: images.job }, modelId);
   return {
     content: [
       { type: 'text' as const, text: `${verb} ${images.length} image${images.length === 1 ? '' : 's'}.` },

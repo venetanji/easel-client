@@ -260,6 +260,30 @@ const videoTools = [
   } },
 ];
 
+test('accepted media jobs are persisted before ending the turn with tools disabled', async () => {
+  let requests = 0;
+  let submissions = 0;
+  let tracked = 0;
+  const result = await runAgentTurn({
+    userMessage: 'Make a cat video',
+    llm: { async createCompletion({ tools, messages }) {
+      if (requests++ === 0) return response(toolCall('generate_video', { model: 'gpu:video', prompt: 'A cat' }));
+      assert.equal(tracked, 1);
+      assert.equal(tools.length, 0);
+      assert.match(messages.at(-1).content, /saved in the background monitor/);
+      return response({ role: 'assistant', content: 'Your cat video is generating in the background.' });
+    } },
+    mcp: { async listTools() { return videoTools; }, async callTool() {
+      submissions++;
+      return { content: [], structuredContent: { job: { id: 'video_cat', modelId: 'gpu:video', status: 'queued' } } };
+    } },
+    async registerMediaJob(input) { tracked++; assert.equal(input.mediaType, 'video'); return { id: 'a'.repeat(32), remoteId: input.job.id }; },
+  });
+  assert.equal(submissions, 1);
+  assert.equal(result.awaitingMediaJob.remoteId, 'video_cat');
+  assert.match(result.history.find((message) => message.role === 'tool').content, /monitoredJob/);
+});
+
 test('text-only video accepts omitted or null references without reading an asset', async () => {
   for (const optional of [{}, { inputReferenceAssetId: null, projectId: null }]) {
     let requests = 0;
