@@ -4,22 +4,15 @@ import {
   type ImageMimeType, type ImageUpload,
 } from './image-upload.js';
 
-export const DEFAULT_EASEL_BASE_URL = 'https://easel.ait4x.org';
-const MAX_IMAGES = 4;
-
-type Fetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
+import { headers, normalizeEaselBaseUrl, requestJson, requestSignal, type MediaOperation, type ProviderOptions } from './media-http.js';
+export { DEFAULT_EASEL_BASE_URL, normalizeEaselBaseUrl } from './media-http.js';
 
 export interface EaselImage {
   data: string;
   mimeType: ImageMimeType;
 }
 
-interface ProviderOptions {
-  baseUrl?: string;
-  apiKey?: string;
-  fetchImpl?: Fetch;
-  signal?: AbortSignal;
-}
+const MAX_IMAGES = 4;
 
 export interface GenerateImageInput {
   prompt: string;
@@ -42,87 +35,7 @@ export interface ImageVariationInput {
   signal?: AbortSignal;
 }
 
-export function normalizeEaselBaseUrl(value = ''): string {
-  const candidate = value.trim() || DEFAULT_EASEL_BASE_URL;
-  let url: URL;
-  try {
-    url = new URL(candidate);
-  } catch {
-    throw new Error('Easel URL must be a valid HTTP(S) URL.');
-  }
-  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Easel URL must use HTTP(S).');
-  if (url.username || url.password) throw new Error('Easel URL must not contain embedded credentials.');
-  if (url.search || url.hash) throw new Error('Easel URL must not contain a query or fragment.');
-
-  let pathname = url.pathname.replace(/\/+$/, '');
-  if (pathname.endsWith('/v1')) pathname = pathname.slice(0, -3);
-  return `${url.origin}${pathname}`;
-}
-
-function headers(apiKey = ''): Record<string, string> {
-  const result: Record<string, string> = { Accept: 'application/json' };
-  if (apiKey.trim()) result.Authorization = `Bearer ${apiKey.trim()}`;
-  return result;
-}
-
-function safeErrorMessage(value: unknown, apiKey: string, status: number): string {
-  const message = typeof value === 'string' && value.trim() ? value.trim() : `Easel request failed (${status}).`;
-  return [...new Set([apiKey, apiKey.trim()])].filter(Boolean)
-    .reduce((safe, secret) => safe.split(secret).join('[redacted]'), message).slice(0, 2_000);
-}
-
-function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-
-interface ImageOperation {
-  label: string;
-  path: string;
-  model?: string;
-}
-
-function operationError(operation: ImageOperation | undefined, status: number, detail: string): Error {
-  if (!operation) return new Error(detail);
-  const model = operation.model?.trim() ? ` for model ${JSON.stringify(operation.model.trim())}` : '';
-  if ([404, 405, 501].includes(status)) {
-    return new Error(`The configured endpoint does not support ${operation.label.toLowerCase()} at ${operation.path}${model} (HTTP ${status}). ${detail}`);
-  }
-  return new Error(`${operation.label} failed${model} (HTTP ${status}): ${detail}`);
-}
-
-async function requestJson(url: string, init: RequestInit, apiKey: string, fetchImpl: Fetch, operation?: ImageOperation): Promise<any> {
-  init.signal?.throwIfAborted();
-  let response: Response;
-  try {
-    response = await fetchImpl(url, init);
-  } catch {
-    init.signal?.throwIfAborted();
-    throw new Error(operation ? `Could not reach the configured media endpoint for ${operation.label.toLowerCase()}.` : 'Could not reach the configured Easel server.');
-  }
-
-  let payload: any;
-  try {
-    payload = await response.json();
-  } catch {
-    init.signal?.throwIfAborted();
-    if (!response.ok) throw operationError(operation, response.status, `Easel request failed (${response.status}).`);
-    throw new Error('Easel returned invalid JSON.');
-  }
-
-  init.signal?.throwIfAborted();
-  if (!response.ok) {
-    throw operationError(operation, response.status, safeErrorMessage(payload?.error?.message || payload?.message || payload?.detail, apiKey, response.status));
-  }
-  return payload;
-}
-
-export async function listModels(options: {
-  baseUrl?: string;
-  apiKey?: string;
-  fetchImpl?: Fetch;
-  signal?: AbortSignal;
-} = {}): Promise<string[]> {
+export async function listModels(options: ProviderOptions = {}): Promise<string[]> {
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const apiKey = options.apiKey || '';
   const payload = await requestJson(
@@ -225,7 +138,7 @@ function parseEditedImages(result: any): EaselImage[] {
 async function requestImageUpload(
   options: ProviderOptions & { model?: string; size?: string },
   form: FormData,
-  operation: ImageOperation,
+  operation: MediaOperation,
 ): Promise<EaselImage[]> {
   if (options.model?.trim()) form.append('model', options.model.trim());
   if (options.size) form.append('size', options.size);

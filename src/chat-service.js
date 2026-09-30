@@ -16,7 +16,7 @@ function defaultMcpLaunchOptions(settings, secrets, { isPackaged = false, resour
   const mediaConfiguration = mediaModels?.flatMap((model) => {
     const connection = settings.connections.find((entry) => entry.id === model.connectionId);
     if (!connection) return [];
-    return [{ id: `${connection.id}:${model.model}`, model: model.model, name: model.name, endpointName: connection.name, baseUrl: connection.baseUrl, apiKey: secrets.connectionKeys?.[connection.id] || '' }];
+    return [{ id: `${connection.id}:${model.model}`, model: model.model, name: model.name, endpointName: connection.name, baseUrl: connection.baseUrl, apiKey: secrets.connectionKeys?.[connection.id] || '', ...(model.mediaTypes?.length ? { mediaTypes: model.mediaTypes } : {}) }];
   });
   return {
     command: process.execPath,
@@ -245,6 +245,7 @@ function createChatService({
           llm,
           mcp,
           assetStore,
+          mediaAssetStore,
           canvasController: scopedCanvasController(turnChatId, turnOptions),
           presentCanvas,
           onEvent,
@@ -521,9 +522,17 @@ function createChatService({
         const references = [...(Array.isArray(result.assets) ? result.assets : []), ...(result.assetId ? [{ assetId: result.assetId }] : [])];
         for (const asset of references) {
           if (!/^[a-f0-9]{32}$/.test(asset.assetId || '') || images.has(asset.assetId)) continue;
-          const image = await assetStore.get(asset.assetId);
-          if (!/^image\//.test(image.mimeType)) continue;
-          images.set(asset.assetId, { ...image, assetId: image.id });
+          const saved = await mediaAssetStore.get(asset.assetId);
+          if (/^image\//.test(saved.mimeType)) {
+            images.set(asset.assetId, { ...saved, assetId: saved.id });
+          } else if (/^(video|audio)\//.test(saved.mimeType) && !seenMedia.has(asset.assetId)) {
+            seenMedia.add(asset.assetId);
+            const bytes = typeof saved.data === 'string' ? Buffer.byteLength(saved.data, 'base64') : 0;
+            if (!bytes) continue;
+            if (media.length >= 20 || mediaBytes + bytes > 64 * 1024 * 1024) { mediaTruncated = true; continue; }
+            mediaBytes += bytes;
+            media.push({ ...saved, assetId: saved.id, generated: Boolean(result.job) });
+          }
         }
       } catch {
         // A missing asset must not prevent reopening the conversation.

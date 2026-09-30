@@ -1,21 +1,34 @@
 ---
 name: easel-media
-description: Create images with the Easel Media MCP server and prepare offline canvas previews.
+description: Create images and video jobs with the Easel Media MCP server and prepare offline canvas previews.
 ---
 
 # Easel Media
 
-Use this skill when the user wants to create an image with Easel or preview an HTML composition with the Easel Media MCP tools.
+Use this skill when the user wants to create an image or video with Easel or preview an HTML composition with the Easel Media MCP tools.
 
 ## Available tools
 
 The current Media MCP package exposes:
 
-- `list_models` to inspect image models available from the configured Easel endpoint.
+- `list_models` to inspect enabled Media model IDs, endpoint names and discovered output types.
 - `generate_image` to create one or more images from a prompt. It accepts an optional model, `WIDTHxHEIGHT` size, and a count from 1 to 4.
+- `edit_image` and `create_image_variation` to transform saved reference images when supported by the endpoint.
+- `generate_video` to submit one video job with a video model, prompt, optional reference image, seconds and size.
+- `get_video` to retrieve a job and save completed MP4/WebM output.
 - `capture_canvas_screenshot` to render HTML and local image assets in an offline browser and return a PNG screenshot.
 
-Video generation is not available in this server. Do not describe an image as a video or imply that a video job was submitted.
+Audio generation tools are not available yet, even if discovery lists audio output models. Do not imply that a job was submitted or finished without its tool result.
+
+## Video workflow
+
+1. Select a video model using its exact `list_models` ID. In-app tools resolve credentials from that model's endpoint.
+2. Submit `generate_video` once. Optional `inputReferenceAssetId` identifies a saved PNG/JPEG/WebP image in the app; standalone MCP uses an `inputReference` upload object.
+3. Preserve `job.id` and `job.modelId`. Call `get_video` with that same `videoId` and `model`, optionally `waitSeconds:15` once.
+4. If pending, return the status to the user and retrieve it in a later turn. Never consume the tool budget polling, or resubmit merely because a job or download is unfinished.
+5. Completed video downloads are saved to Media and attached to the active project. They can be previewed, downloaded and shared with chat as sampled frames. Saved tool messages contain job/asset references, not binary media.
+
+Stop cancels local work, not an accepted remote job. Durations and reference support depend on the model; defaults are 4 seconds and 1280x720. Downloads are bounded to 32 MiB. See the package README for endpoint contracts and limits.
 
 ## Image workflow
 

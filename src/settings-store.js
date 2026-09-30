@@ -213,6 +213,7 @@ function createSettingsStore({ userDataPath, safeStorage, fileSystem = fs }) {
       for (const model of saved.models.filter((model) => model.connectionId === existing.id)) {
         delete model.capabilities;
         model.roles = [...(model.discoveryRoles || model.roles)];
+        model.mediaTypes = [...(model.discoveryMediaTypes || model.mediaTypes || [])];
       }
     }
     const index = saved.connections.findIndex((connection) => connection.id === entry.id);
@@ -243,15 +244,19 @@ function createSettingsStore({ userDataPath, safeStorage, fileSystem = fs }) {
       for (const model of result.models) {
         const existing = saved.models.find((entry) => entry.connectionId === connection.id && entry.model === model.id);
         const roles = model.suggestedRoles || [model.suggestedRole === 'media' ? 'media' : 'agent'];
+        const mediaTypes = (model.suggestedMediaTypes || []).filter((type) => ['image', 'video', 'audio'].includes(type));
         if (existing) {
           existing.name = model.name;
           existing.discoveryRoles = [...roles];
+          if (JSON.stringify(existing.discoveryMediaTypes || []) !== JSON.stringify(mediaTypes)) delete existing.capabilities;
+          existing.discoveryMediaTypes = [...mediaTypes];
+          existing.mediaTypes = [...new Set([...mediaTypes, ...(existing.capabilities?.mediaTypes || [])])];
           if (!existing.capabilities) existing.roles = [...roles];
           if (!existing.roles.length) existing.enabled = false;
           continue;
         }
         if (saved.models.length >= 4096) break;
-        saved.models.push({ connectionId: connection.id, model: model.id, name: model.name, enabled: connection.defaultRole === 'media' && roles.includes('media'), roles: [...roles], discoveryRoles: [...roles] });
+        saved.models.push({ connectionId: connection.id, model: model.id, name: model.name, enabled: connection.defaultRole === 'media' && roles.includes('media'), roles: [...roles], discoveryRoles: [...roles], ...(mediaTypes.length ? { mediaTypes, discoveryMediaTypes: [...mediaTypes] } : {}) });
       }
     }
     if (saved.litellmModel && !saved.models.some((entry) => entry.connectionId === saved.activeConnectionId && entry.model === saved.litellmModel && entry.enabled && entry.roles.includes('agent'))) {
@@ -282,6 +287,7 @@ function createSettingsStore({ userDataPath, safeStorage, fileSystem = fs }) {
     const entry = saved.models.find((entry) => entry.connectionId === connectionId && entry.model === model);
     if (!entry) throw new Error('Model was removed while its capabilities were being checked.');
     entry.capabilities = { ...capabilities, checkedAt: Date.now() };
+    if (Array.isArray(capabilities.mediaTypes)) entry.mediaTypes = capabilities.mediaTypes.filter((type) => ['image', 'video', 'audio'].includes(type));
     entry.roles = ['agent', 'media'].filter((role) => capabilities[role].status === 'supported'
       || (capabilities[role].status === 'unknown' && entry.roles.includes(role)));
     if (!entry.roles.length) entry.enabled = false;

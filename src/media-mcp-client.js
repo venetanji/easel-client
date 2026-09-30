@@ -7,6 +7,8 @@ const ALLOWED_MEDIA_TOOLS = Object.freeze(new Set([
   'generate_image',
   'edit_image',
   'create_image_variation',
+  'generate_video',
+  'get_video',
   'capture_canvas_screenshot',
 ]));
 

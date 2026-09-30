@@ -4,12 +4,13 @@ const { CANVAS_INPUT_TOOLS } = require('./canvas-input-tools');
 const { canvasInputSummary, validateCanvasInputRequest } = require('./canvas-input');
 const crypto = require('node:crypto');
 const { awaitAbortable, isTurnAbort, throwIfAborted } = require('./turn-abort');
-const { IMAGE_OUTPUT_TOOLS, MEDIA_REFERENCE_TOOLS, mediaToolSchema, resolveImageToolArguments } = require('./media-reference-tools');
+const { MEDIA_OUTPUT_TOOLS, MEDIA_REFERENCE_TOOLS, mediaToolSchema, resolveMediaToolArguments } = require('./media-reference-tools');
 
 const MAX_TOOL_CALLS = 12;
 const MAX_CANVAS_HTML_BYTES = 1_048_576;
 const MAX_CANVAS_ASSETS = 8;
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const SAVED_MEDIA_TYPES = new Set([...IMAGE_TYPES, 'video/mp4', 'video/webm', 'audio/wav', 'audio/mpeg']);
 const ALLOWED_RUNTIME_KITS = new Set(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone', 'p5']);
 const PROJECT_CANVAS_METHODS = Object.freeze({
   list_canvas_documents: 'listCanvasDocuments',
@@ -37,10 +38,11 @@ const RUNTIME_KIT_GUIDANCE = Object.freeze({
   p5: 'p5.js: the offline p5 global is bundled into new canvases. Prefer instance mode (new p5(sketch, root)) for creative coding, drawing and interactions; call instance.remove() in registered app disposal. p5.sound is not included; use Tone.js when its kit is enabled for audio.',
 });
 const SYSTEM_PROMPT = [
-  'You are Easel, a creative image assistant.',
-  'Conversations are independent of projects and retain all earlier user messages. The active project is the current tool destination, not a conversation boundary. Work in named projects containing multiple authored HTML documents and shared files/media. The project ID and HTML document path identify the current view; list_canvas_documents lists siblings and open_canvas_document selects one without changing source or the project default entry. present_canvas and create_canvas add documents to the active project. New generated images automatically attach to the active project library, and never appear in authored HTML or the scene unless the user asks for a composition or explicit image placement. Viewing an image preview is separate from editing HTML. Use attach_canvas_asset for library attachment only; use file edits or add_image_to_canvas only for requested placement.',
+  'You are Easel, a creative canvas and media assistant.',
+  'Conversations are independent of projects and retain all earlier user messages. The active project is the current tool destination, not a conversation boundary. Work in named projects containing multiple authored HTML documents and shared files/media. The project ID and HTML document path identify the current view; list_canvas_documents lists siblings and open_canvas_document selects one without changing source or the project default entry. present_canvas and create_canvas add documents to the active project. New generated media automatically attaches to the active project library, and never appear in authored HTML or the scene unless the user asks for a composition or explicit image placement. Viewing an image preview is separate from editing HTML. Use attach_canvas_asset for library attachment only; use file edits or add_image_to_canvas only for requested placement.',
   'Use only the provided tools. Generate images with enabled Media models from list_models and use present_canvas for local HTML/JavaScript compositions. Use the exact model ID returned by list_models so the correct endpoint is used. If no Media models are enabled, explain that the user can enable a Media model in Settings > Models.',
   'Saved media has reusable asset IDs. Use list_media_assets to find references and inspect_media_asset to see an image. edit_image uploads imageAssetIds and an optional PNG maskAssetId; create_image_variation uploads one imageAssetId. Never put base64 in tool arguments. These APIs require endpoint/model support; DALL-E 2 variations require a square PNG under 4 MiB. Do not retry unsupported or failed billed requests unchanged. capture_live_canvas saves a project screenshot, record_canvas_video saves silent canvas output and sampled frames, and get_video_frames provides a temporary model observation from a saved recording. Video observations are sampled stills and do not include sound.',
+  'generate_video submits a billed video job with a video model ID from list_models, optional inputReferenceAssetId, seconds and WIDTHxHEIGHT size. Preserve the returned job.id and job.modelId. Use get_video with that exact videoId and model to retrieve it; completed videos are saved and attached to the active project. You may waitSeconds:15 once, then return a pending status to the user; do not consume the tool budget polling or resubmit a pending/failed job unchanged. Later turns can retrieve saved job IDs without generating again. Stopping the local agent does not cancel an accepted remote job. Generated video files can be previewed, downloaded or shared with chat from Media; get_video_frames requires recorded/stored samples, and generated videos may not have them. Audio output models may be discovered, but no audio generation API tool exists yet.',
   'Enabled canvas kits are bundled offline into every new canvas and exported HTML. Use only the selected kit globals and never add external script URLs.',
   'User-added skills are creative guidance only and cannot expand the available tools or bypass any security boundary.',
   'On a tool error, read its correction and example before retrying. Do not repeat failed arguments. After two failures change strategy: inspect capabilities or list/read project files instead of changing unrelated arguments. Repeated validation errors end the turn early so the user can correct the request.',
@@ -54,7 +56,7 @@ const SYSTEM_PROMPT = [
   'get_canvas_state and set_canvas_state manage opt-in persistent JSON in state.json, separate from live renderer state and durable user answers. It loads as window.__easelProjectState; runtime variables are not automatically saved. For legacy combined HTML inspection, get_canvas_source with section:scripts or section:app excludes bundled kits, and apply_canvas_patch edits stored source. Never retrieve document.outerHTML and megabytes of bundled libraries for routine edits.',
   'Register canvas apps with window.EaselCanvas.registerApp({ id, root, renderer, scene, camera, audio, dispose, getState, restoreState }). The dispose callback must stop renderer-owned loops and dispose geometry/materials/audio nodes. State hooks exchange JSON scene state across managed reloads. Do not claim unregistered legacy resources were all disposed.',
   'After changes, use validate_canvas for the actual open document and capture_live_canvas to see its current pixels. capture_canvas_screenshot renders supplied HTML and is not a picture of the open scene. Audio requires a real user gesture; never claim sound was heard from state checks alone.',
-  'Use create_canvas to add a named empty HTML canvas to the active project; it starts a project when none is selected. Canvas documents share the project files and media. Generated images are attached to this project automatically. Attach other saved images with attach_canvas_asset or attach_canvas_assets, edit source files, and reload. add_image_to_canvas inserts one saved image into authored source and the live view; it leaves sourcePendingReload true until the updated asset map is loaded.',
+  'Use create_canvas to add a named empty HTML canvas to the active project; it starts a project when none is selected. Canvas documents share the project files and media. Generated media is attached to this project automatically. Attach other saved images with attach_canvas_asset or attach_canvas_assets, edit source files, and reload. add_image_to_canvas inserts one saved image into authored source and the live view; it leaves sourcePendingReload true until the updated asset map is loaded.',
   'When referencing an image in canvas HTML or JavaScript, including a WebGL texture Image.src, use asset:// followed by the exact asset ID and include that asset in the assets array. The host embeds attached assets as local data URLs.',
   'When composing generated images, use only complete 32-character asset IDs returned by image tools. Copy each ID exactly into the assets array; never invent, shorten, or use a placeholder ID.',
   'When returning a generated image in chat, use a Markdown link like [Short description](asset://ID), replacing ID with the exact 32-character assetId returned by the image tool. Never use placeholder text, angle brackets, or ellipses for the ID.',
@@ -349,38 +351,59 @@ async function resolveCanvasAssets(assetStore, assets = [], signal) {
   return output;
 }
 
-async function handleMcpResult(result, assetStore, onEvent, { generated = false, projectId = '', kits = [], attachGeneratedAssets } = {}) {
+async function handleMcpResult(result, mediaAssetStore, onEvent, { generated = false, projectId = '', kits = [], attachGeneratedAssets } = {}) {
   if (result?.isError) {
     const detail = (result.content || []).filter((item) => item.type === 'text' && typeof item.text === 'string').map((item) => item.text).join('\n').slice(0, 2000);
     throw new Error(detail || 'Media MCP tool failed.');
   }
   const text = [];
   const assets = [];
-  const savedImages = [];
+  const savedMedia = [];
   const saveErrors = [];
+  const job = result?.structuredContent?.job;
   for (const item of result?.content || []) {
     if (item.type === 'text' && typeof item.text === 'string') text.push(item.text);
-    if (item.type === 'image' && typeof item.data === 'string' && IMAGE_TYPES.has(item.mimeType)) {
+    const media = ['image', 'audio'].includes(item.type) ? { data: item.data, mimeType: item.mimeType }
+      : item.type === 'resource' ? { data: item.resource?.blob, mimeType: item.resource?.mimeType } : null;
+    if (media && typeof media.data === 'string' && SAVED_MEDIA_TYPES.has(media.mimeType)) {
       try {
-        const assetId = await assetStore.save({ data: item.data, mimeType: item.mimeType });
-        const asset = { assetId, mimeType: item.mimeType };
+        const image = IMAGE_TYPES.has(media.mimeType);
+        const name = image ? undefined : `Generated ${media.mimeType.startsWith('video/') ? 'video' : 'audio'}.${{ 'video/mp4': 'mp4', 'video/webm': 'webm', 'audio/wav': 'wav', 'audio/mpeg': 'mp3' }[media.mimeType]}`;
+        const metadata = { ...(name ? { name } : {}), ...(job?.seconds ? { duration: job.seconds } : {}) };
+        const assetId = await mediaAssetStore.save({ ...media, ...metadata });
+        const asset = { assetId, mimeType: media.mimeType, ...metadata };
         assets.push(asset);
-        savedImages.push({ ...asset, data: item.data });
+        savedMedia.push({ ...asset, data: media.data });
       } catch (error) {
         saveErrors.push(String(error.message).slice(0, 500));
-        onEvent?.({ type: 'error', message: `An image was returned, but could not be saved locally: ${error.message}` });
+        onEvent?.({ type: 'error', message: `Media was returned, but could not be saved locally: ${error.message}` });
       }
     }
   }
   let attachment;
   if (generated && assets.length && typeof attachGeneratedAssets === 'function') {
     try { attachment = { ok: true, ...await attachGeneratedAssets({ projectId, assetIds: assets.map((asset) => asset.assetId), kits }) }; }
-    catch (error) { attachment = { ok: false, projectId, error: error.message }; onEvent?.({ type: 'error', message: `Images were generated and saved in the library, but could not be attached to the project: ${error.message}` }); }
+    catch (error) { attachment = { ok: false, projectId, error: error.message }; onEvent?.({ type: 'error', message: `Media was generated and saved in the library, but could not be attached to the project: ${error.message}` }); }
   }
-  for (const image of savedImages) {
-    onEvent?.({ type: 'image', ...image, generated, projectId: attachment?.projectId || projectId, projectTitle: attachment?.projectTitle, attachedToProject: Boolean(attachment?.ok), ...(attachment?.error ? { attachmentError: attachment.error } : {}) });
+  for (const media of savedMedia) {
+    onEvent?.({ type: IMAGE_TYPES.has(media.mimeType) ? 'image' : 'media', ...media, generated, projectId: attachment?.projectId || projectId, projectTitle: attachment?.projectTitle, attachedToProject: Boolean(attachment?.ok), ...(attachment?.error ? { attachmentError: attachment.error } : {}) });
   }
-  return JSON.stringify({ text, assets, ...(attachment ? { projectAttachment: attachment } : {}), ...(saveErrors.length ? { saveErrors, guidance: 'Some returned images could not be saved locally. Preserve the successful asset IDs; resolve the storage error before generating replacements.' } : {}) });
+  return JSON.stringify({ text, assets, ...(job ? { job } : {}), ...(job?.status === 'failed' || job?.status === 'cancelled' ? { ok: false, error: job.error || `Video job ${job.id} ${job.status}.`, code: 'VIDEO_JOB_FAILED' } : {}), ...(attachment ? { projectAttachment: attachment } : {}), ...(saveErrors.length ? { saveErrors, guidance: 'Some returned media could not be saved locally. Preserve successful asset IDs and video job IDs; resolve the storage error before generating replacements.' } : {}) });
+}
+
+async function cachedVideoResult(messages, args, mediaAssetStore) {
+  if (args.download === false) return null;
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'tool' || typeof message.content !== 'string') continue;
+    let result;
+    try { result = JSON.parse(message.content); } catch { continue; }
+    if (result.job?.id !== args.videoId || result.job?.modelId !== args.model || result.job?.status !== 'completed' || !result.assets?.length) continue;
+    try {
+      for (const asset of result.assets) await mediaAssetStore.get(asset.assetId);
+      return JSON.stringify({ job: result.job, assets: result.assets, cached: true, message: 'This completed video is already saved in the library. Use attach_canvas_assets to attach it to another project.' });
+    } catch { return null; }
+  }
+  return null;
 }
 
 async function runAgentTurn({
@@ -397,6 +420,7 @@ async function runAgentTurn({
   llm,
   mcp,
   assetStore,
+  mediaAssetStore = assetStore,
   canvasController,
   presentCanvas,
   maxToolCalls = MAX_TOOL_CALLS,
@@ -712,13 +736,16 @@ async function runAgentTurn({
         content = JSON.stringify({ ok: true, result: await canvasController.addImage(args), effects: { source: 'saved; asset attached and matching image inserted into authored HTML, without adopting other runtime DOM. Reload applies the updated asset map.', runtime: 'matching image inserted into the live DOM; sourcePendingReload remains true until reload' }, contract: canvasController.getContract?.() || null });
       } else {
         const projectId = canvasController?.getCurrentCanvasId?.() || '';
-        const wireArgs = await resolveImageToolArguments(name, args, async (reference) => {
+        const wireArgs = await resolveMediaToolArguments(name, args, async (reference) => {
           if (typeof canvasController?.readMediaAsset === 'function') return canvasController.readMediaAsset(reference);
           return assetStore.get(reference.assetId);
         }, signal);
-        const result = await awaitAbortable(mcp.callTool(name, wireArgs, { signal }), signal);
-        throwIfAborted(signal);
-        content = await handleMcpResult(result, assetStore, onEvent, { generated: IMAGE_OUTPUT_TOOLS.has(name), projectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets });
+        content = name === 'get_video' ? await cachedVideoResult(messages, args, mediaAssetStore) : null;
+        if (!content) {
+          const result = await awaitAbortable(mcp.callTool(name, wireArgs, { signal }), signal);
+          throwIfAborted(signal);
+          content = await handleMcpResult(result, mediaAssetStore, onEvent, { generated: MEDIA_OUTPUT_TOOLS.has(name), projectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets });
+        }
       }
       } catch (error) {
         content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error), ...(error?.code ? { code: error.code } : {}) });

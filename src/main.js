@@ -77,6 +77,7 @@ const CANVAS_KIT_BUNDLES = loadCanvasKitBundles(path.join(app.getAppPath(), 'can
 const CANVAS_INPUTS = createCanvasInputStore({ userDataPath: app.getPath('userData') });
 const CAPTURE_MEDIA = createCanvasMediaStore({ userDataPath: app.getPath('userData') });
 const MEDIA_ASSETS = {
+  save: (media) => media.mimeType?.startsWith('image/') ? ASSETS.save(media) : CAPTURE_MEDIA.save(media),
   get: async (id) => { try { return await ASSETS.get(id); } catch { return CAPTURE_MEDIA.get(id); } },
   remove: async (id) => {
     let image = false;
@@ -276,7 +277,7 @@ const CHAT = createChatService({
       return result;
     }),
     attachGeneratedAssets: ({ projectId, assetIds, kits }) => withCanvas(async (controller) => {
-      if (projectId && controller.getCurrentCanvasId() !== projectId) throw new Error('The active project changed while generating media. The images remain in the library.');
+      if (projectId && controller.getCurrentCanvasId() !== projectId) throw new Error('The active project changed while generating media. The media remains in the library.');
       return attachProjectAssets(controller, projectId, assetIds, { kits });
     }),
     requestCanvasInput: (args, context) => withCanvas(async (controller) => {
@@ -747,6 +748,8 @@ async function createWindow() {
       sandbox: true,
     },
   });
+
+  if (process.platform !== 'darwin') mainWindow.removeMenu();
 
   canvasView = await createCanvasView({
     WebContentsView,

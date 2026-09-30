@@ -12,16 +12,22 @@ function normalizeModelCatalog(response) {
     if (!id || id.length > 256 || seen.has(id)) return [];
     seen.add(id);
     const name = typeof entry.name === 'string' && entry.name.trim() ? entry.name.trim() : id;
-    const outputModalities = entry.architecture?.output_modalities;
+    const outputModalities = entry.architecture?.output_modalities || entry.output_modalities;
     if (Array.isArray(outputModalities)) {
-      return [{ id, name, suggestedRoles: ['agent', 'media'].filter((role) => outputModalities.includes(role === 'agent' ? 'text' : 'image')) }];
+      const suggestedMediaTypes = ['image', 'video', 'audio'].filter((type) => outputModalities.includes(type));
+      return [{ id, name, suggestedRoles: ['agent', 'media'].filter((role) => role === 'agent' ? outputModalities.includes('text') : suggestedMediaTypes.length > 0), ...(suggestedMediaTypes.length ? { suggestedMediaTypes } : {}) }];
     }
     const mode = entry.mode || entry.model_info?.mode || '';
-    const otherMedia = ['video_generation', 'audio_generation', 'embedding', 'rerank', 'transcription'].includes(mode)
-      || /(?:^|[/_-])(?:ltx|sora|veo|whisper|embedding)(?:[/_.-]|$)/i.test(id);
-    const media = ['image_generation', 'image'].includes(mode)
-      || (!mode && /(?:image|dall-e|flux|sdxl|stable-diffusion)/i.test(id));
-    return [{ id, name, suggestedRoles: otherMedia ? [] : [media ? 'media' : 'agent'] }];
+    const nonGenerative = ['embedding', 'rerank', 'transcription'].includes(mode)
+      || (!mode && /(?:^|[/_-])(?:whisper|embedding)(?:[/_.-]|$)/i.test(id));
+    if (nonGenerative) return [{ id, name, suggestedRoles: [] }];
+    const mediaType = ['video_generation', 'video'].includes(mode) ? 'video'
+      : ['audio_generation', 'audio', 'speech', 'tts'].includes(mode) ? 'audio'
+      : ['image_generation', 'image'].includes(mode) ? 'image'
+      : !mode && /(?:^|[/_-])(?:ltx|sora|veo|wan|hunyuan-video)(?:[/_.-]|$)/i.test(id) ? 'video'
+      : !mode && /(?:^|[/_-])(?:tts|kokoro|musicgen|suno|lyria)(?:[/_.-]|$)/i.test(id) ? 'audio'
+      : !mode && /(?:image|dall-e|flux|sdxl|stable-diffusion)/i.test(id) ? 'image' : '';
+    return [{ id, name, suggestedRoles: [mediaType ? 'media' : 'agent'], ...(mediaType ? { suggestedMediaTypes: [mediaType] } : {}) }];
   });
 }
 
@@ -82,8 +88,12 @@ function createLiteLLMModelService({
 
   return {
     async checkCapabilities(selection) {
-      const connection = settingsStore.loadPublic().connections.find((entry) => entry.id === selection.connectionId);
+      const settings = settingsStore.loadPublic();
+      const connection = settings.connections.find((entry) => entry.id === selection.connectionId);
       if (!connection) throw new Error('Endpoint was not found.');
+      const entry = settings.models?.find((entry) => entry.connectionId === selection.connectionId && entry.model === selection.model);
+      const mediaTypes = entry?.discoveryMediaTypes || entry?.mediaTypes || [];
+      const nonImageMedia = mediaTypes.length && !mediaTypes.includes('image');
       const connectionRevision = settingsStore.getConnectionRevision?.(connection.id);
       const { client, apiKey } = createClient(connection, 180_000);
       async function probe(operation) {
@@ -99,7 +109,8 @@ function createLiteLLMModelService({
         }
       }
       const [agent, media] = await Promise.all([
-        probe(async () => {
+        nonImageMedia && !entry?.discoveryRoles?.includes('agent')
+          ? Promise.resolve({ status: 'unsupported', message: 'Discovery categorizes this model as media output, without text/agent support.' }) : probe(async () => {
           const response = await client.responses.create({
             model: selection.model,
             input: 'Call confirm_connection with no arguments to confirm tool calling works.',
@@ -109,7 +120,7 @@ function createLiteLLMModelService({
           const hasToolCall = response.output?.some((item) => item.type === 'function_call' && item.name === 'confirm_connection');
           return { status: hasToolCall ? 'supported' : 'unknown', message: hasToolCall ? 'Responses API and tool calling confirmed.' : 'The endpoint did not return the requested tool call. Try checking again.' };
         }),
-        probe(async () => {
+        nonImageMedia ? Promise.resolve({ status: 'unknown', message: `${mediaTypes.join(' and ')} generation is advertised by discovery. Image generation was not probed. Use an actual generation to confirm endpoint support; no video/audio job is billed by this check.` }) : probe(async () => {
           const response = await client.images.generate({ model: selection.model, prompt: 'A small blue dot on a plain white background.', size: '1024x1024', n: 1, response_format: 'b64_json' });
           const hasImage = response.data?.some((item) => {
             if (typeof item.b64_json === 'string' && item.b64_json && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(item.b64_json)) return true;
@@ -121,7 +132,7 @@ function createLiteLLMModelService({
       if (connectionRevision !== settingsStore.getConnectionRevision?.(connection.id)) {
         throw new Error('Endpoint credentials changed during the capability check. Check this model again with the new credentials.');
       }
-      return settingsStore.recordCapabilities(selection, { agent, media });
+      return settingsStore.recordCapabilities(selection, { agent, media, ...(media.status === 'supported' ? { mediaTypes: [...new Set([...mediaTypes, 'image'])] } : mediaTypes.length ? { mediaTypes } : {}) });
     },
     async getCatalog() {
       const { connections = [] } = settingsStore.loadPublic();

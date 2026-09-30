@@ -149,7 +149,8 @@
       .markdown th { color: var(--green-deep); background: #e8ece3; }
       .markdown hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
       .message-asset-preview { width: min(100%, 320px); margin: 0; overflow: hidden; border: 1px solid #d8ded5; border-radius: 9px; background: white; }
-      .message-asset-preview img { display: block; width: 100%; height: 240px; object-fit: contain; background: var(--paper-deep); }
+      .message-asset-preview img, .message-asset-preview video { display: block; width: 100%; height: 240px; object-fit: contain; background: var(--paper-deep); }
+      .message-asset-preview audio { display: block; width: 100%; height: 42px; }
       .message-asset-preview figcaption { border-top: 1px solid #e4e8e1; padding: 7px 9px; color: #405249; font-size: 12px; line-height: 1.35; }
       .message-asset-add { align-self: flex-start; min-height: 28px; border: 1px solid #d6ded6; border-radius: 6px; padding: 4px 9px; color: var(--green); background: #f4f5ef; font-size: 11px; font-weight: 600; }
       .message-asset-add:hover:not(:disabled) { border-color: #a8bbab; background: var(--green-wash); }
@@ -536,7 +537,7 @@
                 </div>
                 <button id="attach-media" class="button quiet small" type="button" aria-label="Attach image, audio, or video" title="Attach image, audio, or video"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 8.5 4.1-4.1a2.1 2.1 0 0 1 3 3l-5.4 5.4a3.2 3.2 0 0 1-4.5-4.5l5.4-5.4"/></svg>Attach</button>
                 <input id="media-files" class="sr-only" type="file" multiple accept="image/png,image/jpeg,image/webp,audio/mpeg,audio/wav,video/mp4,video/webm" />
-                <select id="prompt-template" aria-label="Insert a prompt template"><option value="">Templates</option><option value="image">Generate an image</option><option value="canvas">Interactive canvas</option><option value="audio">Audio sketch</option><option value="video">Video storyboard</option></select>
+                <select id="prompt-template" aria-label="Insert a prompt template"><option value="">Templates</option><option value="image">Generate an image</option><option value="video">Generate a video</option><option value="canvas">Interactive canvas</option><option value="audio">Audio sketch</option><option value="storyboard">Video storyboard</option></select>
                 <button id="composer-skills" class="button quiet small" type="button" aria-haspopup="dialog">Use skills</button>
               </div>
               <div id="attachment-strip" class="attachment-strip" aria-label="Pending attachments" hidden></div>

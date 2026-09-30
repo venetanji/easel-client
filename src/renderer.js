@@ -283,23 +283,31 @@ function renderAssistantAssetLinks(document, content, text, assetPreviews, pendi
   return { resolvedAssetIds, hasText: content.textContent.trim().length > 0 };
 }
 
-function appendImagePreviewMessage(document, messagesElement, event, onAddToCanvas) {
+function appendMediaPreviewMessage(document, messagesElement, event, onAddToCanvas) {
   const shouldFollow = messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight < 56;
   const message = document.createElement('article');
   message.className = 'message assistant message-media';
   message.dataset.assetId = event.assetId;
   const figure = document.createElement('figure');
   figure.className = 'message-asset-preview';
-  const image = document.createElement('img');
+  const kind = /^(video|audio)\//.exec(event.mimeType || '')?.[1] || 'image';
+  const image = document.createElement(kind === 'image' ? 'img' : kind);
   image.src = `data:${event.mimeType};base64,${event.data}`;
-  image.alt = 'Generated image';
+  const label = event.name || `Generated ${kind}`;
+  image.alt = label;
+  image.setAttribute('aria-label', label);
+  if (kind !== 'image') {
+    image.controls = true;
+    image.preload = 'metadata';
+    if (kind === 'video') image.playsInline = true;
+  }
   const caption = document.createElement('figcaption');
-  caption.textContent = 'Generated image';
+  caption.textContent = label;
   figure.append(image, caption);
   let add;
   if (onAddToCanvas) {
     add = createButton(document, 'Add to project', 'message-asset-add', () => onAddToCanvas(event.assetId, add));
-    add.setAttribute('aria-label', 'Add image to project');
+    add.setAttribute('aria-label', `Add ${kind} to project`);
   }
   message.append(figure);
   if (add) message.append(add);
@@ -441,7 +449,9 @@ function createWelcomeMessage(document, onPrompt) {
 function toolActivityLabel(name) {
   const labels = {
     generate_image: 'Creating an image with Easel…',
-    list_models: 'Checking available image models…',
+    generate_video: 'Starting video generation…',
+    get_video: 'Checking your video job…',
+    list_models: 'Checking available media models…',
     capture_canvas_screenshot: 'Capturing the canvas…',
     present_canvas: 'Opening your composition…',
     create_canvas: 'Creating your canvas…',
@@ -586,12 +596,12 @@ function renderAgentEvent({ document, messagesElement, imagesElement, event, sta
     setStatus(statusElement, '');
     return;
   }
-  if (event.type === 'image') {
+  if (event.type === 'image' || (event.type === 'media' && event.generated)) {
     if (typeof event.data !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(event.data)) return;
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(event.mimeType)) return;
+    if (!['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm', 'audio/wav', 'audio/mpeg'].includes(event.mimeType)) return;
     if (messagesElement && assetPreviews instanceof Map && /^[a-f0-9]{32}$/i.test(event.assetId || '')) {
       const assetId = event.assetId.toLowerCase();
-      const preview = appendImagePreviewMessage(document, messagesElement, event, onAddToCanvas);
+      const preview = appendMediaPreviewMessage(document, messagesElement, event, onAddToCanvas);
       const caption = pendingAssetCaptions?.get(assetId);
       if (caption) {
         preview.image.alt = caption;
@@ -1618,14 +1628,15 @@ function wireRenderer({ document, client }) {
     renderPendingAttachments();
     const images = new Map((chat.images || []).map((image) => [image.assetId, image]));
     const media = new Map((chat.media || []).map((asset) => [`${asset.requestId}:${asset.assetId}`, asset]));
+    const generatedMedia = new Map((chat.media || []).filter((asset) => !asset.requestId).map((asset) => [asset.assetId, asset]));
     for (const message of chat.history || []) {
       if (message.role === 'tool') {
         try {
           const result = JSON.parse(message.content);
           for (const asset of result.assets || []) {
-            const image = images.get(asset.assetId);
+            const image = images.get(asset.assetId) || generatedMedia.get(asset.assetId);
             if (!image || assetPreviews.has(asset.assetId)) continue;
-            const preview = appendImagePreviewMessage(document, messagesElement, image);
+            const preview = appendMediaPreviewMessage(document, messagesElement, image);
             assetPreviews.set(asset.assetId, preview);
           }
         } catch {}
@@ -1876,7 +1887,8 @@ function wireRenderer({ document, client }) {
     image: 'Generate an image using the image generation tool. Use a square format unless I specify another shape. Brief: ',
     canvas: 'Create an interactive canvas with the selected offline kits. Include clear controls and make it work without network access. Idea: ',
     audio: 'Create an audio sketch on a canvas using Tone.js. Include a Play button that calls Tone.start() from the user gesture, plus Stop and volume controls. Idea: ',
-    video: 'Plan a video storyboard with scenes, timing, transitions, and an audio direction. Present it as a canvas; this is a storyboard, not a generated video. Brief: ',
+    video: 'Generate a short video with an available video Media model. Submit one job and keep its ID so we can retrieve it when ready. Brief: ',
+    storyboard: 'Plan a video storyboard with scenes, timing, transitions, and an audio direction. Present it as a canvas; this is a storyboard, not a generated video. Brief: ',
   };
   templateSelect.addEventListener('change', () => {
     const template = promptTemplates[templateSelect.value];
@@ -2166,7 +2178,7 @@ function wireRenderer({ document, client }) {
       workspace.assetsChanged(event).catch((error) => setStatus(statusElement, error.message, true));
       return;
     }
-    if (event.type === 'media') {
+    if (event.type === 'media' && !event.generated) {
       refreshAssets();
       setStatus(statusElement, `${event.name || 'Media capture'} saved to the library.`);
       return;
@@ -2179,7 +2191,7 @@ function wireRenderer({ document, client }) {
       return;
     }
     if (event.type === 'assistant' && typeof event.text === 'string' && event.text) receivedMessage();
-    if (event.type === 'image' && event.assetId) receivedMessage();
+    if (['image', 'media'].includes(event.type) && event.assetId) receivedMessage();
     renderAgentEvent({
       document,
       messagesElement,
@@ -2193,7 +2205,7 @@ function wireRenderer({ document, client }) {
       onLibraryRefresh: refreshAssets,
       onCanvasChange: (canvas) => workspace.changed(canvas).catch((error) => setStatus(statusElement, error.message, true)),
       onCapabilities: (tools) => {
-        if (!tools.includes('generate_image')) setStatus(statusElement, 'Enable a Media model in Settings > Models to generate images.');
+        if (!tools.includes('generate_image') && !tools.includes('generate_video')) setStatus(statusElement, 'Enable an image or video Media model in Settings > Models to generate media.');
       },
     });
     if (canvasResumeBusy) updateSendState();

@@ -6,12 +6,15 @@ import {
   type EaselImage, type EditImageInput, type GenerateImageInput, type ImageVariationInput,
 } from './easel.js';
 import { MAX_IMAGE_BASE64_CHARS, MAX_IMAGE_INPUTS } from './image-upload.js';
+import { generateVideo, getVideo, VIDEO_ID_PATTERN, type GenerateVideoInput, type GetVideoInput, type VideoJob, type VideoResult } from './video.js';
 
 interface EaselClient {
   listModels: (input?: { signal?: AbortSignal }) => Promise<string[]>;
   generateImages: (input: GenerateImageInput) => Promise<EaselImage[]>;
   editImages?: (input: EditImageInput) => Promise<EaselImage[]>;
   createImageVariations?: (input: ImageVariationInput) => Promise<EaselImage[]>;
+  generateVideo?: (input: GenerateVideoInput) => Promise<VideoJob>;
+  getVideo?: (input: GetVideoInput) => Promise<VideoResult>;
 }
 
 interface CanvasRenderer {
@@ -44,6 +47,19 @@ const EditImageInput = GenerateImageInput.extend({
 const ImageVariationInput = GenerateImageInput.omit({ prompt: true }).extend({
   image: ImageUploadInput,
 }).strict();
+const GenerateVideoInput = z.object({
+  prompt: GenerateImageInput.shape.prompt,
+  model: z.string().trim().min(1).max(320),
+  seconds: z.number().int().min(1).max(60).optional(),
+  size: GenerateImageInput.shape.size,
+  inputReference: ImageUploadInput.optional(),
+}).strict();
+const GetVideoInput = z.object({
+  videoId: z.string().regex(VIDEO_ID_PATTERN),
+  model: z.string().trim().min(1).max(320).optional(),
+  waitSeconds: z.number().int().min(0).max(15).optional(),
+  download: z.boolean().optional(),
+}).strict();
 const ConfiguredMediaModels = z.array(z.object({
   id: z.string().min(1).max(320),
   model: z.string().min(1).max(256),
@@ -51,6 +67,7 @@ const ConfiguredMediaModels = z.array(z.object({
   endpointName: z.string(),
   baseUrl: z.string().url().refine((value) => ['http:', 'https:'].includes(new URL(value).protocol)),
   apiKey: z.string().max(4096),
+  mediaTypes: z.array(z.enum(['image', 'video', 'audio'])).max(3).optional(),
 }).strict()).max(4096);
 const CaptureCanvasInput = z.object({
   html: z.string().min(1).max(1_048_576),
@@ -71,10 +88,11 @@ export function registerMediaTools(
 ): void {
   const configured = !dependencies.easel && process.env.EASEL_MEDIA_MODELS !== undefined
     ? ConfiguredMediaModels.parse(JSON.parse(process.env.EASEL_MEDIA_MODELS)) : null;
-  const providerFor = (id?: string) => {
+  const providerFor = (id?: string, mediaType: 'image' | 'video' = 'image') => {
     if (configured) {
       const selected = configured.find((model) => model.id === id);
       if (!selected) throw new Error('Choose an enabled Media model returned by list_models.');
+      if (selected.mediaTypes?.length && !selected.mediaTypes.includes(mediaType)) throw new Error(`Choose a ${mediaType} generation model returned by list_models.`);
       return { model: selected.model, baseUrl: selected.baseUrl, apiKey: selected.apiKey };
     }
     return { model: id, baseUrl: process.env.EASEL_BASE_URL, apiKey: process.env.EASEL_API_KEY };
@@ -88,25 +106,32 @@ export function registerMediaTools(
     generateImages: (input) => generateImages({ ...input, ...providerFor(input.model) }),
     editImages: (input) => editImages({ ...input, ...providerFor(input.model) }),
     createImageVariations: (input) => createImageVariations({ ...input, ...providerFor(input.model) }),
+    generateVideo: (input) => {
+      const provider = providerFor(input.model, 'video');
+      return generateVideo({ ...input, ...provider, model: provider.model! });
+    },
+    getVideo: (input) => getVideo({ ...input, ...providerFor(input.model, 'video') }),
   };
   const canvas = dependencies.canvas || {
     capture: (input: Parameters<CanvasRenderer['capture']>[0]) => captureCanvasScreenshot(input),
   };
 
   server.registerTool('list_models', {
-    description: 'List enabled Media models and their exact tool IDs and endpoint names. Image generation, edits, variations, and masks depend on provider support.',
+    description: 'List enabled Media models, exact tool IDs, endpoint names and discovered output types. Image/video generation and reference support depend on the endpoint. Audio generation tools are not yet implemented.',
     inputSchema: ListModelsInput,
   }, async (_input, extra) => {
     const models = await easel.listModels({ signal: extra?.signal });
-    const available = configured ? configured.map(({ id, model, name, endpointName }) => ({ id, model, name, endpointName })) : models;
+    const available = configured ? configured.map(({ id, model, name, endpointName, mediaTypes }) => ({ id, model, name, endpointName, mediaTypes: mediaTypes?.length ? mediaTypes : ['unknown'] })) : models;
     return {
       content: [{ type: 'text', text: `Available Media models: ${JSON.stringify(available)}` }],
       structuredContent: { models: available },
     };
   });
 
-  if (!configured || configured.length) {
-    const model = configured ? z.enum(configured.map((model) => model.id)) : GenerateImageInput.shape.model;
+  const modelsFor = (type: 'image' | 'video') => configured?.filter((model) => !model.mediaTypes?.length || model.mediaTypes.includes(type));
+  const imageModels = modelsFor('image');
+  if (!imageModels || imageModels.length) {
+    const model = imageModels ? z.enum(imageModels.map((model) => model.id)) : GenerateImageInput.shape.model;
     server.registerTool('generate_image', {
       description: 'Generate images with an enabled Media model. Use the exact model ID returned by list_models; its endpoint credentials are applied automatically.',
       inputSchema: GenerateImageInput.extend({ model }).strict(),
@@ -121,6 +146,19 @@ export function registerMediaTools(
       description: 'Create variations from one PNG/JPEG/WebP reference image (at most 32 MiB) using the selected Media model and its endpoint credentials. Provider support varies. Easel accepts portrait and JPEG references; dall-e-2 requires a square PNG smaller than 4 MiB and a 256x256, 512x512, or 1024x1024 output size.',
       inputSchema: ImageVariationInput.extend({ model }).strict(),
     }, async (input, extra) => imageToolResult(await easel.createImageVariations!({ ...input, signal: extra?.signal }), 'Created variations of'));
+  }
+
+  const videoModels = modelsFor('video');
+  if (!videoModels || videoModels.length) {
+    const model = videoModels ? z.enum(videoModels.map((model) => model.id)) : GenerateVideoInput.shape.model;
+    if (easel.generateVideo) server.registerTool('generate_video', {
+      description: 'Submit one video generation job using a video Media model. Optional inputReference is a PNG/JPEG/WebP upload. Defaults: 4 seconds, 1280x720; supported values depend on the model. Returns a job ID, not video bytes. Keep that ID and use get_video with the same model; never resubmit merely because a job is pending. Stopping local work does not cancel an accepted server job.',
+      inputSchema: GenerateVideoInput.extend({ model }).strict(),
+    }, async (input, extra) => videoToolResult({ job: await easel.generateVideo!({ ...input, signal: extra?.signal }) }, input.model));
+    if (easel.getVideo) server.registerTool('get_video', {
+      description: 'Retrieve a video job using its ID and the SAME model ID as generate_video. Optional waitSeconds (0-15) checks every 3 seconds. A completed job downloads MP4/WebM up to 32 MiB by default; download:false checks status only. Pending jobs are safe to retrieve later without resubmission. Return to the user instead of repeatedly polling in one turn.',
+      inputSchema: GetVideoInput.extend({ model: videoModels ? model : GetVideoInput.shape.model }).strict(),
+    }, async (input, extra) => videoToolResult(await easel.getVideo!({ ...input, signal: extra?.signal }), input.model));
   }
 
   server.registerTool('capture_canvas_screenshot', {
@@ -145,6 +183,17 @@ function imageToolResult(images: EaselImage[], verb: string) {
       ...images.map((image) => ({ type: 'image' as const, data: image.data, mimeType: image.mimeType })),
     ],
     structuredContent: { count: images.length, mimeTypes: images.map((image) => image.mimeType) },
+  };
+}
+
+function videoToolResult(result: VideoResult, modelId?: string) {
+  const job = { ...result.job, ...(modelId ? { modelId } : {}) };
+  return {
+    content: [
+      { type: 'text' as const, text: JSON.stringify({ job, downloaded: Boolean(result.media), ...(!['completed', 'failed', 'cancelled'].includes(job.status) ? { retryAfterSeconds: 15, guidance: 'Keep this job ID. Retrieve it later with get_video; do not resubmit.' } : {}) }) },
+      ...(result.media ? [{ type: 'resource' as const, resource: { uri: `easel-media://videos/${encodeURIComponent(job.id)}`, mimeType: result.media.mimeType, blob: result.media.data } }] : []),
+    ],
+    structuredContent: { job, downloaded: Boolean(result.media) },
   };
 }
 
