@@ -5,6 +5,7 @@ const {
   assertKnownChannel,
   validateCanvasBounds,
   validateCanvasTitle,
+  validateCanvasKits,
   validateChatMessage,
   validateOpaqueId,
   validateSettingsInput,
@@ -33,6 +34,14 @@ test('validates and bounds chat messages', () => {
   assert.equal(validateChatMessage('  make a blue bird  '), 'make a blue bird');
   assert.throws(() => validateChatMessage('  '), /message is required/i);
   assert.throws(() => validateChatMessage('x'.repeat(20_001)), /too long/i);
+});
+
+test('accepts only offline canvas kits at the IPC boundary', () => {
+  assert.deepEqual(validateCanvasKits(['canvas-2d', 'tone', 'tone']), ['canvas-2d', 'tone']);
+  assert.deepEqual(validateCanvasKits(), []);
+  assert.throws(() => validateCanvasKits({ tone: true }), /kit preferences are invalid/i);
+  assert.throws(() => validateCanvasKits(['https://cdn.example/tone.js']), /kit preference is invalid/i);
+  assert.throws(() => validateCanvasKits(Array(7).fill('tone')), /kit preferences are invalid/i);
 });
 
 test('validates opaque library IDs and bounded canvas layout rectangles', () => {

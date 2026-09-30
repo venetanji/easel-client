@@ -21,6 +21,9 @@ win:
     - nsis
     - zip
 mac:
+  extendInfo:
+    NSCameraUsageDescription: Easel canvases can use your camera when you allow access.
+    NSMicrophoneUsageDescription: Easel canvases can use your microphone when you allow access.
   target:
     - dmg
     - zip

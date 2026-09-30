@@ -26,8 +26,8 @@ test('returns normal assistant replies and retains session history', async () =>
   const result = await runAgentTurn({
     userMessage: 'hello',
     history: [],
-    llm: { async createCompletion({ messages }) {
-      requests.push(messages.map((message) => ({ ...message })));
+    llm: { async createCompletion({ messages, instructions }) {
+      requests.push({ messages: messages.map((message) => ({ ...message })), instructions });
       return response({ role: 'assistant', content: 'Hello.' });
     } },
     mcp: { async listTools() { return mediaTools; } },
@@ -36,8 +36,9 @@ test('returns normal assistant replies and retains session history', async () =>
   });
   assert.equal(result.text, 'Hello.');
   assert.deepEqual(result.history.map((message) => message.role), ['user', 'assistant']);
-  assert.equal(requests[0].some((message) => message.role === 'system'), false);
-  assert.match(requests[0][0].content, /^You are Easel, a creative image assistant\./);
+  assert.equal(requests[0].messages.some((message) => message.role === 'system'), false);
+  assert.match(requests[0].instructions, /^You are Easel, a creative image assistant\./);
+  assert.equal(requests[0].messages[0].content, 'hello');
   assert.equal(result.history[0].content, 'hello');
 });
 
@@ -157,7 +158,7 @@ test('creates a named preset canvas through the host controller tool', async () 
   assert.ok(events.some((event) => event.type === 'canvas' && event.canvasId === 'd'.repeat(32)));
 });
 
-test('rejects unknown tools, malformed arguments, and calls beyond the per-turn cap', async () => {
+test('rejects unknown tools and malformed arguments', async () => {
   const base = {
     userMessage: 'do it',
     history: [],
@@ -176,11 +177,57 @@ test('rejects unknown tools, malformed arguments, and calls beyond the per-turn 
       tool_calls: [{ id: 'bad', type: 'function', function: { name: 'list_models', arguments: '{' } }],
     }); } },
   }), /invalid tool arguments/i);
-  let count = 0;
-  await assert.rejects(runAgentTurn({
-    ...base,
-    maxToolCalls: 3,
-    llm: { async createCompletion() { count += 1; return response(toolCall('list_models', {}, `call_${count}`)); } },
-  }), /tool limit/i);
-  assert.equal(count, 4);
+});
+
+test('finishes with tools disabled at the budget and preserves a resumable conversation', async () => {
+  let executions = 0;
+  let requests = 0;
+  const result = await runAgentTurn({
+    userMessage: 'Build a canvas', maxToolCalls: 2,
+    llm: { async createCompletion({ messages, tools }) {
+      requests += 1;
+      if (!tools.length) {
+        assert.match(messages.at(-1).content, /budget.*exhausted/);
+        return response({ role: 'assistant', content: 'The layout is built. Continue to add audio.' });
+      }
+      return response({ role: 'assistant', content: null, tool_calls: [
+        ...toolCall('list_models', {}, 'a').tool_calls,
+        ...toolCall('list_models', {}, 'b').tool_calls,
+        ...toolCall('list_models', {}, 'c').tool_calls,
+      ] });
+    } },
+    mcp: { async listTools() { return mediaTools; }, async callTool() { executions += 1; return { content: [] }; } },
+    assetStore: {},
+  });
+  assert.equal(executions, 2);
+  assert.equal(requests, 2);
+  assert.match(result.text, /Continue/);
+  assert.equal(result.history.filter((m) => m.role === 'user').length, 1);
+  const results = result.history.filter((m) => m.role === 'tool');
+  assert.equal(results.length, 3);
+  assert.match(results.at(-1).content, /not executed/);
+});
+
+test('returns JavaScript errors to the agent so it can repair the canvas in the same turn', async () => {
+  let attempts = 0;
+  const completions = [
+    response(toolCall('execute_canvas_javascript', { code: 'broken()' }, 'a')),
+    response(toolCall('execute_canvas_javascript', { code: 'return "fixed";' }, 'b')),
+    response({ role: 'assistant', content: 'Canvas fixed.' }),
+  ];
+  const result = await runAgentTurn({
+    userMessage: 'Fix the canvas',
+    llm: { async createCompletion({ messages }) {
+      if (attempts === 1) assert.match(messages.at(-1).content, /broken is not defined/);
+      return completions.shift();
+    } },
+    mcp: { async listTools() { return mediaTools; } },
+    canvasController: { async execute() {
+      attempts += 1;
+      if (attempts === 1) throw new Error('broken is not defined');
+      return 'fixed';
+    } },
+  });
+  assert.equal(attempts, 2);
+  assert.equal(result.text, 'Canvas fixed.');
 });

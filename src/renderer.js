@@ -28,12 +28,13 @@ async function refreshLiteLLMModels({ client, select, statusElement }) {
   setStatus(statusElement, 'Loading LiteLLM models…');
   try {
     const models = await client.listLiteLLMModels();
+    const selectedModel = select.value || savedModel;
     const options = models.map((model) => modelOption(select, model.id, model.name === model.id ? model.id : `${model.name} — ${model.id}`));
-    if (savedModel && !models.some((model) => model.id === savedModel)) {
-      options.unshift(modelOption(select, savedModel, `${savedModel} (saved; not in catalog)`));
+    if (selectedModel && !models.some((model) => model.id === selectedModel)) {
+      options.unshift(modelOption(select, selectedModel, `${selectedModel} (saved; not in catalog)`));
     }
     select.replaceChildren(...options);
-    select.value = savedModel || models[0]?.id || '';
+    select.value = selectedModel || models[0]?.id || '';
     setStatus(statusElement, `${models.length} LiteLLM model${models.length === 1 ? '' : 's'} loaded.`);
     return models;
   } catch (error) {
@@ -86,12 +87,12 @@ function resultSummary(count) {
 const SKILL_STORAGE_KEY = 'easel-studio.skills.v1';
 const KIT_STORAGE_KEY = 'easel-studio.canvas-kits.v1';
 const OPEN_CANVAS_STORAGE_KEY = 'easel-studio.open-canvases.v1';
-const PANEL_RATIO_STORAGE_KEY = 'easel-studio.panel-ratio.v1';
 const WORKBENCH_WIDTH_STORAGE_KEY = 'easel-studio.workbench-width.v1';
 const MAX_LOCAL_SKILLS = 64;
 const MAX_SKILL_INSTRUCTIONS = 32_000;
 const MAX_ACTIVE_SKILL_INSTRUCTIONS = 48_000;
-const LOCAL_RUNTIME_KITS = Object.freeze(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone']);
+const LOCAL_RUNTIME_KITS = Object.freeze(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone', 'p5']);
+const DEFAULT_RUNTIME_KITS = Object.freeze(['canvas-2d', 'tone']);
 const MAX_PENDING_ATTACHMENTS = 6;
 const MAX_MEDIA_FILE_BYTES = 32 * 1024 * 1024;
 const MEDIA_MIME_TYPES = Object.freeze({
@@ -106,12 +107,12 @@ const MEDIA_MIME_TYPES = Object.freeze({
 });
 
 function readLocalKits(storage = typeof localStorage === 'undefined' ? null : localStorage) {
-  if (!storage) return ['canvas-2d'];
+  if (!storage) return [...DEFAULT_RUNTIME_KITS];
   try {
-    const saved = JSON.parse(storage.getItem(KIT_STORAGE_KEY) || '["canvas-2d"]');
+    const saved = JSON.parse(storage.getItem(KIT_STORAGE_KEY) || JSON.stringify(DEFAULT_RUNTIME_KITS));
     return [...new Set(['canvas-2d', ...(Array.isArray(saved) ? saved.filter((kit) => LOCAL_RUNTIME_KITS.includes(kit)) : [])])];
   } catch {
-    return ['canvas-2d'];
+    return [...DEFAULT_RUNTIME_KITS];
   }
 }
 
@@ -295,12 +296,42 @@ function appendImagePreviewMessage(document, messagesElement, event, onAddToCanv
   const caption = document.createElement('figcaption');
   caption.textContent = 'Generated image';
   figure.append(image, caption);
-  const add = createButton(document, 'Add to canvas', 'message-asset-add', () => onAddToCanvas?.(event.assetId, add));
-  add.setAttribute('aria-label', 'Add generated image to canvas');
-  message.append(figure, add);
+  let add;
+  if (onAddToCanvas) {
+    add = createButton(document, 'Add to project', 'message-asset-add', () => onAddToCanvas(event.assetId, add));
+    add.setAttribute('aria-label', 'Add image to project');
+  }
+  message.append(figure);
+  if (add) message.append(add);
   messagesElement.append(message);
   if (shouldFollow) messagesElement.scrollTop = messagesElement.scrollHeight;
   return { image, caption, message, addButton: add };
+}
+
+let assistantMarkdown;
+
+function renderAssistantMarkdown(content) {
+  if (typeof globalThis.markdownit !== 'function') return;
+  if (!assistantMarkdown) {
+    assistantMarkdown = globalThis.markdownit({ html: false, breaks: true, linkify: false });
+    assistantMarkdown.validateLink = (value) => {
+      try {
+        const url = new URL(value);
+        return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password;
+      } catch { return false; }
+    };
+    // Generated assets have their own previews; remote Markdown images must not fetch in chat.
+    assistantMarkdown.renderer.rules.image = (tokens, index) => assistantMarkdown.utils.escapeHtml(tokens[index].content);
+  }
+  content.innerHTML = assistantMarkdown.render(content.textContent);
+  content.classList.add('markdown');
+  for (const link of content.querySelectorAll('a[href]')) {
+    link.addEventListener('click', async (event) => {
+      event.preventDefault();
+      try { await globalThis.easelClient?.openExternal(link.href); }
+      catch { link.title = 'Could not open this link in your browser.'; }
+    });
+  }
 }
 
 function appendTextMessage(document, messagesElement, role, text, options = {}) {
@@ -309,14 +340,14 @@ function appendTextMessage(document, messagesElement, role, text, options = {}) 
   message.className = `message ${role}`;
   if (role === 'user' && options.mode === 'image') message.setAttribute('data-mode', 'image');
   let resolvedAssetIds = [];
-  if (role === 'assistant' && options.assetPreviews instanceof Map) {
+  if (role === 'assistant') {
     const content = document.createElement('div');
     content.className = 'message-content';
     const rendered = renderAssistantAssetLinks(
       document,
       content,
       text,
-      options.assetPreviews,
+      options.assetPreviews instanceof Map ? options.assetPreviews : new Map(),
       options.pendingAssetCaptions
     );
     resolvedAssetIds = rendered.resolvedAssetIds;
@@ -324,6 +355,7 @@ function appendTextMessage(document, messagesElement, role, text, options = {}) 
       if (shouldFollow) messagesElement.scrollTop = messagesElement.scrollHeight;
       return null;
     }
+    renderAssistantMarkdown(content);
     message.append(content);
   } else if (role === 'user' && Array.isArray(options.attachments) && options.attachments.length > 0) {
     const content = document.createElement('div');
@@ -333,20 +365,26 @@ function appendTextMessage(document, messagesElement, role, text, options = {}) 
     const attachmentList = document.createElement('div');
     attachmentList.className = 'message-attachments';
     for (const attachment of options.attachments) {
-      if (typeof attachment?.previewUrl !== 'string' || !attachment.previewUrl.startsWith('blob:')) continue;
+      if (!attachment || !['image', 'audio', 'video'].includes(attachment.type)) continue;
       const figure = document.createElement('figure');
       figure.className = 'message-attachment';
-      const tag = attachment.type === 'image' ? 'img' : attachment.type === 'audio' ? 'audio' : 'video';
-      const preview = document.createElement(tag);
-      preview.src = attachment.previewUrl;
-      if (attachment.type === 'image') preview.alt = attachment.name;
-      else {
-        preview.controls = true;
-        preview.preload = 'metadata';
+      if (typeof attachment.previewUrl === 'string' && attachment.previewUrl.startsWith('blob:')) {
+        const tag = attachment.type === 'image' ? 'img' : attachment.type === 'audio' ? 'audio' : 'video';
+        const preview = document.createElement(tag);
+        preview.src = attachment.previewUrl;
+        if (attachment.type === 'image') preview.alt = attachment.name;
+        else {
+          preview.controls = true;
+          preview.preload = 'metadata';
+        }
+        figure.append(preview);
+      } else {
+        figure.classList.add('metadata-only');
       }
       const caption = document.createElement('figcaption');
-      caption.textContent = attachment.name;
-      figure.append(preview, caption);
+      caption.textContent = attachment.name || `${attachment.type} attachment`;
+      if (!figure.firstChild) caption.textContent += ' (saved capture; preview unavailable)';
+      figure.append(caption);
       attachmentList.append(figure);
     }
     if (attachmentList.children.length) message.append(attachmentList);
@@ -492,10 +530,10 @@ async function exportCanvas({ client, canvasId, statusElement }) {
   }
 }
 
-async function createCanvas({ client, title, statusElement }) {
+async function createCanvas({ client, title, kits = ['canvas-2d'], statusElement }) {
   setStatus(statusElement, 'Creating canvas…');
   try {
-    const canvas = await client.createCanvas(title);
+    const canvas = await client.createCanvas(title, kits);
     setStatus(statusElement, `Created ${canvas.title}.`);
     return canvas;
   } catch (error) {
@@ -592,17 +630,19 @@ async function handleSettingsSubmit({ client, fields, statusElement }) {
       easelBaseUrl: fields.easelBaseUrl.value,
       easelApiKey: fields.easelApiKey.value,
       clearEaselApiKey: fields.clearEaselApiKey.checked === true,
-      litellmBaseUrl: fields.litellmBaseUrl.value,
-      litellmModel: fields.litellmModel.value,
-      litellmApiKey: fields.litellmApiKey.value,
-      clearLiteLLMApiKey: fields.clearLiteLLMApiKey.checked === true,
+      ...(fields.litellmBaseUrl ? {
+        litellmBaseUrl: fields.litellmBaseUrl.value,
+        litellmModel: fields.litellmModel.value,
+        litellmApiKey: fields.litellmApiKey.value,
+        clearLiteLLMApiKey: fields.clearLiteLLMApiKey.checked === true,
+      } : {}),
     });
     fields.easelApiKey.value = '';
-    fields.litellmApiKey.value = '';
+    if (fields.litellmApiKey) fields.litellmApiKey.value = '';
     fields.clearEaselApiKey.checked = false;
-    fields.clearLiteLLMApiKey.checked = false;
+    if (fields.clearLiteLLMApiKey) fields.clearLiteLLMApiKey.checked = false;
     fields.easelApiKey.placeholder = result.hasEaselApiKey ? 'Saved securely' : 'Optional';
-    fields.litellmApiKey.placeholder = result.hasLiteLLMApiKey ? 'Saved securely' : 'Optional';
+    if (fields.litellmApiKey) fields.litellmApiKey.placeholder = result.hasLiteLLMApiKey ? 'Saved securely' : 'Optional';
     setStatus(statusElement, 'Settings saved.');
     return result;
   } catch (error) {
@@ -611,7 +651,7 @@ async function handleSettingsSubmit({ client, fields, statusElement }) {
   }
 }
 
-async function handleChatSubmit({ client, document, input, button, statusElement, messagesElement, mode = 'chat', size = '1024x1024', skills = [], kits = ['canvas-2d'], attachments = [], activityElement, activityLabel, newChatButton, modeButtons, copyText }) {
+async function handleChatSubmit({ client, document, input, button, statusElement, messagesElement, mode = 'chat', size = '1024x1024', skills = [], kits = ['canvas-2d'], attachments = [], activityElement, activityLabel, newChatButton, modeButtons, copyText, onRunStart }) {
   const text = input.value.trim();
   if (!text && attachments.length === 0) return;
   const inputWasDisabled = input.disabled;
@@ -626,14 +666,18 @@ async function handleChatSubmit({ client, document, input, button, statusElement
   input.value = '';
   try {
     const message = text || 'Review the attached media and respond with what you find.';
-    const result = await client.sendMessage(message, {
+    const request = client.sendMessage(message, {
       mode,
       size,
       skills,
       kits,
-      attachments: attachments.map(({ type, name, mimeType, data, frames }) => ({ type, name, mimeType, data, frames })),
+      attachments: attachments.map(({ type, name, mimeType, data, frames }) => type === 'video'
+        ? { type, name, mimeType, frames }
+        : { type, name, mimeType, data }),
     });
-    setStatus(statusElement, '');
+    onRunStart?.();
+    const result = await request;
+    setStatus(statusElement, result?.saveWarning || (result?.cancelled ? 'Stopped. Completed edits are kept.' : ''), Boolean(result?.saveWarning));
     return result;
   } catch (error) {
     if (!input.value.trim()) input.value = text;
@@ -734,25 +778,41 @@ function submitChatWithShortcut(event, form, button) {
   return true;
 }
 
+function canvasInputDisplayText(message, request) {
+  if (request?.kind === 'choice') {
+    const label = request.options?.find((option) => option.value === request.value)?.label || request.value;
+    if (label) return `Selected: ${label}`;
+  }
+  if (request?.kind === 'media') return request.prompt || 'Review the media I shared from the canvas.';
+  const text = typeof message.content === 'string' ? message.content : '';
+  // Older answers can outlive the bounded request list; their saved metadata carries the label.
+  try {
+    const metadata = JSON.parse(text.slice(text.lastIndexOf('\n\n') + 2));
+    if (metadata.type === 'canvas_input' && metadata.label) return `Selected: ${metadata.label}`;
+    if (metadata.type === 'canvas_media') return text.slice(0, text.lastIndexOf('\n\n'));
+  } catch {}
+  return text;
+}
+
 function wireRenderer({ document, client }) {
-  const fields = {
-    easelBaseUrl: document.getElementById('easel-url'),
-    easelApiKey: document.getElementById('easel-key'),
-    clearEaselApiKey: document.getElementById('clear-easel-key'),
-    litellmBaseUrl: document.getElementById('litellm-url'),
-    litellmModel: document.getElementById('litellm-model'),
-    litellmApiKey: document.getElementById('litellm-key'),
-    clearLiteLLMApiKey: document.getElementById('clear-litellm-key'),
-  };
-  const settingsForm = document.getElementById('settings-form');
-  const settingsStatus = document.getElementById('settings-status');
   const settingsDialog = document.getElementById('settings-dialog');
   const settingsSections = [
-    { id: 'connections', tab: document.getElementById('settings-tab-connections'), section: document.getElementById('settings-connections') },
+    { id: 'credentials', tab: document.getElementById('settings-tab-credentials'), section: document.getElementById('settings-credentials') },
+    { id: 'models', tab: document.getElementById('settings-tab-models'), section: document.getElementById('settings-models') },
     { id: 'skills', tab: document.getElementById('settings-tab-skills'), section: document.getElementById('settings-skills') },
     { id: 'kits', tab: document.getElementById('settings-tab-kits'), section: document.getElementById('settings-kits') },
   ];
   const newCanvasDialog = document.getElementById('new-canvas-dialog');
+  const canvasFilesDialog = document.getElementById('canvas-files-dialog');
+  const canvasFilesButton = document.getElementById('canvas-files-open');
+  const canvasDevicesButton = document.getElementById('canvas-devices-open');
+  const canvasFilesList = document.getElementById('canvas-files-list');
+  const canvasFilesSummary = document.getElementById('canvas-files-summary');
+  const canvasFilePath = document.getElementById('canvas-file-path');
+  const canvasFileSource = document.getElementById('canvas-file-source');
+  const canvasFileStatus = document.getElementById('canvas-file-status');
+  const canvasFilePrevious = document.getElementById('canvas-file-previous');
+  const canvasFileNext = document.getElementById('canvas-file-next');
   const skillForm = document.getElementById('skill-form');
   const skillNameInput = document.getElementById('skill-name');
   const skillInstructionsInput = document.getElementById('skill-instructions');
@@ -768,10 +828,12 @@ function wireRenderer({ document, client }) {
   const newCanvasForm = document.getElementById('new-canvas-form');
   const newCanvasName = document.getElementById('new-canvas-name');
   const newCanvasSubmit = document.getElementById('new-canvas-submit');
+  const newCanvasStatus = document.getElementById('new-canvas-status');
+  const newCanvasKits = document.getElementById('new-canvas-kits');
+  const newCanvasAudioHint = document.getElementById('new-canvas-audio-hint');
   const chatForm = document.getElementById('chat-form');
   const messageInput = document.getElementById('message');
   const sendButton = document.getElementById('send');
-  const sendLabel = document.getElementById('send-label');
   const mediaFileInput = document.getElementById('media-files');
   const attachMediaButton = document.getElementById('attach-media');
   const attachmentStrip = document.getElementById('attachment-strip');
@@ -780,24 +842,11 @@ function wireRenderer({ document, client }) {
   const activityElement = document.getElementById('agent-activity');
   const activityLabel = document.getElementById('agent-activity-label');
   const messagesElement = document.getElementById('messages');
-  const mediaList = document.getElementById('media-list');
-  const mediaEmpty = document.getElementById('media-empty');
-  const canvasesList = document.getElementById('canvases-list');
-  const canvasesEmpty = document.getElementById('canvases-empty');
-  const mediaContent = document.getElementById('media-content');
-  const canvasesContent = document.getElementById('canvases-content');
-  const libraryTitle = document.getElementById('library-title');
-  const navExplorer = document.getElementById('nav-explorer');
-  const navMedia = document.getElementById('nav-media');
   const activitySettings = document.getElementById('settings-open');
   const kitOptions = [...document.querySelectorAll('[data-kit]')];
   const leftColumn = document.querySelector('.left-column');
   const studio = document.querySelector('.studio');
-  const libraryPanel = document.querySelector('.library');
-  const conversationPanel = document.querySelector('.conversation');
-  const splitter = document.getElementById('panel-splitter');
   const workbenchSplitter = document.getElementById('workbench-splitter');
-  const openCanvasTabsElement = document.getElementById('open-canvas-tabs');
   const canvasHost = document.getElementById('canvas-host');
   const canvasEmpty = document.getElementById('canvas-empty');
   const canvasTitle = document.getElementById('canvas-title');
@@ -805,22 +854,37 @@ function wireRenderer({ document, client }) {
   const canvasStateDot = document.getElementById('canvas-state-dot');
   const exportCurrentButton = document.getElementById('export-current');
   const undoCanvasButton = document.getElementById('canvas-undo');
-  const modelLabel = document.getElementById('model-label');
+  const modelSelect = document.getElementById('chat-model');
+  const templateSelect = document.getElementById('prompt-template');
   const connectionDot = document.getElementById('connection-dot');
-  const imageSizeWrap = document.getElementById('image-size-wrap');
-  const imageSize = document.getElementById('image-size');
-  const composerHelp = document.getElementById('composer-help');
   const newChatButton = document.getElementById('new-chat');
-  const modeButtons = [...document.querySelectorAll('.mode-button')];
+  const chatHistoryButton = document.getElementById('chat-history-open');
+  const chatHistoryPanel = document.getElementById('chat-history-panel');
+  const chatHistoryList = document.getElementById('chat-history-list');
+  const chatHistoryStatus = document.getElementById('chat-history-status');
+  const conversationPanel = document.getElementById('conversation-panel');
+  const conversationButton = document.getElementById('nav-chat');
+  const historyNewChatButton = document.getElementById('history-new-chat');
   const storage = typeof localStorage === 'undefined' ? null : localStorage;
   const copyText = typeof navigator !== 'undefined' && navigator.clipboard?.writeText
     ? (value) => navigator.clipboard.writeText(value)
     : null;
   let activeCanvasId = '';
-  const openCanvasTabs = new Map();
-  let canvasTabsRestored = false;
-  let mode = document.getElementById('image-mode').getAttribute('aria-pressed') === 'true' ? 'image' : 'chat';
-  let chatBusy = false;
+  let activeDocumentPath = '';
+  let activePreviewKind = 'empty';
+  let activeUndoAvailable = false;
+  let creationKind = 'document';
+  let modelSaving = false;
+  let credentialsSaving = false;
+  let chatBusy = true;
+  let agentRunning = false;
+  let stopPending = false;
+  let canvasResumeBusy = false;
+  const canvasResumeRequests = new Set();
+  const canvasInputs = new Map();
+  const canvasInputNodes = new Map();
+  const canvasAnswerIds = new Set();
+  let activeChatId = '';
   const assetPreviews = new Map();
   const pendingAssetCaptions = new Map();
   let pendingAttachments = [];
@@ -828,8 +892,62 @@ function wireRenderer({ document, client }) {
   let localSkills = readLocalSkills(storage);
   let localKits = readLocalKits(storage);
   let installedSkills = [];
-  let modelProbeState = { model: '', chat: false, image: false };
   let editingSkillId = '';
+  let savedSettings = { litellmModel: '', activeConnectionId: '', connections: [] };
+  let returnToNewCanvas = false;
+  let nativeDialogOpen = false;
+  let filesCanvasId = '';
+  let fileReadVersion = 0;
+  let fileReading = false;
+  let currentFilePage = null;
+  let themedDropdowns = [];
+  const workspace = createProjectWorkspace({
+    document, client, storage,
+    onSelection: updateCanvasState,
+    onStatus: (text, error) => setStatus(statusElement, text, error),
+    onBounds: updateCanvasBounds,
+    onAttach: (file) => { showConversation(); addAttachmentFiles([file]); messageInput.focus(); },
+    onCreate: openNewCanvasDialog,
+    onFiles: openCanvasFiles,
+    onBusy: updateSendState,
+    onDrawerChange: (open) => {
+      if (open) {
+        chatHistoryPanel.hidden = true;
+        chatHistoryPanel.inert = true;
+        chatHistoryButton.setAttribute('aria-expanded', 'false');
+      }
+      conversationPanel.inert = open || !chatHistoryPanel.hidden;
+      conversationButton.setAttribute('aria-pressed', String(!open && chatHistoryPanel.hidden));
+      chatHistoryButton.setAttribute('aria-pressed', String(!open && !chatHistoryPanel.hidden));
+    },
+    isBusy: () => chatBusy || canvasResumeBusy,
+  });
+  themedDropdowns = [...document.querySelectorAll('select')].map((select) => createThemedDropdown(select, { onOpenChange: updateCanvasBounds }));
+
+  function showConversation(focus = true) {
+    workspace.setDrawer(false, false);
+    chatHistoryPanel.hidden = true;
+    chatHistoryPanel.inert = true;
+    conversationPanel.inert = false;
+    conversationButton.setAttribute('aria-pressed', 'true');
+    chatHistoryButton.setAttribute('aria-pressed', 'false');
+    chatHistoryButton.setAttribute('aria-expanded', 'false');
+    if (focus) messageInput.focus();
+  }
+
+  function showHistory() {
+    workspace.setDrawer(false, false);
+    chatHistoryPanel.hidden = false;
+    chatHistoryPanel.inert = false;
+    conversationPanel.inert = true;
+    conversationButton.setAttribute('aria-pressed', 'false');
+    chatHistoryButton.setAttribute('aria-pressed', 'true');
+    chatHistoryButton.setAttribute('aria-expanded', 'true');
+    refreshChatHistory();
+    historyNewChatButton.focus();
+  }
+  conversationButton.addEventListener('click', () => showConversation());
+  historyNewChatButton.addEventListener('click', () => newChatButton.click());
 
   function readStoredValue(key) {
     try {
@@ -839,18 +957,8 @@ function wireRenderer({ document, client }) {
     }
   }
 
-  function applyPanelRatio(value) {
-    const ratio = Math.max(20, Math.min(75, Number(value) || 31));
-    leftColumn.style.setProperty('--library-ratio', `${ratio}fr`);
-    leftColumn.style.setProperty('--chat-ratio', `${100 - ratio}fr`);
-    splitter.setAttribute('aria-valuenow', String(Math.round(ratio)));
-    try {
-      storage?.setItem(PANEL_RATIO_STORAGE_KEY, String(ratio));
-    } catch {}
-  }
-
   function workbenchWidthLimits() {
-    const available = studio.getBoundingClientRect().width - 42 - 12 - 36 - 28 - 300;
+    const available = studio.getBoundingClientRect().width - 44 - 1 - 300;
     return { min: 280, max: Math.max(280, Math.min(580, Math.floor(available))) };
   }
 
@@ -866,53 +974,29 @@ function wireRenderer({ document, client }) {
     } catch {}
   }
 
-  function selectLibraryView(view) {
-    const showMedia = view === 'media';
-    mediaContent.hidden = !showMedia;
-    canvasesContent.hidden = showMedia;
-    navExplorer.setAttribute('aria-pressed', String(!showMedia));
-    navMedia.setAttribute('aria-pressed', String(showMedia));
-    libraryTitle.textContent = showMedia ? 'Media' : 'Explorer';
-    libraryPanel.setAttribute('aria-label', showMedia ? 'Media library' : 'Project explorer');
-  }
-
   function selectSettingsSection(id) {
     for (const item of settingsSections) {
       const active = item.id === id;
       item.tab.setAttribute('aria-selected', String(active));
+      item.tab.tabIndex = active ? 0 : -1;
       item.section.hidden = !active;
     }
   }
 
-  function openSettings(id = 'connections', focusTarget = null) {
+  function openSettings(id = 'credentials', focusTarget = null) {
     selectSettingsSection(id);
     activitySettings.setAttribute('aria-pressed', 'true');
     if (!settingsDialog.open) openDialog(settingsDialog, focusTarget);
     else focusTarget?.focus();
   }
 
-  function setPanelCollapsed(panelName, collapsed) {
-    const panel = panelName === 'library' ? libraryPanel : conversationPanel;
-    const button = document.getElementById(panelName === 'library' ? 'library-collapse' : 'chat-collapse');
-    const label = panelName === 'library' ? (navMedia.getAttribute('aria-pressed') === 'true' ? 'media' : 'explorer') : 'chat';
-    panel.classList.toggle('is-collapsed', collapsed);
-    leftColumn.classList.toggle(`is-${panelName}-collapsed`, collapsed);
-    button.setAttribute('aria-expanded', String(!collapsed));
-    button.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${label}`);
-    button.title = `${collapsed ? 'Expand' : 'Collapse'} ${label}`;
-    try {
-      storage?.setItem(`easel-studio.${panelName}-collapsed.v1`, String(collapsed));
-    } catch {}
-    updateCanvasBounds();
-  }
-
   function updateCanvasBounds() {
     if (!canvasHost || typeof client.setCanvasBounds !== 'function') return;
-    if ([settingsDialog, newCanvasDialog].some((dialog) => dialog.open)) {
+    if (nativeDialogOpen || document.querySelector('dialog[open]') || themedDropdowns.some((dropdown) => dropdown.isOpen())) {
       client.setCanvasBounds({ x: 0, y: 0, width: 0, height: 0 });
       return;
     }
-    if (!activeCanvasId) {
+    if (!activeCanvasId || activePreviewKind !== 'document') {
       client.setCanvasBounds({ x: 0, y: 0, width: 0, height: 0 });
       return;
     }
@@ -931,14 +1015,151 @@ function wireRenderer({ document, client }) {
     focusTarget?.focus();
   }
 
+  function updateFileControls() {
+    canvasFilesList.querySelectorAll('button').forEach((button) => { button.disabled = fileReading; });
+    canvasFilePrevious.disabled = fileReading || !currentFilePage || currentFilePage.offsets.length < 2;
+    canvasFileNext.disabled = fileReading || !currentFilePage || currentFilePage.nextOffset === null;
+  }
+
+  async function readCanvasFilePage(path, offset = 0, offsets = [0]) {
+    if (!filesCanvasId) return;
+    const canvasId = filesCanvasId;
+    const version = ++fileReadVersion;
+    fileReading = true;
+    canvasFilePath.textContent = path;
+    setStatus(canvasFileStatus, 'Loading source...');
+    updateFileControls();
+    try {
+      const result = await client.readCanvasFile(canvasId, { path, offset, maxBytes: 24_000 });
+      if (version !== fileReadVersion || !canvasFilesDialog.open) return;
+      currentFilePage = { path, offsets, nextOffset: result.nextOffset };
+      canvasFileSource.textContent = result.text;
+      canvasFileSource.scrollTop = 0;
+      canvasFileSource.scrollLeft = 0;
+      const end = result.nextOffset ?? result.totalBytes;
+      setStatus(canvasFileStatus, result.totalBytes
+        ? `Bytes ${(result.offset + 1).toLocaleString()}-${end.toLocaleString()} of ${result.totalBytes.toLocaleString()}`
+        : 'This file is empty.');
+      for (const button of canvasFilesList.querySelectorAll('button')) button.setAttribute('aria-current', String(button.dataset.path === path));
+    } catch (error) {
+      if (version !== fileReadVersion || !canvasFilesDialog.open) return;
+      canvasFileSource.textContent = '';
+      currentFilePage = null;
+      setStatus(canvasFileStatus, error?.message || 'Could not read this file. Select it to try again.', true);
+    } finally {
+      if (version === fileReadVersion) {
+        fileReading = false;
+        updateFileControls();
+      }
+    }
+  }
+
+  async function openCanvasFiles(selectedPath) {
+    if (!activeCanvasId || typeof client.listCanvasFiles !== 'function') return;
+    filesCanvasId = activeCanvasId;
+    const canvasId = filesCanvasId;
+    const version = ++fileReadVersion;
+    currentFilePage = null;
+    fileReading = true;
+    canvasFilesList.replaceChildren();
+    canvasFilePath.textContent = 'Select a file';
+    canvasFileSource.textContent = '';
+    document.getElementById('canvas-files-description').textContent = `${canvasTitle.textContent} - saved source. Edits are made through chat.`;
+    setStatus(canvasFilesSummary, 'Loading files...');
+    setStatus(canvasFileStatus, '');
+    updateFileControls();
+    openDialog(canvasFilesDialog, document.getElementById('canvas-files-close'));
+    try {
+      const project = await client.listCanvasFiles(canvasId);
+      if (version !== fileReadVersion || !canvasFilesDialog.open) return;
+      const files = Array.isArray(project.files) ? project.files : [];
+      canvasFilesList.replaceChildren(...files.map((file) => {
+        const button = createButton(document, '', 'canvas-file-item', () => readCanvasFilePage(file.path));
+        button.dataset.path = file.path;
+        const name = document.createElement('span');
+        name.textContent = file.path;
+        const size = document.createElement('small');
+        size.textContent = `${Number(file.bytes || 0).toLocaleString()} bytes`;
+        button.append(name, size);
+        return button;
+      }));
+      const kitCount = project.manifest?.kits?.length || 0;
+      const assetCount = project.manifest?.assets?.length || 0;
+      setStatus(canvasFilesSummary, files.length
+        ? `${files.length} source file${files.length === 1 ? '' : 's'}. ${kitCount} kit${kitCount === 1 ? '' : 's'} and ${assetCount} media asset${assetCount === 1 ? '' : 's'} are stored separately.`
+        : 'No saved source files are available for this canvas.');
+      fileReading = false;
+      updateFileControls();
+      const initial = files.find((file) => file.path === selectedPath) || files.find((file) => file.path === activeDocumentPath) || files.find((file) => file.path === project.manifest?.entry) || files[0];
+      if (initial) await readCanvasFilePage(initial.path);
+    } catch (error) {
+      if (version !== fileReadVersion || !canvasFilesDialog.open) return;
+      fileReading = false;
+      updateFileControls();
+      setStatus(canvasFilesSummary, error?.message || 'Could not load canvas files. Close this panel and try again.', true);
+    }
+  }
+
+  canvasFilesButton?.addEventListener('click', () => openCanvasFiles());
+  document.getElementById('canvas-files-close')?.addEventListener('click', () => canvasFilesDialog.close());
+  canvasFilesDialog?.addEventListener('close', () => {
+    fileReadVersion += 1;
+    filesCanvasId = '';
+    fileReading = false;
+    updateCanvasBounds();
+  });
+  canvasFilePrevious?.addEventListener('click', () => {
+    if (!currentFilePage || fileReading || currentFilePage.offsets.length < 2) return;
+    const offsets = currentFilePage.offsets.slice(0, -1);
+    readCanvasFilePage(currentFilePage.path, offsets.at(-1), offsets);
+  });
+  canvasFileNext?.addEventListener('click', () => {
+    if (!currentFilePage || fileReading || currentFilePage.nextOffset === null) return;
+    readCanvasFilePage(currentFilePage.path, currentFilePage.nextOffset, [...currentFilePage.offsets, currentFilePage.nextOffset]);
+  });
+  canvasDevicesButton?.addEventListener('click', async () => {
+    if (!activeCanvasId || nativeDialogOpen || typeof client.manageCanvasDevices !== 'function') return;
+    const canvasId = activeCanvasId;
+    nativeDialogOpen = true;
+    canvasDevicesButton.disabled = true;
+    updateCanvasBounds();
+    try {
+      const permissions = await client.manageCanvasDevices(canvasId);
+      setStatus(statusElement, `Camera ${permissions?.camera ? 'allowed' : 'not allowed'}; microphone ${permissions?.microphone ? 'allowed' : 'not allowed'}.`);
+    } catch (error) {
+      setStatus(statusElement, error?.message || 'Could not manage canvas devices. Try again.', true);
+    } finally {
+      nativeDialogOpen = false;
+      canvasDevicesButton.disabled = !activeCanvasId || activePreviewKind !== 'document';
+      updateCanvasBounds();
+    }
+  });
+
   function updateSendState() {
-    sendButton.disabled = chatBusy || (!messageInput.value.trim() && pendingAttachments.length === 0);
-    messageInput.disabled = chatBusy;
-    attachMediaButton.disabled = chatBusy;
-    mediaFileInput.disabled = chatBusy;
-    attachmentStrip.querySelectorAll('button').forEach((button) => { button.disabled = chatBusy; });
-    newChatButton.disabled = chatBusy;
-    for (const button of modeButtons) button.disabled = chatBusy || button.dataset.mode === 'video';
+    const busy = chatBusy || canvasResumeBusy || workspace.isOperating();
+    const running = agentRunning || canvasResumeBusy;
+    workspace.updateBusy();
+    document.getElementById('new-canvas-open').disabled = busy;
+    document.getElementById('canvas-empty-new').disabled = busy;
+    undoCanvasButton.disabled = busy || activePreviewKind !== 'document' || !activeUndoAvailable;
+    sendButton.disabled = running ? stopPending : busy || modelSaving || credentialsSaving || !savedSettings.litellmModel || (!messageInput.value.trim() && pendingAttachments.length === 0);
+    sendButton.dataset.action = running ? 'stop' : 'send';
+    document.getElementById('send-label').textContent = running ? stopPending ? 'Stopping...' : 'Stop' : 'Send';
+    sendButton.setAttribute('aria-label', running ? stopPending ? 'Stopping agent' : 'Stop agent' : 'Send message');
+    sendButton.title = running ? 'Stop the current reply; completed edits are kept' : 'Send message';
+    sendButton.querySelector('svg path').setAttribute('d', running ? 'M4 4h8v8H4Z' : 'M3 8h9M8 4l4 4-4 4');
+    messageInput.disabled = busy;
+    attachMediaButton.disabled = busy;
+    mediaFileInput.disabled = busy;
+    attachmentStrip.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
+    newChatButton.disabled = busy;
+    historyNewChatButton.disabled = busy;
+    chatHistoryButton.disabled = busy;
+    chatHistoryList.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
+    modelSelect.disabled = busy || modelSaving || credentialsSaving || !modelSelect.querySelector('option[value]:not([value=""])');
+    templateSelect.disabled = busy;
+    for (const node of canvasInputNodes.values()) if (node.retry) node.retry.disabled = busy || modelSaving || credentialsSaving || node.retrying;
+    if (canvasResumeBusy) activityElement.hidden = false;
   }
 
   function renderPendingAttachments() {
@@ -979,7 +1200,7 @@ function wireRenderer({ document, client }) {
   }
 
   function addAttachmentFiles(files) {
-    if (chatBusy) return;
+    if (chatBusy || canvasResumeBusy) return;
     const errors = [];
     for (const file of Array.from(files || [])) {
       const media = resolveMediaType(file);
@@ -1023,20 +1244,6 @@ function wireRenderer({ document, client }) {
       prepared.push(item);
     }
     return prepared;
-  }
-
-  function setMode(nextMode) {
-    if (!['chat', 'image'].includes(nextMode)) return;
-    mode = nextMode;
-    for (const button of modeButtons) button.setAttribute('aria-pressed', String(button.dataset.mode === mode));
-    imageSizeWrap.hidden = mode !== 'image';
-    messageInput.placeholder = mode === 'image'
-      ? 'Describe the image you want to create…'
-      : 'Ask Easel a question or describe a canvas edit…';
-    composerHelp.textContent = mode === 'image'
-      ? 'Easel will create an image in this shape · Enter to send · Ctrl+Enter for a new line'
-      : 'Ask for a direction or refine the open canvas · Enter to send · Ctrl+Enter for a new line';
-    sendLabel.textContent = mode === 'image' ? 'Create' : 'Send';
   }
 
   function refreshSkillUi() {
@@ -1148,240 +1355,362 @@ function wireRenderer({ document, client }) {
     setStatus(skillStatus, '');
   }
 
-  function persistSettingsStatus(settings) {
-    const model = typeof settings.litellmModel === 'string' ? settings.litellmModel : '';
-    if (modelProbeState.model !== model) modelProbeState = { model, chat: false, image: false };
-    const configured = Boolean(model);
-    const verified = configured && modelProbeState.chat && modelProbeState.image;
-    connectionDot.classList.toggle('ready', verified);
-    connectionDot.classList.toggle('needs-setup', !verified);
-    connectionDot.title = verified
-      ? 'LiteLLM text and image tests passed'
-      : configured ? 'LiteLLM model selected; connection tests are incomplete' : 'Choose a LiteLLM model in Connections';
-    if (!configured) modelLabel.textContent = 'Choose a model in Connections to start';
-    else if (verified) modelLabel.textContent = `${model} · verified`;
-    else if (modelProbeState.chat) modelLabel.textContent = `${model} · text tested`;
-    else if (modelProbeState.image) modelLabel.textContent = `${model} · image tested`;
-    else modelLabel.textContent = `${model} · not yet tested`;
+  function attachmentPreviews(attachments) {
+    return (attachments || []).flatMap((attachment) => {
+      if (!attachment || !['image', 'audio', 'video'].includes(attachment.type)) return [];
+      const preview = { type: attachment.type, name: attachment.name || 'Canvas capture', mimeType: attachment.mimeType };
+      if (typeof attachment.data === 'string') {
+        try {
+          const bytes = Uint8Array.from(atob(attachment.data), (character) => character.charCodeAt(0));
+          preview.previewUrl = URL.createObjectURL(new Blob([bytes], { type: attachment.mimeType }));
+          messageObjectUrls.add(preview.previewUrl);
+        } catch {}
+      }
+      return [preview];
+    });
   }
 
-  function recordModelProbe(kind, model) {
-    if (modelProbeState.model !== model) modelProbeState = { model, chat: false, image: false };
-    modelProbeState[kind] = true;
-    persistSettingsStatus({ litellmModel: model });
+  function renderCanvasInputNote(request) {
+    if (!request || typeof request.id !== 'string') return;
+    canvasInputs.set(request.id, request);
+    const previous = canvasInputNodes.get(request.id);
+    if (['cancelled', 'superseded'].includes(request.status) || (request.status === 'completed' && !request.actionError)) {
+      previous?.message.remove();
+      canvasInputNodes.delete(request.id);
+      return;
+    }
+    const shouldFollow = messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight < 56;
+    const note = previous?.message || document.createElement('article');
+    note.className = 'canvas-input-note';
+    note.dataset.status = request.status || 'pending';
+    note.dataset.requestId = request.id;
+    const heading = document.createElement('strong');
+    heading.textContent = request.kind === 'choice' ? request.question : 'Capture shared from canvas';
+    const detail = document.createElement('p');
+    const statusCopy = {
+      pending: 'Choose an option in the canvas to continue.',
+      answered: 'Your response is saved. The agent will continue when this canvas is open.',
+      queued: 'Your capture is saved. The agent will continue when this canvas is open.',
+      dispatching: 'Continuing from your canvas response...',
+      failed: 'Your response is saved. The agent could not continue.',
+      interrupted: 'Your response is saved. The previous reply was interrupted.',
+      completed: 'Your response was sent to the agent.',
+    };
+    detail.textContent = statusCopy[request.status] || 'Your response is saved.';
+    if (request.error && ['failed', 'interrupted'].includes(request.status)) detail.textContent += ` ${request.error}`;
+    if (request.actionError) detail.textContent += ' The canvas could not reset automatically.';
+    note.replaceChildren(heading, detail);
+    const actions = document.createElement('div');
+    actions.className = 'button-row';
+    if (request.canvasId !== activeCanvasId || activePreviewKind !== 'document' || (request.documentPath && request.documentPath !== activeDocumentPath)) {
+      const open = createButton(document, 'Open canvas', 'button outline small', async () => {
+        open.disabled = true;
+        try {
+          const documentPath = request.documentPath || (await client.listCanvasFiles(request.canvasId)).manifest.entry;
+          await openCanvas({ id: request.canvasId, documentPath });
+          for (const input of canvasInputs.values()) renderCanvasInputNote(input);
+        } catch {} finally { open.disabled = false; }
+      });
+      actions.append(open);
+    }
+    const node = { message: note, retry: null, retrying: false };
+    if (['failed', 'interrupted'].includes(request.status)) {
+      node.retry = createButton(document, 'Retry response', 'button outline small', async () => {
+        if (chatBusy || canvasResumeBusy || node.retrying) return;
+        node.retrying = true;
+        node.retry.textContent = 'Retrying...';
+        canvasResumeRequests.add(request.id);
+        canvasResumeBusy = true;
+        activityLabel.textContent = 'Continuing from your canvas response...';
+        updateSendState();
+        try {
+          const result = await client.retryCanvasInput(request.id);
+          if (result?.request && canvasInputs.get(request.id) === request) renderCanvasInputNote(result.request);
+        } catch (error) {
+          canvasResumeRequests.delete(request.id);
+          canvasResumeBusy = canvasResumeRequests.size > 0;
+          if (!chatBusy && !canvasResumeBusy) activityElement.hidden = true;
+          detail.textContent = error?.message || 'Could not retry this response. Try again.';
+          setStatus(statusElement, detail.textContent, true);
+        } finally {
+          node.retrying = false;
+          node.retry.textContent = 'Retry response';
+          updateSendState();
+        }
+      });
+      node.retry.disabled = chatBusy || canvasResumeBusy || modelSaving || credentialsSaving;
+      actions.append(node.retry);
+    }
+    if (actions.children.length) note.append(actions);
+    canvasInputNodes.set(request.id, node);
+    if (!previous) messagesElement.append(note);
+    if (shouldFollow) messagesElement.scrollTop = messagesElement.scrollHeight;
   }
 
-  function clearModelProbe(kind, model) {
-    if (modelProbeState.model !== model) modelProbeState = { model, chat: false, image: false };
-    modelProbeState[kind] = false;
-    persistSettingsStatus({ litellmModel: model });
+  function renderCanvasInputAnswer(request, text, attachments = []) {
+    if (!request?.id || canvasAnswerIds.has(request.id)) return;
+    const displayText = request.kind === 'choice'
+      ? canvasInputDisplayText({ content: text }, request)
+      : text || request.prompt || 'Review the media I shared from the canvas.';
+    appendTextMessage(document, messagesElement, 'user', displayText, { attachments: attachmentPreviews(attachments) });
+    canvasAnswerIds.add(request.id);
   }
+
+  function handleCanvasInputEvent(event) {
+    if (!['canvas-input', 'canvas-input-answer', 'canvas-input-resume-start', 'canvas-input-resume-end'].includes(event?.type)) return false;
+    const request = event.request;
+    if (!request?.id) return true;
+    const requestChatId = event.chatId || request.chatId;
+    if (activeChatId && requestChatId && activeChatId !== requestChatId) return true;
+    if (!activeChatId && requestChatId) activeChatId = requestChatId;
+    if (event.type === 'canvas-input-resume-start') {
+      canvasResumeRequests.add(request.id);
+      canvasResumeBusy = true;
+      activityLabel.textContent = 'Continuing from your canvas response...';
+      activityElement.hidden = false;
+      setStatus(statusElement, '');
+    } else if (event.type === 'canvas-input-resume-end') {
+      canvasResumeRequests.delete(request.id);
+      canvasResumeBusy = canvasResumeRequests.size > 0;
+      if (!canvasResumeBusy) stopPending = false;
+      if (!chatBusy && !canvasResumeBusy) activityElement.hidden = true;
+      if (event.saveWarning) setStatus(statusElement, event.saveWarning, true);
+      else if (event.cancelled) setStatus(statusElement, 'Stopped. Your canvas response is saved; use Retry response to continue.');
+      else if (event.error) setStatus(statusElement, event.error, true);
+    } else if (event.type === 'canvas-input-answer') {
+      renderCanvasInputAnswer(request, event.text, event.attachments?.length ? event.attachments : request.attachments);
+    } else if (request.kind === 'choice' && request.value) {
+      renderCanvasInputAnswer(request, '', []);
+    }
+    renderCanvasInputNote(request);
+    updateSendState();
+    return true;
+  }
+
+  function restoreChat(chat) {
+    activeChatId = chat.id || '';
+    messagesElement.replaceChildren();
+    canvasInputs.clear();
+    canvasInputNodes.clear();
+    canvasAnswerIds.clear();
+    canvasResumeRequests.clear();
+    for (const request of chat.canvasInputs || []) {
+      canvasInputs.set(request.id, request);
+      if (request.status === 'dispatching') canvasResumeRequests.add(request.id);
+    }
+    canvasResumeBusy = canvasResumeRequests.size > 0;
+    assetPreviews.clear();
+    pendingAssetCaptions.clear();
+    pendingAttachments = [];
+    for (const url of messageObjectUrls) URL.revokeObjectURL(url);
+    messageObjectUrls.clear();
+    renderPendingAttachments();
+    const images = new Map((chat.images || []).map((image) => [image.assetId, image]));
+    const media = new Map((chat.media || []).map((asset) => [`${asset.requestId}:${asset.assetId}`, asset]));
+    for (const message of chat.history || []) {
+      if (message.role === 'tool') {
+        try {
+          const result = JSON.parse(message.content);
+          for (const asset of result.assets || []) {
+            const image = images.get(asset.assetId);
+            if (!image || assetPreviews.has(asset.assetId)) continue;
+            const preview = appendImagePreviewMessage(document, messagesElement, image);
+            assetPreviews.set(asset.assetId, preview);
+          }
+        } catch {}
+        continue;
+      }
+      if (!['user', 'assistant'].includes(message.role) || message.tool_calls?.length) continue;
+      const parts = Array.isArray(message.content) ? message.content : [];
+      let text = typeof message.content === 'string' ? message.content : parts.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
+      if (!text) continue;
+      const references = message.canvasMediaRefs || [];
+      const attachments = attachmentPreviews([
+        ...parts.filter((part) => ['image', 'audio'].includes(part.type) && typeof part.data === 'string'),
+        ...references.map((reference) => media.get(`${message.canvasInputRequestId}:${reference.assetId}`) || reference),
+      ]);
+      if (message.canvasInputRequestId) {
+        text = canvasInputDisplayText(message, canvasInputs.get(message.canvasInputRequestId));
+        canvasAnswerIds.add(message.canvasInputRequestId);
+      }
+      const imageMode = /^Create one image with size /.test(text);
+      if (imageMode) text = text.replace(/^Create one image with size [^\n]*\n/, '');
+      appendTextMessage(document, messagesElement, message.role, text, {
+        mode: imageMode ? 'image' : 'chat', attachments, copyText, assetPreviews, pendingAssetCaptions,
+      });
+    }
+    for (const request of [...canvasInputs.values()].reverse()) {
+      if (request.kind === 'choice' && request.value) renderCanvasInputAnswer(request, '', []);
+      renderCanvasInputNote(request);
+    }
+    if (!messagesElement.children.length) messagesElement.append(createWelcomeMessage(document, (prompt) => {
+      messageInput.value = prompt;
+      updateSendState();
+      messageInput.focus();
+    }));
+    messagesElement.scrollTop = chat.history?.length ? messagesElement.scrollHeight : 0;
+    if (chat.error) setStatus(statusElement, chat.error, true);
+    if (chat.mediaTruncated && !chat.error) setStatus(statusElement, 'Some older capture previews were omitted. Their saved filenames are still shown.');
+    if (canvasResumeBusy) activityLabel.textContent = 'Continuing from your canvas response...';
+    updateSendState();
+  }
+
+  async function refreshChatHistory() {
+    setStatus(chatHistoryStatus, 'Loading saved chats…');
+    try {
+      const chats = await client.listChats();
+      chatHistoryList.replaceChildren(...chats.map((chat) => {
+        const button = createButton(document, '', 'chat-history-row', async () => {
+          if (chatBusy || canvasResumeBusy) return;
+          chatBusy = true;
+          updateSendState();
+          setStatus(chatHistoryStatus, 'Opening chat…');
+          try {
+            restoreChat(await client.openChat(chat.id));
+            showConversation(false);
+            setStatus(statusElement, `Opened ${chat.title}.`);
+          } catch (error) {
+            setStatus(chatHistoryStatus, error?.message || 'Could not open this chat.', true);
+          } finally {
+            chatBusy = false;
+            updateSendState();
+            if (chatHistoryPanel.hidden) messageInput.focus();
+          }
+        });
+        button.title = chat.title;
+        const title = document.createElement('strong');
+        title.textContent = chat.title || 'Untitled chat';
+        button.disabled = chatBusy || canvasResumeBusy;
+        if (chat.id === activeChatId) button.setAttribute('aria-current', 'true');
+        const date = document.createElement('time');
+        date.dateTime = new Date(chat.updatedAt).toISOString();
+        date.textContent = new Date(chat.updatedAt).toLocaleDateString();
+        button.append(title, date);
+        return button;
+      }));
+      setStatus(chatHistoryStatus, chats.length ? '' : 'No saved chats yet. Start a new chat to make something.');
+    } catch (error) {
+      setStatus(chatHistoryStatus, error?.message || 'Could not load saved chats.', true);
+    }
+  }
+
+  chatHistoryButton.addEventListener('click', () => {
+    showHistory();
+  });
 
   async function refreshAssets() {
-    try {
-      renderAssetLibrary({
-        document,
-        listElement: mediaList,
-        emptyElement: mediaEmpty,
-        assets: await client.listAssets(),
-        canAdd: Boolean(activeCanvasId),
-        onAdd: (assetId) => addAssetToCanvas({ client, assetId, statusElement }).catch(() => {}),
-      });
-    } catch (error) {
-      setStatus(statusElement, error?.message || 'Could not load media.', true);
-    }
+    try { await workspace.refreshAssets(); }
+    catch (error) { setStatus(statusElement, error?.message || 'Could not load media.', true); }
   }
 
-  async function refreshCanvases() {
-    try {
-      const canvases = await client.listCanvases();
-      renderCanvasLibrary({
-        document,
-        listElement: canvasesList,
-        emptyElement: canvasesEmpty,
-        canvases,
-        onOpen: (canvas) => openCanvas(canvas).catch(() => {}),
-        onExport: (canvasId) => exportCanvas({ client, canvasId, statusElement }).catch(() => {}),
-      });
-      if (!canvasTabsRestored) {
-        canvasTabsRestored = true;
-        const savedIds = readOpenCanvasIds(storage);
-        const byId = new Map(canvases.map((canvas) => [canvas.id, canvas]));
-        for (const id of savedIds) {
-          const canvas = byId.get(id);
-          if (canvas) openCanvasTabs.set(canvas.id, { id: canvas.id, title: canvas.title });
-        }
-        writeOpenCanvasIds(openCanvasTabs, storage);
-        renderOpenCanvasTabs();
-        const lastTab = [...openCanvasTabs.values()].at(-1);
-        if (lastTab) await openCanvas(lastTab);
-      }
-    } catch (error) {
-      setStatus(statusElement, error?.message || 'Could not load saved canvases.', true);
-    }
-  }
-
-  function refreshLibraries() {
-    return Promise.all([refreshAssets(), refreshCanvases()]);
+  async function refreshCanvases(restore = false) {
+    try { await workspace.refreshProjects(restore); }
+    catch (error) { setStatus(statusElement, error?.message || 'Could not load projects.', true); }
   }
 
   function updateCanvasState(canvas) {
-    activeCanvasId = typeof canvas?.id === 'string' ? canvas.id : '';
-    if (activeCanvasId) openCanvasTabs.set(activeCanvasId, { id: activeCanvasId, title: canvas.title || 'Easel Canvas' });
-    renderOpenCanvasTabs();
-    writeOpenCanvasIds(openCanvasTabs, storage, activeCanvasId);
-    canvasTitle.textContent = canvas?.title || 'Canvas';
-    canvasState.textContent = activeCanvasId ? 'Open' : 'Ready';
+    activeCanvasId = canvas?.projectId || canvas?.id || '';
+    activeDocumentPath = canvas?.documentPath || '';
+    activePreviewKind = canvas?.previewKind || 'empty';
+    activeUndoAvailable = canvas?.undoAvailable === true;
+    canvasTitle.textContent = canvas?.documentTitle || canvas?.title || 'Project';
+    const mediaPreview = ['image', 'video', 'audio'].includes(activePreviewKind);
+    canvasState.textContent = mediaPreview ? activePreviewKind[0].toUpperCase() + activePreviewKind.slice(1) : activePreviewKind === 'document' ? 'HTML' : activeCanvasId ? 'Project' : 'Ready';
     canvasStateDot.classList.toggle('ready', Boolean(activeCanvasId));
-    exportCurrentButton.disabled = !activeCanvasId;
-    undoCanvasButton.disabled = !activeCanvasId || canvas?.undoAvailable !== true;
-    canvasEmpty.hidden = Boolean(activeCanvasId);
-    refreshAssets();
+    exportCurrentButton.textContent = mediaPreview ? `Download ${activePreviewKind}` : 'Export project';
+    exportCurrentButton.disabled = !activeCanvasId && !mediaPreview;
+    canvasFilesButton.disabled = !activeCanvasId;
+    canvasDevicesButton.disabled = activePreviewKind !== 'document' || nativeDialogOpen;
+    canvasEmpty.hidden = activePreviewKind !== 'empty';
+    for (const request of canvasInputs.values()) renderCanvasInputNote(request);
+    updateSendState();
     updateCanvasBounds();
   }
 
   async function openCanvas(canvas) {
-    setStatus(statusElement, `Opening ${canvas.title || 'canvas'}…`);
+    try { await workspace.openProject(canvas.id, canvas.documentPath); }
+    catch (error) { setStatus(statusElement, error?.message || 'Could not open project.', true); throw error; }
+  }
+
+  const connectionUi = createConnectionSettings({
+    document, client, onSettings: applySettings,
+    onBusy: (busy) => { credentialsSaving = busy; updateSendState(); },
+    onRendered: updateSendState,
+  });
+
+  function applySettings(settings) {
+    savedSettings = settings;
+    const configured = Boolean(settings.activeConnectionId && settings.litellmModel);
+    connectionDot.classList.toggle('ready', configured);
+    connectionDot.classList.toggle('needs-setup', !configured);
+    connectionDot.title = configured ? 'Endpoint and model selected' : 'Add credentials and choose a model in chat';
+    connectionUi.load(settings);
+    updateSendState();
+  }
+
+  function refreshModelCatalog() { return connectionUi.refresh(); }
+
+  modelSelect.addEventListener('change', async () => {
+    if (chatBusy || canvasResumeBusy || modelSaving || credentialsSaving || !modelSelect.value) return;
+    modelSaving = true;
+    updateSendState();
+    setStatus(statusElement, 'Switching model...');
     try {
-      const opened = await client.openCanvas(canvas.id);
-      updateCanvasState(opened);
-      setStatus(statusElement, `Opened ${opened.title || 'canvas'}.`);
+      applySettings(await client.selectModel(JSON.parse(modelSelect.value)));
+      setStatus(statusElement, '');
     } catch (error) {
-      setStatus(statusElement, error instanceof Error ? error.message : 'Could not open canvas.', true);
-      throw error;
-    }
-  }
-
-  function renderOpenCanvasTabs() {
-    const tabs = [...openCanvasTabs.values()].map((canvas) => {
-      const group = document.createElement('div');
-      group.className = 'canvas-tab';
-      group.setAttribute('role', 'group');
-      group.setAttribute('aria-label', canvas.title);
-      group.dataset.active = String(canvas.id === activeCanvasId);
-      const select = document.createElement('button');
-      select.type = 'button';
-      select.className = 'canvas-tab-select';
-      select.textContent = canvas.title;
-      select.title = canvas.title;
-      select.setAttribute('aria-pressed', String(canvas.id === activeCanvasId));
-      select.addEventListener('click', () => {
-        if (canvas.id !== activeCanvasId) openCanvas(canvas).catch(() => {});
-      });
-      const close = document.createElement('button');
-      close.type = 'button';
-      close.className = 'canvas-tab-close';
-      close.title = `Close ${canvas.title}`;
-      close.setAttribute('aria-label', `Close ${canvas.title}`);
-      const closeIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      closeIcon.setAttribute('viewBox', '0 0 16 16');
-      closeIcon.setAttribute('aria-hidden', 'true');
-      const closePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      closePath.setAttribute('d', 'm4 4 8 8M12 4l-8 8');
-      closePath.setAttribute('stroke', 'currentColor');
-      closePath.setAttribute('stroke-width', '1.5');
-      closePath.setAttribute('stroke-linecap', 'round');
-      closeIcon.append(closePath);
-      close.append(closeIcon);
-      close.addEventListener('click', () => closeCanvasTab(canvas.id).catch(() => {}));
-      group.setAttribute('aria-current', String(canvas.id === activeCanvasId));
-      group.append(select, close);
-      return group;
-    });
-    openCanvasTabsElement.replaceChildren(...tabs);
-    openCanvasTabsElement.hidden = tabs.length === 0;
-  }
-
-  async function closeCanvasTab(canvasId) {
-    const canvas = openCanvasTabs.get(canvasId);
-    if (!canvas) return;
-    const remaining = [...openCanvasTabs.values()].filter((item) => item.id !== canvasId);
-    try {
-      if (canvasId === activeCanvasId && remaining.length > 0) {
-        await openCanvas(remaining.at(-1));
-      } else if (canvasId === activeCanvasId) {
-        await client.saveCanvas(canvasId);
-        activeCanvasId = '';
-        canvasTitle.textContent = 'Canvas';
-        canvasState.textContent = 'Ready';
-        canvasStateDot.classList.remove('ready');
-        exportCurrentButton.disabled = true;
-        undoCanvasButton.disabled = true;
-        canvasEmpty.hidden = false;
-        refreshAssets();
-        updateCanvasBounds();
-      }
-      openCanvasTabs.delete(canvasId);
-      renderOpenCanvasTabs();
-      writeOpenCanvasIds(openCanvasTabs, storage, activeCanvasId);
-    } catch (error) {
-      setStatus(statusElement, error?.message || 'Could not close canvas tab.', true);
-    }
-  }
-
-  const refreshLiteLLMButton = document.getElementById('litellm-refresh-models');
-  const testLiteLLMChatButton = document.getElementById('litellm-test-chat');
-  const testLiteLLMImageButton = document.getElementById('litellm-test-image');
-  async function refreshModelCatalog() {
-    const models = await refreshLiteLLMModels({ client, select: fields.litellmModel, statusElement: settingsStatus });
-    persistSettingsStatus({ litellmModel: fields.litellmModel.value });
-    return models;
-  }
-  refreshLiteLLMButton.addEventListener('click', () => {
-    refreshModelCatalog().catch(() => {});
-  });
-  testLiteLLMChatButton.addEventListener('click', () => {
-    testLiteLLMConnection({
-      client, modelSelect: fields.litellmModel, kind: 'chat', statusElement: settingsStatus,
-      button: testLiteLLMChatButton, onSuccess: recordModelProbe, onFailure: clearModelProbe,
-    }).catch(() => {});
-  });
-  testLiteLLMImageButton.addEventListener('click', () => {
-    testLiteLLMConnection({
-      client, modelSelect: fields.litellmModel, kind: 'image', statusElement: settingsStatus,
-      button: testLiteLLMImageButton, onSuccess: recordModelProbe, onFailure: clearModelProbe,
-    }).catch(() => {});
-  });
-  fields.litellmModel.addEventListener('change', () => persistSettingsStatus({ litellmModel: fields.litellmModel.value }));
-  settingsForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    try {
-      const settings = await handleSettingsSubmit({ client, fields, statusElement: settingsStatus });
-      modelProbeState = { model: settings.litellmModel || '', chat: false, image: false };
-      persistSettingsStatus(settings);
-      await refreshModelCatalog().catch(() => {});
-    } catch {}
+      modelSelect.value = connectionUi.selectedValue();
+      setStatus(statusElement, error?.message || 'Could not switch models. Try again.', true);
+    } finally { modelSaving = false; updateSendState(); }
   });
   chatForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (chatBusy) return;
+    if (agentRunning || canvasResumeBusy) {
+      if (stopPending) return;
+      stopPending = true;
+      updateSendState();
+      setStatus(statusElement, 'Stopping...');
+      try {
+        const result = await client.stopAgent();
+        if (!result?.stopping) stopPending = false;
+      } catch (error) {
+        stopPending = false;
+        setStatus(statusElement, error?.message || 'Could not stop the agent. Try again.', true);
+      }
+      updateSendState();
+      return;
+    }
+    if (chatBusy || canvasResumeBusy || workspace.isOperating() || modelSaving || credentialsSaving || !savedSettings.litellmModel) return;
     chatBusy = true;
     updateSendState();
     try {
       const attachments = await preparePendingAttachments();
-      await handleChatSubmit({
+      const result = await handleChatSubmit({
         client,
         document,
         input: messageInput,
         button: sendButton,
         statusElement,
         messagesElement,
-        mode,
-        size: imageSize.value,
+        mode: 'chat',
         skills: localSkills.filter((skill) => skill.enabled).map(({ name, instructions }) => ({ name, instructions })),
         kits: localKits,
         attachments,
         activityElement,
         activityLabel,
         newChatButton,
-        modeButtons,
         copyText,
+        onRunStart: () => { agentRunning = true; updateSendState(); },
       });
+      activeChatId = result.chatId || activeChatId;
+      if (!chatHistoryPanel.hidden) await refreshChatHistory();
       pendingAttachments = [];
       renderPendingAttachments();
     } catch (error) {
       if (!statusElement.classList.contains('error')) setStatus(statusElement, error?.message || 'Could not prepare the attached media.', true);
     } finally {
+      agentRunning = false;
+      stopPending = false;
       chatBusy = false;
       updateSendState();
     }
@@ -1408,20 +1737,40 @@ function wireRenderer({ document, client }) {
     event.preventDefault();
     addAttachmentFiles(event.dataTransfer.files);
   });
-  for (const button of modeButtons) {
-    if (button.dataset.mode !== 'video') button.addEventListener('click', () => setMode(button.dataset.mode));
-  }
+  const promptTemplates = {
+    image: 'Generate an image using the image generation tool. Use a square format unless I specify another shape. Brief: ',
+    canvas: 'Create an interactive canvas with the selected offline kits. Include clear controls and make it work without network access. Idea: ',
+    audio: 'Create an audio sketch on a canvas using Tone.js. Include a Play button that calls Tone.start() from the user gesture, plus Stop and volume controls. Idea: ',
+    video: 'Plan a video storyboard with scenes, timing, transitions, and an audio direction. Present it as a canvas; this is a storyboard, not a generated video. Brief: ',
+  };
+  templateSelect.addEventListener('change', () => {
+    const template = promptTemplates[templateSelect.value];
+    if (template) {
+      messageInput.value = template + messageInput.value;
+      updateSendState();
+      messageInput.focus();
+      messageInput.setSelectionRange(messageInput.value.length, messageInput.value.length);
+    }
+    templateSelect.value = '';
+  });
   document.querySelectorAll('.prompt-suggestion').forEach((button) => {
     button.addEventListener('click', () => {
-      setMode('image');
       messageInput.value = button.dataset.prompt || '';
       updateSendState();
       messageInput.focus();
     });
   });
-  navExplorer.addEventListener('click', () => selectLibraryView('explorer'));
-  navMedia.addEventListener('click', () => selectLibraryView('media'));
-  for (const item of settingsSections) item.tab.addEventListener('click', () => selectSettingsSection(item.id));
+  for (const [index, item] of settingsSections.entries()) {
+    item.tab.addEventListener('click', () => selectSettingsSection(item.id));
+    item.tab.addEventListener('keydown', (event) => {
+      const direction = ['ArrowDown', 'ArrowRight'].includes(event.key) ? 1 : ['ArrowUp', 'ArrowLeft'].includes(event.key) ? -1 : 0;
+      const target = event.key === 'Home' ? 0 : event.key === 'End' ? settingsSections.length - 1 : direction ? (index + direction + settingsSections.length) % settingsSections.length : null;
+      if (target === null) return;
+      event.preventDefault();
+      selectSettingsSection(settingsSections[target].id);
+      settingsSections[target].tab.focus();
+    });
+  }
   for (const checkbox of kitOptions) {
     checkbox.checked = localKits.includes(checkbox.dataset.kit);
     checkbox.addEventListener('change', () => {
@@ -1434,47 +1783,10 @@ function wireRenderer({ document, client }) {
       }
     });
   }
-  document.getElementById('library-collapse').addEventListener('click', () => {
-    setPanelCollapsed('library', !libraryPanel.classList.contains('is-collapsed'));
-  });
-  document.getElementById('chat-collapse').addEventListener('click', () => {
-    setPanelCollapsed('chat', !conversationPanel.classList.contains('is-collapsed'));
-  });
-  let splitPointerId = null;
-  splitter.addEventListener('pointerdown', (event) => {
-    if (libraryPanel.classList.contains('is-collapsed') || conversationPanel.classList.contains('is-collapsed')) return;
-    event.preventDefault();
-    splitPointerId = event.pointerId;
-    splitter.setPointerCapture(event.pointerId);
-    splitter.classList.add('is-dragging');
-    const bounds = leftColumn.getBoundingClientRect();
-    applyPanelRatio((event.clientY - bounds.top) / bounds.height * 100);
-  });
-  splitter.addEventListener('pointermove', (event) => {
-    if (event.pointerId !== splitPointerId) return;
-    const bounds = leftColumn.getBoundingClientRect();
-    applyPanelRatio((event.clientY - bounds.top) / bounds.height * 100);
-  });
-  const stopPanelResize = (event) => {
-    if (event.pointerId !== splitPointerId) return;
-    splitPointerId = null;
-    splitter.classList.remove('is-dragging');
-  };
-  splitter.addEventListener('pointerup', stopPanelResize);
-  splitter.addEventListener('pointercancel', stopPanelResize);
-  splitter.addEventListener('keydown', (event) => {
-    const current = Number(splitter.getAttribute('aria-valuenow')) || 31;
-    if (event.key === 'ArrowUp') applyPanelRatio(current - 5);
-    else if (event.key === 'ArrowDown') applyPanelRatio(current + 5);
-    else if (event.key === 'Home') applyPanelRatio(20);
-    else if (event.key === 'End') applyPanelRatio(75);
-    else return;
-    event.preventDefault();
-  });
   let workbenchPointerId = null;
   const resizeWorkbenchAt = (clientX) => {
     const bounds = leftColumn.getBoundingClientRect();
-    applyWorkbenchWidth(clientX - bounds.left - 6);
+    applyWorkbenchWidth(clientX - bounds.left);
   };
   workbenchSplitter.addEventListener('pointerdown', (event) => {
     event.preventDefault();
@@ -1503,11 +1815,15 @@ function wireRenderer({ document, client }) {
     else return;
     event.preventDefault();
   });
-  activitySettings.addEventListener('click', () => openSettings('connections'));
-  document.getElementById('connections-open').addEventListener('click', () => openSettings('connections'));
+  activitySettings.addEventListener('click', () => openSettings('credentials'));
+  document.getElementById('connections-open').addEventListener('click', () => openSettings('credentials'));
   document.getElementById('settings-close').addEventListener('click', () => settingsDialog.close());
   settingsDialog.addEventListener('close', () => {
     activitySettings.setAttribute('aria-pressed', 'false');
+    if (returnToNewCanvas) {
+      returnToNewCanvas = false;
+      openNewCanvasDialog(creationKind, newCanvasName.value);
+    }
     updateCanvasBounds();
   });
   const openSkills = () => {
@@ -1571,36 +1887,82 @@ function wireRenderer({ document, client }) {
       setStatus(skillStatus, error?.message || 'Could not save this skill.', true);
     }
   });
-  document.getElementById('new-canvas-open').addEventListener('click', () => openDialog(newCanvasDialog, newCanvasName));
-  document.getElementById('canvas-empty-new').addEventListener('click', () => openDialog(newCanvasDialog, newCanvasName));
+  function openNewCanvasDialog(kind = 'document', name = '') {
+    if (chatBusy || canvasResumeBusy) return;
+    creationKind = kind === 'document' && !activeCanvasId ? 'project' : kind;
+    const rename = creationKind === 'rename';
+    const label = rename ? 'Rename project' : creationKind === 'project' ? 'Create project' : 'Create HTML canvas';
+    document.getElementById('new-canvas-title').textContent = label;
+    document.getElementById('new-item-name-label').textContent = creationKind === 'document' ? 'Canvas name' : 'Project name';
+    newCanvasSubmit.textContent = rename ? 'Save name' : label;
+    newCanvasName.value = name;
+    newCanvasName.placeholder = creationKind === 'document' ? 'e.g. Audio study' : 'e.g. Spring campaign';
+    newCanvasDialog.querySelector('.new-canvas-kits').hidden = rename;
+    setStatus(newCanvasStatus, '');
+    newCanvasKits.textContent = kitOptions.filter((option) => localKits.includes(option.dataset.kit))
+      .map((option) => option.closest('label').querySelector('strong').textContent).join(', ');
+    newCanvasAudioHint.textContent = localKits.includes('tone')
+      ? 'Tone.js is included. Audio starts when you click Play in the canvas.'
+      : 'For audio synthesis, enable Tone.js in Canvas kits before creating this canvas.';
+    openDialog(newCanvasDialog, newCanvasName);
+  }
+  document.getElementById('new-canvas-open').addEventListener('click', () => openNewCanvasDialog('document'));
+  document.getElementById('canvas-empty-new').addEventListener('click', () => openNewCanvasDialog('project'));
+  document.getElementById('new-canvas-kits-change').addEventListener('click', () => {
+    returnToNewCanvas = true;
+    newCanvasDialog.close();
+    openSettings('kits');
+  });
   document.getElementById('new-canvas-close').addEventListener('click', () => newCanvasDialog.close());
   newCanvasDialog.addEventListener('close', updateCanvasBounds);
   newCanvasForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     newCanvasSubmit.disabled = true;
+    newCanvasSubmit.textContent = creationKind === 'rename' ? 'Saving...' : 'Creating...';
     try {
-      const canvas = await createCanvas({ client, title: newCanvasName.value, statusElement });
+      const canvas = await workspace.create(creationKind, newCanvasName.value.trim(), localKits);
       newCanvasDialog.close();
       newCanvasName.value = '';
-      updateCanvasState(canvas);
-      await refreshCanvases();
-    } catch {} finally {
+      setStatus(statusElement, creationKind === 'rename' ? 'Project renamed.' : `Created ${canvas.documentTitle || canvas.title}.`);
+    } catch (error) {
+      setStatus(newCanvasStatus, error?.message || 'Could not save this project. Try again.', true);
+    } finally {
       newCanvasSubmit.disabled = false;
+      newCanvasSubmit.textContent = creationKind === 'rename' ? 'Save name' : creationKind === 'project' ? 'Create project' : 'Create HTML canvas';
     }
   });
-  exportCurrentButton.addEventListener('click', () => exportCanvas({ client, canvasId: activeCanvasId, statusElement }).catch(() => {}));
+  exportCurrentButton.addEventListener('click', async () => {
+    nativeDialogOpen = true;
+    exportCurrentButton.disabled = true;
+    updateCanvasBounds();
+    try { await workspace.exportCurrent(); }
+    catch (error) { setStatus(statusElement, error?.message || 'Could not export. Try again.', true); }
+    finally {
+      nativeDialogOpen = false;
+      exportCurrentButton.disabled = !activeCanvasId && !['image', 'video', 'audio'].includes(activePreviewKind);
+      updateCanvasBounds();
+    }
+  });
   undoCanvasButton.addEventListener('click', () => undoCanvas({
     client,
     canvasId: activeCanvasId,
     statusElement,
-    onCanvasChange: updateCanvasState,
+    onCanvasChange: (canvas) => workspace.changed(canvas).catch((error) => setStatus(statusElement, error.message, true)),
   }).catch(() => {}));
   newChatButton.addEventListener('click', async () => {
-    if (chatBusy) return;
+    if (chatBusy || canvasResumeBusy) return;
+    chatBusy = true;
+    updateSendState();
     try {
       await client.clearChat();
+      activeChatId = '';
+      canvasInputs.clear();
+      canvasInputNodes.clear();
+      canvasAnswerIds.clear();
+      canvasResumeRequests.clear();
+      canvasResumeBusy = false;
+      if (!chatHistoryPanel.hidden) await refreshChatHistory();
       messagesElement.replaceChildren(createWelcomeMessage(document, (prompt) => {
-        setMode('image');
         messageInput.value = prompt;
         updateSendState();
         messageInput.focus();
@@ -1613,12 +1975,34 @@ function wireRenderer({ document, client }) {
       renderPendingAttachments();
       messagesElement.scrollTop = 0;
       setStatus(statusElement, 'New chat started.');
+      showConversation(false);
     } catch (error) {
-      setStatus(statusElement, error?.message || 'Could not start a new chat.', true);
+      const message = error?.message || 'Could not start a new chat.';
+      setStatus(statusElement, message, true);
+      if (!chatHistoryPanel.hidden) setStatus(chatHistoryStatus, message, true);
+    } finally {
+      chatBusy = false;
+      updateSendState();
+      if (chatHistoryPanel.hidden) messageInput.focus();
     }
   });
 
   const unsubscribe = client.onAgentEvent((event) => {
+    if (event.type === 'agent-stopped') {
+      activityElement.hidden = true;
+      setStatus(statusElement, event.saveWarning || (event.canvasInputRequestId ? 'Stopped. Your canvas response is saved; use Retry response to continue.' : 'Stopped. Completed edits are kept.'), Boolean(event.saveWarning));
+      return;
+    }
+    if (event.type === 'project-assets') {
+      workspace.assetsChanged(event).catch((error) => setStatus(statusElement, error.message, true));
+      return;
+    }
+    if (event.type === 'media') {
+      refreshAssets();
+      setStatus(statusElement, `${event.name || 'Media capture'} saved to the library.`);
+      return;
+    }
+    if (handleCanvasInputEvent(event)) return;
     renderAgentEvent({
       document,
       messagesElement,
@@ -1630,56 +2014,30 @@ function wireRenderer({ document, client }) {
       assetPreviews,
       pendingAssetCaptions,
       onLibraryRefresh: refreshAssets,
-      onAddToCanvas: (assetId, button) => {
-        if (button?.disabled) return;
-        if (button) {
-          button.disabled = true;
-          button.textContent = 'Adding…';
-        }
-        addAssetToCanvas({
-          client,
-          assetId,
-          statusElement,
-          options: { createIfMissing: true },
-        }).catch(() => {}).finally(() => {
-          if (button) {
-            button.disabled = false;
-            button.textContent = 'Add to canvas';
-          }
-        });
-      },
-      onImageReady: ({ assetId }) => {
-        client.addAssetToCanvas(assetId, { onlyIfEmpty: true, createIfMissing: true })
-          .catch((error) => setStatus(statusElement, `Could not place the generated image on canvas: ${error?.message || 'canvas update failed'}`, true));
-      },
-      onCanvasChange: (canvas) => {
-        updateCanvasState({ id: canvas.canvasId, title: canvas.title, undoAvailable: canvas.undoAvailable });
-        refreshCanvases();
-      },
+      onCanvasChange: (canvas) => workspace.changed(canvas).catch((error) => setStatus(statusElement, error.message, true)),
       onCapabilities: (tools) => {
-        modelLabel.textContent = tools.includes('generate_image') ? 'Easel image tools ready' : 'Image generation unavailable';
+        if (!tools.includes('generate_image')) setStatus(statusElement, 'Enable a Media model in Settings > Models to generate images.');
       },
     });
+    if (canvasResumeBusy) updateSendState();
   });
   client.getSettings().then((settings) => {
-    fields.easelBaseUrl.value = settings.easelBaseUrl;
-    fields.litellmBaseUrl.value = settings.litellmBaseUrl;
-    ensureLiteLLMModelOption(fields.litellmModel, settings.litellmModel);
-    fields.easelApiKey.placeholder = settings.hasEaselApiKey ? 'Saved securely' : 'Optional';
-    fields.litellmApiKey.placeholder = settings.hasLiteLLMApiKey ? 'Saved securely' : 'Optional';
-    persistSettingsStatus(settings);
-  }).catch((error) => setStatus(settingsStatus, error?.message || 'Could not load settings.', true));
+    applySettings(settings);
+    return refreshModelCatalog();
+  }).catch((error) => setStatus(document.getElementById('connection-status'), error?.message || 'Could not load settings.', true));
+  client.getCurrentChat().then(restoreChat)
+    .catch((error) => setStatus(statusElement, error?.message || 'Could not restore the last chat.', true))
+    .finally(() => {
+      chatBusy = false;
+      updateSendState();
+      refreshCanvases(true);
+    });
 
   const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(updateCanvasBounds) : null;
   resizeObserver?.observe(canvasHost);
-  const savedPanelRatio = readStoredValue(PANEL_RATIO_STORAGE_KEY);
-  applyPanelRatio(savedPanelRatio === null ? 31 : Number(savedPanelRatio));
-  selectLibraryView('explorer');
-  selectSettingsSection('connections');
+  selectSettingsSection('credentials');
   const savedWorkbenchWidth = readStoredValue(WORKBENCH_WIDTH_STORAGE_KEY);
   applyWorkbenchWidth(savedWorkbenchWidth === null ? 360 : Number(savedWorkbenchWidth));
-  setPanelCollapsed('library', readStoredValue('easel-studio.library-collapsed.v1') === 'true');
-  setPanelCollapsed('chat', readStoredValue('easel-studio.chat-collapsed.v1') === 'true');
   const handleWindowResize = () => {
     applyWorkbenchWidth(Number(workbenchSplitter.getAttribute('aria-valuenow')) || 360);
     updateCanvasBounds();
@@ -1690,9 +2048,8 @@ function wireRenderer({ document, client }) {
   }
   refreshSkillUi();
   refreshInstalledSkillCatalog();
-  setMode(mode);
   updateSendState();
-  refreshLibraries();
+  refreshCanvases();
   updateCanvasBounds();
 
   return {

@@ -36,9 +36,9 @@ test('preload exposes a narrow frozen API without secret getters', async () => {
   const api = exposed.easelClient;
 
   assert.deepEqual(Object.keys(api).sort(), [
-    'addAssetToCanvas', 'clearChat', 'createCanvas', 'exportCanvas', 'getSettings', 'listAssets', 'listCanvases',
-    'listLiteLLMModels', 'onAgentEvent', 'openCanvas', 'saveCanvas', 'saveSettings', 'sendMessage', 'setCanvasBounds',
-    'testLiteLLMChat', 'testLiteLLMImage', 'undoCanvas',
+    'addAssetToCanvas', 'checkModelCapabilities', 'clearChat', 'createCanvas', 'exportCanvas', 'getCurrentChat', 'getModelCatalog', 'getSettings', 'listAssets', 'listCanvases',
+    'listChats', 'listInstalledSkills', 'listLiteLLMModels', 'onAgentEvent', 'openCanvas', 'openChat', 'openExternal', 'removeConnection', 'saveCanvas', 'saveConnection', 'saveSettings', 'selectModel', 'sendMessage', 'setCanvasBounds',
+    'testLiteLLMChat', 'testLiteLLMImage', 'undoCanvas', 'updateModel',
   ]);
   assert.equal(Object.isFrozen(api), true);
   await api.getSettings();
@@ -51,7 +51,7 @@ test('preload exposes a narrow frozen API without secret getters', async () => {
   await api.clearChat();
   await api.listAssets();
   await api.listCanvases();
-  await api.createCanvas('New board');
+  await api.createCanvas('New board', ['canvas-2d', 'tone']);
   await api.openCanvas('a'.repeat(32));
   await api.saveCanvas('a'.repeat(32));
   await api.exportCanvas('a'.repeat(32));
@@ -62,6 +62,7 @@ test('preload exposes a narrow frozen API without secret getters', async () => {
     'canvases:open', 'canvases:save', 'canvases:export', 'canvas:add-asset', 'canvas:set-bounds',
   ]);
   assert.deepEqual(calls.slice(1, 5).map((call) => call.args), [[], ['model-a'], ['model-a'], ['c'.repeat(32)]]);
+  assert.deepEqual(calls.find((call) => call.channel === 'canvases:create').args, ['New board', ['canvas-2d', 'tone']]);
   const unsubscribe = api.onAgentEvent(() => {});
   assert.equal(listeners.size, 1);
   unsubscribe();

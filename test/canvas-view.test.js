@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const vm = require('node:vm');
 const { createCanvasView } = require('../src/canvas-view');
 
 function createFakeViewDependencies() {
@@ -90,6 +91,29 @@ test('bounds CDP script size and rejects operating without an open canvas', asyn
   await assert.rejects(canvas.execute('document.title'), /open a canvas/i);
   await canvas.present({ html: '<p>safe</p>', assets: [] });
   await assert.rejects(canvas.execute('x'.repeat(17_000)), /16 KiB/i);
+  canvas.destroy();
+});
+
+test('executes agent function bodies with return and await support', async () => {
+  const fake = createFakeViewDependencies();
+  const canvas = await createCanvasView({
+    WebContentsView: fake.WebContentsView,
+    sessionFactory: async () => ({ session: fake.session }),
+    canvasStore: {
+      createEmpty: () => ({ id: 'd'.repeat(32), title: 'Test canvas' }),
+      get: () => ({ html: '<main></main>' }),
+    },
+  });
+  await canvas.createEmpty('Test canvas');
+  const sendCommand = canvas.view.webContents.debugger.sendCommand;
+  canvas.view.webContents.debugger.sendCommand = async (_method, { expression }) => ({
+    result: { value: await vm.runInNewContext(expression, { document: { title: 'Test canvas' } }) },
+  });
+  assert.equal(await canvas.execute('return await Promise.resolve(document.title);'), 'Test canvas');
+  canvas.view.webContents.debugger.sendCommand = sendCommand;
+  fake.state.events['console-message']({ level: 'error', message: 'Synth failed', lineNumber: 7 });
+  const inspected = JSON.parse(await canvas.inspect());
+  assert.deepEqual(inspected.consoleErrors, [{ level: 'error', message: 'Synth failed', line: 7 }]);
   canvas.destroy();
 });
 

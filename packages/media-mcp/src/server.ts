@@ -1,11 +1,17 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod/v4';
 import { captureCanvasScreenshot, type CanvasScreenshot } from './canvas.js';
-import { generateImages, listModels, type EaselImage } from './easel.js';
+import {
+  createImageVariations, editImages, generateImages, listModels,
+  type EaselImage, type EditImageInput, type GenerateImageInput, type ImageVariationInput,
+} from './easel.js';
+import { MAX_IMAGE_BASE64_CHARS, MAX_IMAGE_INPUTS } from './image-upload.js';
 
 interface EaselClient {
-  listModels: () => Promise<string[]>;
-  generateImages: (input: { prompt: string; model?: string; size?: string; n?: number }) => Promise<EaselImage[]>;
+  listModels: (input?: { signal?: AbortSignal }) => Promise<string[]>;
+  generateImages: (input: GenerateImageInput) => Promise<EaselImage[]>;
+  editImages?: (input: EditImageInput) => Promise<EaselImage[]>;
+  createImageVariations?: (input: ImageVariationInput) => Promise<EaselImage[]>;
 }
 
 interface CanvasRenderer {
@@ -25,6 +31,27 @@ const GenerateImageInput = z.object({
   size: z.string().regex(/^\d{2,5}x\d{2,5}$/).optional(),
   n: z.number().int().min(1).max(4).optional(),
 }).strict();
+const ImageUploadInput = z.object({
+  data: z.string().min(1).max(MAX_IMAGE_BASE64_CHARS),
+  mimeType: z.enum(['image/png', 'image/jpeg', 'image/webp']),
+  name: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/).optional(),
+}).strict();
+const EditImageInput = GenerateImageInput.extend({
+  images: z.array(ImageUploadInput).min(1).max(MAX_IMAGE_INPUTS),
+  mask: ImageUploadInput.extend({ mimeType: z.literal('image/png') }).strict().optional(),
+  size: z.union([z.literal('auto'), z.string().regex(/^\d{2,5}x\d{2,5}$/)]).optional(),
+}).strict();
+const ImageVariationInput = GenerateImageInput.omit({ prompt: true }).extend({
+  image: ImageUploadInput,
+}).strict();
+const ConfiguredMediaModels = z.array(z.object({
+  id: z.string().min(1).max(320),
+  model: z.string().min(1).max(256),
+  name: z.string(),
+  endpointName: z.string(),
+  baseUrl: z.string().url().refine((value) => ['http:', 'https:'].includes(new URL(value).protocol)),
+  apiKey: z.string().max(4096),
+}).strict()).max(4096);
 const CaptureCanvasInput = z.object({
   html: z.string().min(1).max(1_048_576),
   assets: z.array(z.object({
@@ -42,49 +69,59 @@ export function registerMediaTools(
   server: ToolRegistrar,
   dependencies: { easel?: EaselClient; canvas?: CanvasRenderer } = {},
 ): void {
-  const easel = dependencies.easel || {
-    listModels: () => listModels({
+  const configured = !dependencies.easel && process.env.EASEL_MEDIA_MODELS !== undefined
+    ? ConfiguredMediaModels.parse(JSON.parse(process.env.EASEL_MEDIA_MODELS)) : null;
+  const providerFor = (id?: string) => {
+    if (configured) {
+      const selected = configured.find((model) => model.id === id);
+      if (!selected) throw new Error('Choose an enabled Media model returned by list_models.');
+      return { model: selected.model, baseUrl: selected.baseUrl, apiKey: selected.apiKey };
+    }
+    return { model: id, baseUrl: process.env.EASEL_BASE_URL, apiKey: process.env.EASEL_API_KEY };
+  };
+  const easel: EaselClient = dependencies.easel || {
+    listModels: (input = {}) => configured ? Promise.resolve(configured.map((model) => model.id)) : listModels({
       baseUrl: process.env.EASEL_BASE_URL,
       apiKey: process.env.EASEL_API_KEY,
+      signal: input.signal,
     }),
-    generateImages: (input: { prompt: string; model?: string; size?: string; n?: number }) => generateImages({
-      baseUrl: process.env.EASEL_BASE_URL,
-      apiKey: process.env.EASEL_API_KEY,
-      ...input,
-    }),
+    generateImages: (input) => generateImages({ ...input, ...providerFor(input.model) }),
+    editImages: (input) => editImages({ ...input, ...providerFor(input.model) }),
+    createImageVariations: (input) => createImageVariations({ ...input, ...providerFor(input.model) }),
   };
   const canvas = dependencies.canvas || {
     capture: (input: Parameters<CanvasRenderer['capture']>[0]) => captureCanvasScreenshot(input),
   };
 
   server.registerTool('list_models', {
-    description: 'List image models available from the configured Easel server.',
+    description: 'List enabled Media models and their exact tool IDs and endpoint names. Image generation, edits, variations, and masks depend on provider support.',
     inputSchema: ListModelsInput,
-  }, async () => {
-    const models = await easel.listModels();
+  }, async (_input, extra) => {
+    const models = await easel.listModels({ signal: extra?.signal });
+    const available = configured ? configured.map(({ id, model, name, endpointName }) => ({ id, model, name, endpointName })) : models;
     return {
-      content: [{ type: 'text', text: `Available models: ${models.join(', ')}` }],
-      structuredContent: { models },
+      content: [{ type: 'text', text: `Available Media models: ${JSON.stringify(available)}` }],
+      structuredContent: { models: available },
     };
   });
 
-  server.registerTool('generate_image', {
-    description: 'Generate image(s) with the configured Easel server.',
-    inputSchema: GenerateImageInput,
-  }, async (input) => {
-    const images = await easel.generateImages(input);
-    return {
-      content: [
-        { type: 'text', text: `Generated ${images.length} image${images.length === 1 ? '' : 's'}.` },
-        ...images.map((image) => ({
-          type: 'image' as const,
-          data: image.data,
-          mimeType: image.mimeType,
-        })),
-      ],
-      structuredContent: { count: images.length, mimeTypes: images.map((image) => image.mimeType) },
-    };
-  });
+  if (!configured || configured.length) {
+    const model = configured ? z.enum(configured.map((model) => model.id)) : GenerateImageInput.shape.model;
+    server.registerTool('generate_image', {
+      description: 'Generate images with an enabled Media model. Use the exact model ID returned by list_models; its endpoint credentials are applied automatically.',
+      inputSchema: GenerateImageInput.extend({ model }).strict(),
+    }, async (input, extra) => imageToolResult(await easel.generateImages({ ...input, signal: extra?.signal }), 'Generated'));
+
+    if (easel.editImages) server.registerTool('edit_image', {
+      description: 'Edit 1-16 supplied reference images with a prompt using the selected Media model and its endpoint credentials. Accepts PNG/JPEG/WebP base64 bytes, at most 32 MiB combined. Optional PNG mask must match the first image and be smaller than 4 MiB; mask support depends on the provider. Easel supports reference edits and rejects masks. dall-e-2 requires one square PNG smaller than 4 MiB.',
+      inputSchema: EditImageInput.extend({ model }).strict(),
+    }, async (input, extra) => imageToolResult(await easel.editImages!({ ...input, signal: extra?.signal }), 'Edited'));
+
+    if (easel.createImageVariations) server.registerTool('create_image_variation', {
+      description: 'Create variations from one PNG/JPEG/WebP reference image (at most 32 MiB) using the selected Media model and its endpoint credentials. Provider support varies. Easel accepts portrait and JPEG references; dall-e-2 requires a square PNG smaller than 4 MiB and a 256x256, 512x512, or 1024x1024 output size.',
+      inputSchema: ImageVariationInput.extend({ model }).strict(),
+    }, async (input, extra) => imageToolResult(await easel.createImageVariations!({ ...input, signal: extra?.signal }), 'Created variations of'));
+  }
 
   server.registerTool('capture_canvas_screenshot', {
     description: 'Render offline HTML/JavaScript with local image assets and return a PNG screenshot.',
@@ -99,6 +136,16 @@ export function registerMediaTools(
       structuredContent: { mimeType: screenshot.mimeType },
     };
   });
+}
+
+function imageToolResult(images: EaselImage[], verb: string) {
+  return {
+    content: [
+      { type: 'text' as const, text: `${verb} ${images.length} image${images.length === 1 ? '' : 's'}.` },
+      ...images.map((image) => ({ type: 'image' as const, data: image.data, mimeType: image.mimeType })),
+    ],
+    structuredContent: { count: images.length, mimeTypes: images.map((image) => image.mimeType) },
+  };
 }
 
 export function createMediaServer(dependencies: { easel?: EaselClient; canvas?: CanvasRenderer } = {}): McpServer {

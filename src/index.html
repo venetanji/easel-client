@@ -35,12 +35,12 @@
       * { scrollbar-color: #aab8ac transparent; scrollbar-width: thin; }
       *::-webkit-scrollbar { width: 9px; height: 9px; }
       *::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 8px; background: #aab8ac; background-clip: padding-box; }
-      .studio { --left-column-width: 360px; width: 100%; height: 100%; min-width: 0; min-height: 0; padding: 14px; display: grid; grid-template-columns: 42px minmax(280px, var(--left-column-width)) 12px minmax(300px, 1fr); grid-template-rows: 52px minmax(0, 1fr); gap: 12px; }
-      .topbar { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 4px 10px; border-bottom: 1px solid #bdc8be; }
-      .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
-      .brand-mark { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px 10px 10px 3px; background: var(--green); color: var(--paper); font: 600 20px/1 var(--display); }
+      .studio { --left-column-width: 360px; width: 100%; height: 100%; min-width: 0; min-height: 0; display: grid; grid-template-columns: 44px minmax(280px, var(--left-column-width)) 1px minmax(300px, 1fr); grid-template-rows: 48px minmax(0, 1fr); }
+      .topbar { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; gap: 20px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--paper); }
+      .brand { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 0 0 auto; }
+      .brand-mark { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 8px 8px 8px 2px; background: var(--green); color: var(--paper); font: 600 19px/1 var(--display); }
       .brand h1 { margin: 0; font: 600 19px/1.05 var(--display); letter-spacing: -.025em; }
-      .topbar-actions, .button-row { display: flex; align-items: center; gap: 7px; }
+      .topbar-actions, .button-row { display: flex; align-items: center; gap: 6px; }
       .button { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; border-radius: 8px; padding: 7px 11px; color: var(--ink); background: transparent; font-size: 12px; font-weight: 600; transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease; }
       .button:hover:not(:disabled) { background: #e9eee8; }
       .button.outline { border-color: #c8d0c8; background: var(--paper); }
@@ -56,52 +56,29 @@
       .connection-dot.ready, .state-dot.ready { background: #3d7a54; }
       .connection-dot.needs-setup { background: var(--gold); }
       .active-count { min-width: 19px; min-height: 19px; display: inline-grid; place-items: center; border-radius: 6px; padding: 0 5px; color: var(--green-deep); background: var(--green-wash); font-size: 11px; font-variant-numeric: tabular-nums; }
-      .activity-bar { grid-column: 1; grid-row: 2; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; border: 1px solid #274637; border-radius: 11px; padding: 8px 4px; background: #193a2f; }
+      .activity-bar { grid-column: 1; grid-row: 2; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 7px 4px; border-right: 1px solid var(--line); background: var(--paper-deep); }
       .activity-spacer { flex: 1; }
-      .activity-button { position: relative; width: 34px; height: 38px; display: grid; place-items: center; border: 0; border-radius: 7px; color: #d0dbd1; background: transparent; }
-      .activity-button:hover, .activity-button:focus-visible { color: white; background: #315440; }
-      .activity-button[aria-pressed="true"] { color: white; background: #315440; box-shadow: inset 0 0 0 1px #64806d; }
-      .activity-button[aria-pressed="true"]::after { position: absolute; right: -5px; width: 3px; height: 21px; border-radius: 2px; background: #d98961; content: ""; }
+      .activity-button { position: relative; width: 34px; height: 36px; display: grid; place-items: center; border: 0; border-radius: 5px; color: var(--muted); background: transparent; }
+      .activity-button:hover, .activity-button:focus-visible { color: var(--green-deep); background: var(--green-wash); }
+      .activity-button[aria-pressed="true"] { color: var(--green-deep); background: var(--green-wash); }
+      .activity-button[aria-pressed="true"]::after { position: absolute; left: -4px; width: 2px; height: 20px; background: var(--green); content: ""; }
       .activity-button svg { width: 19px; height: 19px; }
-      .left-column { grid-column: 2; grid-row: 2; --library-ratio: 31fr; --chat-ratio: 69fr; min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(150px, var(--library-ratio)) 12px minmax(250px, var(--chat-ratio)); gap: 0; }
-      .workbench-splitter { position: relative; z-index: 1; grid-column: 3; grid-row: 2; min-width: 12px; cursor: col-resize; touch-action: none; }
-      .workbench-splitter::before { position: absolute; top: calc(50% - 22px); left: 4px; width: 4px; height: 44px; border-radius: 4px; background: #aab9ab; content: ""; transition: background-color 120ms ease, transform 120ms ease; }
-      .workbench-splitter:hover::before, .workbench-splitter:focus-visible::before, .workbench-splitter.is-dragging::before { background: var(--coral); transform: scaleY(1.12); }
-      .left-column.is-library-collapsed { grid-template-rows: 48px 0 minmax(0, 1fr); }
-      .left-column.is-chat-collapsed { grid-template-rows: minmax(0, 1fr) 0 48px; }
-      .left-column.is-library-collapsed.is-chat-collapsed { grid-template-rows: 48px 0 48px; }
-      .panel-splitter { position: relative; z-index: 1; min-height: 12px; cursor: row-resize; touch-action: none; }
-      .panel-splitter::before { position: absolute; top: 4px; left: calc(50% - 22px); width: 44px; height: 4px; border-radius: 4px; background: #aab9ab; content: ""; transition: background-color 120ms ease, transform 120ms ease; }
-      .panel-splitter:hover::before, .panel-splitter:focus-visible::before, .panel-splitter.is-dragging::before { background: var(--coral); transform: scaleX(1.12); }
-      .left-column.is-library-collapsed .panel-splitter, .left-column.is-chat-collapsed .panel-splitter { visibility: hidden; pointer-events: none; }
-      .panel { min-width: 0; min-height: 0; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); }
-      .library { display: flex; flex-direction: column; overflow: hidden; }
-      .section-head { min-height: 47px; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 13px 9px; border-bottom: 1px solid #e5e7df; }
+      .left-column { position: relative; grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
+      .workbench-splitter { position: relative; z-index: 5; grid-column: 3; grid-row: 2; width: 9px; margin-left: -4px; cursor: col-resize; touch-action: none; }
+      .workbench-splitter::before { position: absolute; inset: 0 4px; background: var(--line); content: ""; transition: background-color 120ms ease; }
+      .workbench-splitter:hover::before, .workbench-splitter:focus-visible::before, .workbench-splitter.is-dragging::before { background: var(--green); }
+      .panel { min-width: 0; min-height: 0; background: var(--paper); }
+      .library { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; overflow: hidden; background: var(--paper); animation: drawer-reveal 180ms cubic-bezier(.16, 1, .3, 1); }
+      .section-head { min-height: 44px; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
       .section-head h2 { flex: 0 0 auto; }
-      .library-panel-content { min-height: 0; display: flex; flex: 1; flex-direction: column; overflow: hidden; }
-      .library.is-collapsed .library-panel-content { display: none; }
+      .library-panel-content { min-height: 0; display: flex; flex: 1; flex-direction: column; overflow: auto; }
       .fold-button { width: 28px; height: 28px; flex: 0 0 auto; display: grid; place-items: center; border: 0; border-radius: 6px; color: #58675f; background: transparent; }
       .fold-button:hover { color: var(--green-deep); background: var(--green-wash); }
       .fold-button svg { width: 14px; height: 14px; transition: transform 150ms ease; }
-      .library.is-collapsed .fold-button svg, .conversation.is-collapsed .fold-button svg { transform: rotate(180deg); }
       h2 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: -.01em; }
-      .library-tabs, .mode-switch { display: flex; align-items: center; gap: 2px; border: 1px solid #d9ded7; border-radius: 8px; padding: 2px; background: #f0f1eb; }
-      .library-tab, .mode-button { min-height: 29px; border: 0; border-radius: 6px; padding: 5px 9px; color: #57665d; background: transparent; font-size: 11px; font-weight: 600; }
-      .library-tab { padding-inline: 8px; }
-      .library-tab[aria-pressed="true"], .mode-button[aria-pressed="true"] { color: var(--green-deep); background: white; box-shadow: 0 1px 2px #20382918; }
-      .library-content { flex: 1; min-height: 0; overflow: auto; padding: 10px; }
-      .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(82px, 1fr)); gap: 8px; align-content: start; }
-      .media-item { min-width: 0; overflow: hidden; border: 1px solid #dde2db; border-radius: 8px; background: var(--paper-deep); }
-      .media-thumb { aspect-ratio: 1; display: grid; place-items: center; overflow: hidden; background: #eeefe9; }
-      .media-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
-      .media-label { overflow: hidden; padding: 7px 7px 3px; color: #405149; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-      .media-add { width: 100%; min-height: 30px; border: 0; border-top: 1px solid #dde2db; padding: 5px; color: var(--green); background: #f8f8f4; font-size: 11px; font-weight: 600; }
-      .media-add:hover:not(:disabled) { background: var(--green-wash); }
+      .library-content { padding: 12px; }
+      .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 16px 10px; align-content: start; }
       .canvas-list { display: grid; align-content: start; }
-      .canvas-row { min-height: 43px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; border-bottom: 1px solid #e5e8e2; padding: 4px 2px; }
-      .canvas-open { overflow: hidden; border: 0; border-radius: 5px; padding: 7px 5px; color: var(--ink); background: transparent; text-align: left; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
-      .canvas-open:hover { color: var(--green); text-decoration: underline; text-underline-offset: 3px; }
-      .canvas-export { min-height: 30px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; color: var(--muted); background: white; font-size: 11px; font-weight: 600; }
       .empty-library { margin: 8px 4px; color: #56665d; font-size: 12px; line-height: 1.5; }
       .runtime-intro { margin: 2px 2px 11px; }
       .runtime-intro h3 { margin: 0; color: #2d4136; font: 600 17px/1.1 var(--display); }
@@ -120,22 +97,54 @@
       .kit-option strong { color: #2e4438; font-size: 12px; }
       .kit-option small { margin-top: 4px; color: #5e6c63; font-size: 12px; line-height: 1.4; }
       .kit-status { min-height: 18px; margin: 10px 19px 16px; color: var(--muted); font-size: 12px; }
-      .conversation { display: flex; flex-direction: column; overflow: hidden; }
+      .conversation { width: 100%; display: flex; flex-direction: column; overflow: hidden; }
       .conversation-head { min-height: 49px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px 0 14px; border-bottom: 1px solid #e5e7df; }
-      .conversation.is-collapsed .conversation-content { display: none; }
       .conversation-actions { display: flex; align-items: center; gap: 4px; }
-      .conversation-title { display: grid; gap: 3px; }
-      .conversation-title small { color: var(--muted); font-size: 12px; }
+      .conversation-title { display: grid; gap: 3px; min-width: 0; }
+      .conversation-actions { flex-shrink: 0; }
+      .chat-history { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; min-height: 0; background: var(--paper); }
+      .chat-history .section-head { min-height: 49px; }
+      .chat-history .section-head h2 { font: 600 20px/1.15 var(--display); letter-spacing: -.02em; }
+      .chat-history-list { flex: 1; min-height: 0; overflow: auto; padding: 8px 12px; }
+      .chat-history-row { display: block; width: 100%; min-height: 66px; border: 0; border-radius: 6px; padding: 11px 10px; color: var(--ink); background: transparent; text-align: left; }
+      .chat-history-row + .chat-history-row { margin-top: 2px; }
+      .chat-history-row strong { display: block; overflow: hidden; font-size: 12px; font-weight: 600; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+      .chat-history-row time { display: block; margin-top: 5px; font-variant-numeric: tabular-nums; }
+      .chat-history-row:hover:not(:disabled), .chat-history-list [aria-current="true"] { color: var(--green); background: var(--green-wash); }
+      .chat-history-list time, #chat-history-status { color: var(--muted); font-size: 11px; }
+      #chat-history-status { margin: 12px 20px 0; line-height: 1.5; }
+      #chat-history-status:empty { display: none; }
+      .chat-history-note { flex: 0 0 auto; margin: 0; border-top: 1px solid var(--line); padding: 12px 20px; color: var(--muted); font-size: 11px; line-height: 1.5; }
       .conversation-content { min-height: 0; display: flex; flex: 1; flex-direction: column; overflow: hidden; }
-      #messages { flex: 1; min-height: 0; overflow: auto; padding: 15px 14px; display: flex; flex-direction: column; align-items: stretch; gap: 15px; }
+      #messages { flex: 1; min-height: 0; overflow: auto; padding: 14px 12px; display: flex; flex-direction: column; align-items: stretch; gap: 16px; }
       .message { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; font-size: 12px; }
       .message.assistant { align-self: stretch; color: #27372f; }
+      .message-welcome { white-space: normal; }
       .message.assistant:not(.message-welcome)::before, .message.user[data-mode="image"]::before { display: block; margin-bottom: 5px; font: 700 9px/1.2 "Segoe UI", sans-serif; letter-spacing: .08em; }
       .message.assistant:not(.message-welcome)::before { color: #57675e; content: "EASEL"; }
       .message.user[data-mode="image"]::before { color: #e8c7ba; content: "IMAGE BRIEF"; }
       .message.user { align-self: flex-end; max-width: 88%; border-radius: 12px 12px 4px 12px; padding: 9px 12px; color: white; background: var(--green); }
       .message-author { margin-bottom: 5px; color: #57675e; font-size: 11px; font-weight: 700; }
       .message-content { max-width: 68ch; }
+      .message-content.markdown { white-space: normal; }
+      .markdown > :first-child { margin-top: 0; }
+      .markdown > :last-child { margin-bottom: 0; }
+      .markdown p { margin: 0 0 10px; }
+      .markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { margin: 18px 0 7px; font-size: 13px; line-height: 1.35; color: var(--green-deep); }
+      .markdown h1 { font-size: 17px; }
+      .markdown h2 { font-size: 15px; }
+      .markdown ul, .markdown ol { margin: 8px 0 12px; padding-left: 21px; }
+      .markdown li { margin: 4px 0; }
+      .markdown li > p { margin-bottom: 5px; }
+      .markdown code { padding: 1px 4px; border-radius: 3px; background: #e8ece3; font: 11px/1.5 Consolas, monospace; }
+      .markdown pre { max-width: 100%; overflow-x: auto; margin: 10px 0 13px; padding: 12px; border-radius: 7px; background: #e8ece3; white-space: pre; }
+      .markdown pre code { padding: 0; background: transparent; }
+      .markdown a { color: var(--green); text-decoration: underline; text-underline-offset: 3px; }
+      .markdown blockquote { margin: 10px 0; padding-left: 12px; border-left: 1px solid #8c9d8d; color: #506257; }
+      .markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 10px 0 13px; }
+      .markdown th, .markdown td { border-bottom: 1px solid var(--line); padding: 7px 9px; text-align: left; }
+      .markdown th { color: var(--green-deep); background: #e8ece3; }
+      .markdown hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
       .message-asset-preview { width: min(100%, 320px); margin: 0; overflow: hidden; border: 1px solid #d8ded5; border-radius: 9px; background: white; }
       .message-asset-preview img { display: block; width: 100%; height: 240px; object-fit: contain; background: var(--paper-deep); }
       .message-asset-preview figcaption { border-top: 1px solid #e4e8e1; padding: 7px 9px; color: #405249; font-size: 12px; line-height: 1.35; }
@@ -150,6 +159,13 @@
       .message-actions { align-self: flex-start; margin-top: -14px; margin-bottom: -8px; }
       .message-actions button { min-height: 26px; border: 0; border-radius: 5px; padding: 3px 6px; color: #58675f; background: transparent; font-size: 11px; font-weight: 600; }
       .message-actions button:hover { color: var(--green); background: var(--green-wash); }
+      .canvas-input-note { align-self: stretch; padding: 11px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .canvas-input-note strong { display: block; margin-bottom: 4px; color: var(--green-deep); font-weight: 600; }
+      .canvas-input-note p { margin: 0; }
+      .canvas-input-note .button-row { flex-wrap: wrap; margin-top: 8px; }
+      .canvas-input-note[data-status="failed"] p, .canvas-input-note[data-status="interrupted"] p { color: #963c2c; }
+      .message-attachment.metadata-only { border: 0; background: transparent; }
+      .message-attachment.metadata-only figcaption { border: 0; padding: 0; white-space: normal; }
       .welcome-copy { max-width: 34ch; }
       .welcome-copy strong { display: block; margin: 0 0 5px; color: var(--green-deep); font: 600 20px/1.12 var(--display); letter-spacing: -.02em; }
       .welcome-copy p { margin: 0; color: #53635a; font-size: 12px; line-height: 1.5; }
@@ -162,19 +178,20 @@
       @keyframes activity-pulse { 50% { opacity: .42; transform: scale(.78); } }
       #status { min-height: 0; margin: 0; padding: 0 13px; color: var(--muted); font-size: 12px; }
       #status:not(:empty) { padding-top: 4px; padding-bottom: 5px; }
-      #status.error, #settings-status.error, #skill-status.error, #kit-status.error { color: #9d3727; }
-      #chat-form { display: grid; gap: 7px; border-top: 1px solid #e5e7df; padding: 9px; }
-      .composer { overflow: hidden; border: 1px solid #c9d1c9; border-radius: 9px; background: white; transition: border-color 150ms ease, box-shadow 150ms ease; }
-      .composer:focus-within { border-color: #73947b; box-shadow: 0 0 0 2px #789a7e2b; }
-      .composer-topline { min-height: 39px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; border-bottom: 1px solid #eceee9; }
-      .composer-options { display: flex; align-items: center; gap: 7px; min-width: 0; }
+      #status.error, #settings-status.error, #skill-status.error, #kit-status.error, #new-canvas-status.error, #chat-history-status.error { color: #9d3727; }
+      #chat-form { display: grid; gap: 0; border-top: 1px solid var(--line); padding: 0; }
+      .composer { overflow: hidden; background: var(--paper); }
+      .composer:focus-within { background: #fffefa; }
+      .composer-topline { min-height: 38px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 5px 10px; }
+      .composer-options { display: flex; flex: 1 1 100%; align-items: center; gap: 7px; min-width: 0; }
+      .model-picker { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; color: var(--muted); font-size: 11px; }
+      #chat-model { width: 100%; min-width: 0; min-height: 30px; border: 0; border-radius: 5px; padding: 4px 5px; color: var(--green-deep); background: var(--green-wash); font-size: 12px; font-weight: 600; text-overflow: ellipsis; }
+      #prompt-template { max-width: 130px; min-height: 29px; border: 0; border-radius: 5px; padding: 4px; color: var(--muted); background: transparent; font-size: 11px; }
+      #prompt-template:hover { background: var(--green-wash); }
+      #chat-model:disabled, #prompt-template:disabled { opacity: .58; }
       #attach-media { flex: 0 0 auto; }
       #attach-media svg { width: 15px; height: 15px; }
-      #composer-skills { flex: 0 0 auto; white-space: nowrap; }
-      .mode-button { min-height: 29px; padding: 4px 8px; }
-      .mode-button:disabled { opacity: .52; }
-      #image-size-wrap { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; font-weight: 600; }
-      #image-size { width: auto; min-height: 29px; border: 1px solid transparent; border-radius: 6px; padding: 3px 20px 3px 6px; color: #46574e; background: transparent; font-size: 11px; }
+      #composer-skills { flex: 0 0 auto; margin-left: auto; white-space: nowrap; }
       #message { display: block; width: 100%; min-height: 64px; max-height: 140px; resize: vertical; border: 0; border-radius: 0; padding: 10px 11px 5px; color: var(--ink); background: transparent; line-height: 1.45; font-size: 12px; }
       #message:focus { outline: none; }
       .attachment-strip { display: flex; flex-wrap: wrap; gap: 7px; padding: 8px 9px; border-bottom: 1px solid #eceee9; }
@@ -186,22 +203,25 @@
       .attachment-remove { position: absolute; top: 2px; right: 2px; min-width: 22px; min-height: 22px; border: 0; border-radius: 5px; color: white; background: #183c2fd9; font-size: 10px; font-weight: 700; }
       .attachment-remove:hover { background: #913e2e; }
       #message::placeholder, input::placeholder, textarea::placeholder { color: #65736b; opacity: 1; }
-      .composer-footer { min-height: 37px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 7px 7px 10px; }
+      .composer-footer { min-height: 37px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px 9px; }
       .composer-help { min-width: 0; color: #68766e; font-size: 12px; line-height: 1.3; }
       #send { min-width: 70px; min-height: 31px; }
       #send svg { width: 13px; height: 13px; }
-      .canvas-panel { grid-column: 4; grid-row: 2; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: #f8f8f3; }
-      .canvas-toolbar { min-height: 53px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 15px; border-bottom: 1px solid #dce1d9; }
-      .canvas-heading { display: flex; align-items: center; gap: 9px; min-width: 0; }
+      #send[data-action="stop"] { min-width: 70px; color: #963c2c; background: #f4e7e0; }
+      #send[data-action="stop"]:hover:not(:disabled) { color: #7c2d20; background: #ead3c8; }
+      .canvas-panel { grid-column: 4; grid-row: 2; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--paper); }
+      .canvas-toolbar { min-height: 46px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
+      .canvas-heading { display: flex; flex: 1 1 140px; align-items: center; gap: 9px; min-width: 0; }
       .canvas-heading h2 { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-      .canvas-state { display: inline-flex; align-items: center; gap: 6px; color: #53665a; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+      .canvas-state { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; white-space: nowrap; }
       .canvas-state .state-dot { width: 6px; height: 6px; }
-      .canvas-toolbar-actions { display: flex; gap: 6px; }
-      .canvas-tabs { min-height: 40px; display: flex; align-items: stretch; gap: 3px; overflow-x: auto; border-bottom: 1px solid #dce1d9; padding: 5px 8px 0; background: #f2f3ed; }
-      .canvas-tab { min-width: 0; max-width: 210px; display: flex; align-items: stretch; border: 1px solid transparent; border-bottom: 0; border-radius: 7px 7px 0 0; background: transparent; }
-      .canvas-tab[data-active="true"] { border-color: #d3dbd2; color: var(--green-deep); background: var(--paper); }
-      .canvas-tab-select { min-width: 0; overflow: hidden; border: 0; padding: 7px 8px; color: inherit; background: transparent; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 650; }
-      .canvas-tab-close { width: 26px; flex: 0 0 auto; display: grid; place-items: center; border: 0; border-radius: 0 6px 0 0; color: #68766e; background: transparent; }
+      .canvas-toolbar-actions { display: flex; flex-wrap: wrap; gap: 2px; margin-left: auto; }
+      .canvas-toolbar-actions .button { white-space: nowrap; }
+      .canvas-tabs { min-height: 38px; flex: 0 0 auto; display: flex; align-items: stretch; gap: 4px; overflow-x: auto; padding: 0 10px; background: var(--paper); }
+      .canvas-tab { min-width: 0; max-width: 240px; flex: 0 0 auto; display: flex; align-items: stretch; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; }
+      .canvas-tab[data-active="true"] { border-bottom-color: var(--green); color: var(--green-deep); }
+      .canvas-tab-select { min-width: 0; overflow: hidden; border: 0; padding: 9px 8px; color: inherit; background: transparent; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+      .canvas-tab-close { width: 28px; flex: 0 0 auto; display: grid; place-items: center; border: 0; border-radius: 4px; color: var(--muted); background: transparent; }
       .canvas-tab-close svg { width: 12px; height: 12px; }
       .canvas-tab-close:hover { color: #953c2b; background: #f4e9e4; }
       .canvas-host { position: relative; flex: 1; min-height: 180px; overflow: hidden; background: #fff; }
@@ -213,22 +233,78 @@
       .canvas-empty .button { pointer-events: auto; margin-top: 3px; }
       dialog { width: min(520px, calc(100% - 28px)); max-height: calc(100% - 28px); overflow: auto; border: 0; border-radius: 13px; padding: 0; color: var(--ink); background: var(--paper); box-shadow: 0 18px 60px #17251f38; }
       dialog::backdrop { background: #17251f75; }
-      dialog.settings-dialog { width: min(980px, calc(100% - 28px)); max-height: min(760px, calc(100% - 28px)); }
+      dialog.settings-dialog { width: min(980px, calc(100% - 28px)); height: min(720px, calc(100% - 28px)); max-height: calc(100% - 28px); overflow: hidden; }
+      dialog.settings-dialog[open] { display: flex; flex-direction: column; }
       .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 17px; border-bottom: 1px solid #e0e5dd; }
       .dialog-head h2 { font: 600 20px/1.1 var(--display); letter-spacing: -.02em; }
       .dialog-description { max-width: 58ch; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
-      .settings-shell { min-height: 470px; display: grid; grid-template-columns: 164px minmax(0, 1fr); }
+      .settings-dialog .dialog-head { flex: 0 0 auto; }
+      dialog.canvas-files-dialog { width: min(900px, calc(100% - 28px)); height: min(680px, calc(100% - 28px)); overflow: hidden; }
+      dialog.canvas-files-dialog[open] { display: flex; flex-direction: column; }
+      .canvas-files-dialog .dialog-head { flex: 0 0 auto; }
+      .canvas-files-summary { flex: 0 0 auto; margin: 0; padding: 10px 17px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .canvas-files-layout { display: grid; grid-template-columns: minmax(150px, 24%) minmax(0, 1fr); flex: 1 1 auto; min-height: 0; }
+      .canvas-files-list { min-height: 0; overflow: auto; padding: 7px; border-right: 1px solid var(--line); }
+      .canvas-file-item { display: flex; flex-direction: column; gap: 3px; width: 100%; min-height: 44px; margin: 1px 0; border: 0; border-radius: 6px; padding: 8px; color: var(--ink); background: transparent; text-align: left; }
+      .canvas-file-item:hover:not(:disabled), .canvas-file-item[aria-current="true"] { color: var(--green-deep); background: var(--green-wash); }
+      .canvas-file-item span { overflow-wrap: anywhere; font: 12px/1.4 Consolas, monospace; }
+      .canvas-file-item small { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+      .canvas-file-view { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--paper-deep); }
+      .canvas-file-heading { flex: 0 0 auto; overflow-wrap: anywhere; margin: 0; padding: 11px 13px; border-bottom: 1px solid var(--line); color: var(--green-deep); font: 600 12px/1.4 Consolas, monospace; }
+      .canvas-file-source { flex: 1 1 auto; min-height: 0; min-width: 0; overflow: auto; margin: 0; padding: 13px; color: var(--ink); font: 12px/1.65 Consolas, monospace; tab-size: 2; white-space: pre; }
+      .canvas-file-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; padding: 9px 13px; border-top: 1px solid var(--line); }
+      .canvas-file-footer p { margin: 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+      .settings-shell { flex: 1; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 164px minmax(0, 1fr); }
       .settings-nav { display: grid; align-content: start; gap: 4px; border-right: 1px solid #e0e5dd; padding: 12px 8px; background: #f3f3ed; }
       .settings-tab { min-height: 36px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 7px; padding: 6px 9px; color: #526258; background: transparent; text-align: left; font-size: 12px; font-weight: 650; }
       .settings-tab:hover { color: var(--green-deep); background: #e8eee6; }
       .settings-tab[aria-selected="true"] { color: var(--green-deep); background: white; box-shadow: 0 1px 2px #20382918; }
       .settings-tab svg { width: 16px; height: 16px; flex: 0 0 auto; }
-      .settings-section { min-width: 0; max-height: min(680px, calc(100vh - 100px)); overflow: auto; }
+      .settings-section { min-width: 0; min-height: 0; overflow: auto; }
       .settings-section-head { padding: 18px 19px 0; }
       .settings-section-head h3 { margin: 0 0 5px; color: #2d4136; font: 600 18px/1.12 var(--display); }
       .settings-section-head p { max-width: 62ch; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
       .settings-form { display: grid; gap: 13px; padding: 16px 17px 18px; }
-      label.field { display: grid; gap: 6px; color: #405249; font-size: 12px; font-weight: 700; }
+      .settings-block { margin: 20px 19px 0; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+      .settings-block:last-child { border-bottom: 0; }
+      .settings-block-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+      .settings-block-head h4, .endpoint-editor h4 { margin: 0; color: #2d4136; font-size: 13px; font-weight: 700; }
+      .settings-block p, .endpoint-detail, .model-catalog p { margin: 5px 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .endpoint-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 13px 0; border-top: 1px solid #e1e6dc; }
+      .endpoint-info { flex: 1 1 220px; min-width: 0; }
+      .endpoint-name { color: var(--ink); font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
+      .endpoint-detail { overflow-wrap: anywhere; }
+      .endpoint-editor { margin-top: 12px; border-top: 1px solid var(--line); padding: 16px 0 0; }
+      .endpoint-form-grid { display: grid; grid-template-columns: 1fr 1fr; align-items: start; gap: 13px; }
+      .endpoint-form-grid .endpoint-url { grid-column: 1 / -1; }
+      .field-hint { color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.5; }
+      .settings-block .settings-form { padding: 10px 0 0; }
+      .model-catalog { padding: 10px 19px 20px; }
+      .model-group { margin-top: 14px; }
+      .model-group h4 { margin: 0; color: var(--green-deep); font-size: 13px; overflow-wrap: anywhere; }
+      .model-group-head { padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+      .model-catalog-list { padding: 0; margin: 0; list-style: none; }
+      .model-catalog-list li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #e8ebe3; font-size: 12px; overflow-wrap: anywhere; }
+      .model-enabled { display: grid; place-items: center; min-height: 30px; cursor: pointer; }
+      .model-enabled input { width: 16px; height: 16px; accent-color: var(--green); cursor: pointer; }
+      .model-info { min-width: 0; display: grid; gap: 4px; }
+      .model-name { color: var(--ink); font-weight: 600; }
+      .model-catalog-list li[data-enabled="false"] .model-name { color: var(--muted); font-weight: 400; }
+      .model-controls { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 143px; }
+      .model-capabilities { display: flex; align-items: center; gap: 6px; }
+      .model-capability { display: grid; place-items: center; width: 26px; height: 28px; color: var(--muted); }
+      .model-capability svg { width: 20px; height: 20px; }
+      .model-capability.verified { color: var(--green); }
+      .model-check { min-width: 58px; }
+      .model-list-head { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 12px; padding: 10px 0 4px; color: var(--muted); font-size: 11px; }
+      .model-list-head span:last-child { width: 143px; }
+      .model-unlisted { color: var(--muted); font-size: 11px; }
+      .model-selected { flex: 0 0 auto; color: var(--green); font-size: 11px; font-weight: 650; }
+      #connection-status, #model-catalog-status { min-height: 18px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      #connection-status.error, #model-catalog-status.error, .model-catalog .error { color: #9d3727; }
+      .model-catalog-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 16px 19px 0; }
+      .button.danger { color: #9d3727; }
+      label.field { display: grid; gap: 6px; color: #405249; font-size: 12px; line-height: 1.5; font-weight: 700; }
       input[type=text], input[type=url], input[type=password], .field textarea { width: 100%; min-height: 36px; border: 1px solid #cbd3cb; border-radius: 7px; padding: 8px 10px; color: var(--ink); background: white; font-size: 12px; }
       input[type=password] { font-family: "Segoe UI", sans-serif; }
       .check { display: flex; align-items: center; gap: 7px; color: #46584e; font-size: 12px; }
@@ -236,6 +312,11 @@
       .settings-submit { justify-self: start; }
       #settings-status, #skill-status { min-height: 18px; margin: 0; color: var(--muted); font-size: 12px; }
       .new-canvas-actions { display: flex; justify-content: flex-end; gap: 8px; }
+      .new-canvas-kits { display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 13px; }
+      .new-canvas-kits-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #405249; font-size: 12px; }
+      .new-canvas-kits p, #new-canvas-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      #new-canvas-kits { color: var(--ink); }
+      #new-canvas-status:empty { display: none; }
       .skills-layout { display: grid; grid-template-columns: minmax(260px, .9fr) minmax(300px, 1.1fr); min-height: 390px; }
       .skills-inventory { border-right: 1px solid #e0e5dd; padding: 15px; }
       .skills-inventory-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 11px; }
@@ -257,45 +338,103 @@
       .skill-editor textarea { min-height: 175px; resize: vertical; font-family: "Segoe UI", sans-serif; line-height: 1.45; }
       .skill-editor-footer { display: flex; justify-content: space-between; gap: 8px; }
       .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+      .topbar-actions { margin-left: auto; flex: 0 0 auto; }
+      .project-switcher { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; max-width: 640px; }
+      .project-switcher > label { color: var(--muted); font-size: 11px; margin-right: 3px; }
+      #project-select { flex: 1; min-width: 0; max-width: 320px; min-height: 32px; border: 0; border-radius: 4px; padding: 4px 6px; color: var(--green-deep); background: transparent; font-size: 13px; font-weight: 600; text-overflow: ellipsis; }
+      #project-select:hover { background: var(--green-wash); }
+      .project-switcher .button { flex: 0 0 auto; white-space: nowrap; }
+      .themed-dropdown { display: inline-flex; min-width: 0; max-width: 100%; }
+      .themed-dropdown-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; min-height: 32px; border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; color: var(--ink); background: var(--paper); text-align: left; font-size: 12px; }
+      .themed-dropdown-trigger:hover:not(:disabled), .themed-dropdown-trigger[aria-expanded="true"] { border-color: #9eafa2; background: var(--green-wash); }
+      .themed-dropdown-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .themed-dropdown-trigger svg { flex: 0 0 auto; width: 13px; height: 13px; color: var(--muted); }
+      .themed-dropdown-project-select { flex: 1; max-width: 320px; }
+      .themed-dropdown-chat-model { flex: 1; }
+      .themed-dropdown-chat-model .themed-dropdown-trigger { min-height: 29px; border: 0; padding: 4px 6px; font-size: 11px; }
+      .themed-dropdown-prompt-template .themed-dropdown-trigger, .themed-dropdown-project-media-scope .themed-dropdown-trigger { min-height: 29px; border: 0; padding: 4px 6px; color: var(--muted); background: transparent; font-size: 11px; }
+      .themed-dropdown-prompt-template { max-width: 130px; }
+      .themed-dropdown-popup { position: fixed; z-index: 1000; display: flex; flex-direction: column; overflow: hidden; border-radius: 8px; padding: 5px; color: var(--ink); background: var(--paper); box-shadow: 0 8px 30px #173b2d38; }
+      .themed-dropdown-search { flex: 0 0 auto; width: 100%; min-height: 35px; border: 1px solid var(--line); border-radius: 5px; padding: 7px 9px; margin-bottom: 5px; color: var(--ink); background: var(--paper-deep); font-size: 12px; caret-color: var(--green); }
+      .themed-dropdown-options { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+      .themed-dropdown-group { padding: 10px 9px 5px; color: var(--muted); font-size: 11px; font-weight: 600; }
+      .themed-dropdown-option { min-height: 34px; border-radius: 4px; padding: 8px 9px; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; cursor: pointer; }
+      .themed-dropdown-option[aria-selected="true"] { color: var(--green); font-weight: 650; }
+      .themed-dropdown-option[data-active="true"] { color: var(--green-deep); background: var(--green-wash); }
+      .themed-dropdown-option[aria-disabled="true"] { color: var(--muted); cursor: default; }
+      .themed-dropdown-empty { margin: 10px 9px; color: var(--muted); font-size: 12px; }
+      .drawer-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+      .drawer-section-head h3, .drawer-section-head > label { margin: 0; color: var(--ink); font-size: 12px; font-weight: 650; }
+      .drawer-count { margin-left: 4px; color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+      #project-media-scope { min-width: 0; min-height: 30px; border: 0; padding: 4px; color: var(--muted); background: transparent; font-size: 11px; }
+      .project-documents { flex: 0 0 auto; border-bottom: 1px solid var(--line); }
+      .project-images { flex: 1 0 auto; }
+      .project-document { display: block; width: 100%; min-height: 42px; border: 0; border-radius: 4px; padding: 6px 8px; color: var(--ink); background: transparent; text-align: left; overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
+      .project-document small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; font-weight: 400; }
+      .project-document[aria-current="true"], .project-document:hover:not(:disabled), .project-source-file:hover:not(:disabled) { color: var(--green-deep); background: var(--green-wash); }
+      .project-files-details { margin: 14px 0 0; color: var(--muted); font-size: 12px; }
+      .project-files-details summary { cursor: pointer; padding: 5px 0; }
+      .project-source-file { display: block; width: 100%; min-height: 30px; border: 0; border-radius: 4px; padding: 5px 8px; color: var(--muted); background: transparent; text-align: left; overflow-wrap: anywhere; font-size: 11px; }
+      .project-media-item { min-width: 0; }
+      .project-thumbnail { position: relative; display: grid; place-items: center; width: 100%; aspect-ratio: 1; overflow: hidden; border: 0; border-radius: 4px; padding: 0; color: var(--muted); background: var(--paper-deep); }
+      .project-thumbnail img { display: block; width: 100%; height: 100%; object-fit: cover; transition: opacity 120ms ease; }
+      .project-thumbnail:hover:not(:disabled) img { opacity: .85; }
+      .project-thumbnail-kind { position: absolute; right: 5px; bottom: 5px; display: inline-flex; align-items: center; gap: 4px; border-radius: 4px; padding: 3px 5px; color: var(--paper); background: #173b2de6; font-size: 10px; font-variant-numeric: tabular-nums; }
+      .project-thumbnail-kind svg { width: 12px; height: 12px; }
+      .project-thumbnail-placeholder { width: 28px; height: 28px; }
+      .project-media-name { overflow: hidden; margin: 6px 0 2px; color: var(--ink); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+      .project-media-actions { display: flex; flex-wrap: wrap; gap: 0 5px; }
+      .project-media-actions .button { min-height: 26px; padding: 3px 0; font-size: 11px; text-align: left; }
+      .project-media-actions .button:hover:not(:disabled) { color: var(--green); background: transparent; text-decoration: underline; text-underline-offset: 3px; }
+      .image-viewer { position: absolute; inset: 0; display: flex; flex-direction: column; min-height: 0; background: var(--paper-deep); }
+      .image-viewer-stage { display: flex; align-items: center; justify-content: center; flex: 1; min-height: 0; overflow: auto; padding: 16px; }
+      .image-viewer-stage img { display: block; width: 100%; height: 100%; object-fit: contain; }
+      .image-viewer-stage video { display: block; width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; background: var(--green-deep); }
+      .image-viewer-stage audio { width: min(100%, 440px); accent-color: var(--green); }
+      .image-viewer[data-zoom="actual"] .image-viewer-stage { display: block; }
+      .image-viewer[data-zoom="actual"] img { width: auto; height: auto; max-width: none; max-height: none; margin: auto; }
+      .image-viewer-footer { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; border-top: 1px solid var(--line); padding: 5px 12px; color: var(--muted); background: var(--paper); font-size: 12px; font-variant-numeric: tabular-nums; }
+      .canvas-tab:hover { background: var(--green-wash); }
+      .project-files-details summary:focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
+      @keyframes drawer-reveal { from { clip-path: inset(0 95% 0 0); } to { clip-path: inset(0); } }
       @media (max-width: 850px) {
         html, body { height: auto; min-height: 100%; overflow: auto; }
-        .studio { height: auto; min-height: 100vh; grid-template-columns: minmax(0, 1fr); grid-template-rows: 52px 42px auto minmax(62vh, 1fr); overflow: visible; }
-        .topbar { grid-column: 1; }
-        .activity-bar { grid-column: 1; grid-row: 2; flex-direction: row; justify-content: flex-start; gap: 5px; padding: 2px 6px; }
-        .activity-spacer { display: none; }
-        .activity-button { width: 36px; height: 34px; }
-        .activity-button[aria-pressed="true"]::after { right: auto; bottom: -5px; left: calc(50% - 10px); width: 20px; height: 3px; }
-        .left-column { grid-column: 1; grid-row: 3; grid-template-rows: 210px 12px minmax(480px, 64vh); }
+        .studio { height: auto; min-height: 100vh; grid-template-columns: minmax(0, 1fr); grid-template-rows: 48px 42px auto minmax(62vh, 1fr); }
+        .topbar { grid-column: 1; gap: 12px; }
+        .activity-bar { grid-column: 1; grid-row: 2; flex-direction: row; padding: 2px 8px; border-right: 0; border-bottom: 1px solid var(--line); }
+        .activity-spacer { flex: 1; }
+        .activity-button[aria-pressed="true"]::after { right: auto; top: auto; bottom: -2px; left: calc(50% - 10px); width: 20px; height: 2px; }
+        .left-column { grid-column: 1; grid-row: 3; height: 580px; }
         .workbench-splitter { display: none; }
-        .canvas-panel { grid-column: 1; grid-row: 4; }
-        .canvas-panel { min-height: 470px; }
+        .canvas-panel { grid-column: 1; grid-row: 4; min-height: 470px; }
         .settings-shell { grid-template-columns: 140px minmax(0, 1fr); }
       }
       @media (max-width: 620px) {
-        .studio { padding: 8px; gap: 8px; grid-template-rows: 48px 40px auto minmax(58vh, 1fr); }
-        .brand { gap: 8px; }
-        .brand-mark { width: 30px; height: 30px; }
+        .canvas-files-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: 120px minmax(0, 1fr); }
+        .canvas-files-list { border-right: 0; border-bottom: 1px solid var(--line); }
+        .studio { grid-template-rows: auto 40px auto minmax(58vh, 1fr); }
+        .topbar { flex-wrap: wrap; gap: 8px 12px; padding-block: 8px; }
         .brand h1 { font-size: 17px; }
+        .project-switcher { order: 3; flex-basis: 100%; }
+        .project-switcher > label { display: none; }
+        .project-switcher .button { padding-inline: 5px; }
         .topbar-actions { gap: 4px; }
-        .left-column { grid-template-rows: 185px 12px minmax(470px, 68vh); gap: 0; }
-        .canvas-tabs { min-height: 36px; }
+        .left-column { height: 560px; }
         .canvas-panel { min-height: 390px; }
-        .canvas-toolbar { min-height: 47px; padding: 0 9px; }
-        .canvas-toolbar-actions { gap: 3px; }
-        .canvas-toolbar-actions .button { min-height: 31px; padding: 5px 7px; font-size: 11px; }
-        .canvas-heading { gap: 5px; }
-        .canvas-state { font-size: 11px; }
+        .canvas-toolbar { padding-inline: 9px; }
+        .canvas-toolbar-actions .button { padding-inline: 5px; font-size: 11px; }
         .settings-shell { grid-template-columns: 1fr; }
-        .settings-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid #e0e5dd; padding: 7px; }
+        .settings-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid var(--line); padding: 7px; }
+        .endpoint-form-grid { grid-template-columns: 1fr; }
+        .model-catalog-list li { grid-template-columns: 24px minmax(0, 1fr); gap: 7px; }
+        .model-controls { grid-column: 2; justify-content: flex-start; }
+        .model-list-head { display: none; }
         .settings-tab { justify-content: center; gap: 5px; padding-inline: 4px; font-size: 11px; }
         .settings-section { max-height: calc(100vh - 210px); }
         .skills-layout { grid-template-columns: 1fr; }
-        .skills-inventory { border-right: 0; border-bottom: 1px solid #e0e5dd; }
+        .skills-inventory { border-right: 0; border-bottom: 1px solid var(--line); }
         .skill-editor { padding-top: 13px; }
         .canvas-illustration { width: 190px; }
-      }
-      @media (max-height: 760px) {
-        .left-column { grid-template-rows: minmax(120px, var(--library-ratio)) 12px minmax(190px, var(--chat-ratio)); }
       }
       @media (prefers-reduced-motion: reduce) {
         *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
@@ -306,35 +445,43 @@
     <main class="studio">
       <header class="topbar">
         <div class="brand"><div class="brand-mark" aria-hidden="true">E</div><h1>Easel Studio</h1></div>
+        <div class="project-switcher"><label for="project-select">Project</label><select id="project-select" aria-label="Current project"><option value="">Select a project</option></select><button id="project-rename" class="button quiet small" type="button" disabled>Rename</button><button id="project-new" class="button quiet small" type="button">New project</button></div>
         <div class="topbar-actions">
-          <button id="connections-open" class="button connection-button" type="button"><span id="connection-dot" class="connection-dot needs-setup" aria-hidden="true"></span>Connections</button>
+          <button id="connections-open" class="button connection-button" type="button"><span id="connection-dot" class="connection-dot needs-setup" aria-hidden="true"></span>Credentials</button>
         </div>
       </header>
       <nav class="activity-bar" aria-label="Activity bar">
-        <button id="nav-explorer" class="activity-button" type="button" aria-label="Explorer" title="Explorer" aria-pressed="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10.8a1.2 1.2 0 0 1-1.2 1.2H4.7a1.2 1.2 0 0 1-1.2-1.2V6.5Z"/><path d="M3.5 10.5h17"/></svg>
+        <button id="nav-chat" class="activity-button" type="button" aria-label="Show conversation" title="Conversation" aria-pressed="true" aria-controls="conversation-panel">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3v-15a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h7"/></svg>
         </button>
-        <button id="nav-media" class="activity-button" type="button" aria-label="Media" title="Media" aria-pressed="false">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg>
+        <button id="chat-history-open" class="activity-button" type="button" aria-label="Show chat history" title="Chat history" aria-pressed="false" aria-expanded="false" aria-controls="chat-history-panel">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 10a8.5 8.5 0 1 1 1 7M3.5 5v5H8"/><path d="M12 7v5l3 2"/></svg>
+        </button>
+        <button id="nav-explorer" class="activity-button" type="button" aria-label="Show project drawer" title="Project files and media" aria-pressed="false" aria-expanded="false" aria-controls="project-drawer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10.8a1.2 1.2 0 0 1-1.2 1.2H4.7a1.2 1.2 0 0 1-1.2-1.2V6.5Z"/><path d="M3.5 10.5h17"/></svg>
         </button>
         <span class="activity-spacer"></span>
         <button id="settings-open" class="activity-button" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-pressed="false">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19.3 13.5 1.1.9-1.8 3.1-1.4-.5a8 8 0 0 1-1.8 1l-.3 1.5h-3.6l-.3-1.5a8 8 0 0 1-1.8-1l-1.4.5-1.8-3.1 1.1-.9a7 7 0 0 1 0-2.1l-1.1-.9 1.8-3.1 1.4.5a8 8 0 0 1 1.8-1l.3-1.5h3.6l.3 1.5a8 8 0 0 1 1.8 1l1.4-.5 1.8 3.1-1.1.9a7 7 0 0 1 0 2.1Z"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 3-.5 2.4-1.7 1-2.3-.8-2.5 4.3 1.8 1.6v2L2.5 15 5 19.3l2.3-.8 1.7 1 .5 2.5h5l.5-2.5 1.7-1 2.3.8 2.5-4.3-1.8-1.5v-2l1.8-1.6L19 5.6l-2.3.8-1.7-1-.5-2.4Z"/><circle cx="12" cy="12.5" r="3.2"/></svg>
         </button>
       </nav>
-      <section class="left-column" aria-label="Explorer and chat">
-        <section class="panel library" aria-label="Project explorer">
-          <div class="section-head"><h2 id="library-title">Explorer</h2><button id="library-collapse" class="fold-button" type="button" aria-label="Collapse explorer" aria-expanded="true" aria-controls="library-panel-content" title="Collapse explorer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+      <section class="left-column" aria-label="Chat and project drawer">
+        <section id="project-drawer" class="panel library" aria-label="Project files and media" hidden>
+          <div class="section-head"><h2 id="library-title">Project files &amp; media</h2><button id="library-collapse" class="fold-button" type="button" aria-label="Close project drawer" title="Close drawer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
           <div id="library-panel-content" class="library-panel-content">
-            <div class="library-content" id="canvases-content"><div id="canvases-list" class="canvas-list" aria-label="Saved canvases"></div><p id="canvases-empty" class="empty-library">Your canvases will appear here as local project files.</p></div>
-            <div class="library-content" id="media-content" hidden><div id="media-list" class="media-grid" aria-label="Saved media"></div><p id="media-empty" class="empty-library">Generated images will appear here.</p></div>
+            <div class="library-content project-documents" id="canvases-content"><div class="drawer-section-head"><h3>Canvases</h3><button id="drawer-new-document" class="button quiet small" type="button">New HTML</button></div><div id="canvases-list" class="canvas-list" aria-label="Project HTML documents"></div><p id="canvases-empty" class="empty-library">Select a project to browse its documents.</p><details class="project-files-details"><summary>Source files</summary><div id="project-source-files"></div></details></div>
+            <div class="library-content project-images" id="media-content"><div class="drawer-section-head"><label for="project-media-scope">Media <span id="project-image-count" class="drawer-count">0</span></label><select id="project-media-scope" aria-label="Media library scope"><option value="project">In this project</option><option value="library">All media</option></select></div><div id="media-list" class="media-grid" aria-label="Image and video thumbnails"></div><p id="media-empty" class="empty-library">Generated media appears here automatically.</p></div>
           </div>
         </section>
-        <div id="panel-splitter" class="panel-splitter" role="separator" aria-label="Resize sidebar and chat panels" aria-orientation="horizontal" aria-valuemin="20" aria-valuemax="75" aria-valuenow="31" tabindex="0"></div>
-        <section class="panel conversation" aria-label="Conversation">
+        <section id="chat-history-panel" class="panel chat-history" aria-labelledby="chat-history-title" hidden>
+          <div class="section-head"><h2 id="chat-history-title">History</h2><button id="history-new-chat" class="button quiet small" type="button">New chat</button></div>
+          <p id="chat-history-status" role="status" aria-live="polite"></p><div id="chat-history-list" class="chat-history-list" aria-label="Saved conversations"></div>
+          <p class="chat-history-note">Chats are saved on this device. Opening a chat leaves your current project in place.</p>
+        </section>
+        <section id="conversation-panel" class="panel conversation" aria-label="Conversation">
           <div class="conversation-head">
-            <div class="conversation-title"><h2>Studio chat</h2><small id="model-label">Ready to create</small></div>
-            <div class="conversation-actions"><button id="new-chat" class="button quiet small" type="button" title="Start a new chat">New chat</button><button id="chat-collapse" class="fold-button" type="button" aria-label="Collapse chat" aria-expanded="true" aria-controls="conversation-content" title="Collapse chat"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+            <div class="conversation-title"><h2>Chat</h2></div>
+            <div class="conversation-actions"><button id="new-chat" class="button quiet small" type="button" title="Start a new chat">New chat</button></div>
           </div>
           <div id="conversation-content" class="conversation-content">
           <div id="messages" aria-live="polite">
@@ -353,29 +500,18 @@
             <div class="composer">
               <div class="composer-topline">
                 <div class="composer-options">
-                  <div class="mode-switch" role="group" aria-label="Request mode">
-                    <button id="image-mode" class="mode-button" type="button" data-mode="image" aria-pressed="true">Image</button>
-                    <button id="chat-mode" class="mode-button" type="button" data-mode="chat" aria-pressed="false">Chat</button>
-                    <button id="video-mode" class="mode-button" type="button" data-mode="video" aria-pressed="false" disabled title="Connect a video generation tool to enable this mode" aria-describedby="video-help">Video</button>
-                  </div>
-                  <label id="image-size-wrap" for="image-size">Shape
-                    <select id="image-size" aria-label="Image aspect ratio">
-                      <option value="1024x1024">Square</option>
-                      <option value="1536x1024">Landscape</option>
-                      <option value="1024x1536">Portrait</option>
-                    </select>
-                  </label>
+                  <label class="model-picker" for="chat-model">Model<select id="chat-model" aria-describedby="status" disabled><option value="">Loading models...</option></select></label>
                 </div>
                 <button id="attach-media" class="button quiet small" type="button" aria-label="Attach image, audio, or video" title="Attach image, audio, or video"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 8.5 4.1-4.1a2.1 2.1 0 0 1 3 3l-5.4 5.4a3.2 3.2 0 0 1-4.5-4.5l5.4-5.4"/></svg>Attach</button>
                 <input id="media-files" class="sr-only" type="file" multiple accept="image/png,image/jpeg,image/webp,audio/mpeg,audio/wav,video/mp4,video/webm" />
+                <select id="prompt-template" aria-label="Insert a prompt template"><option value="">Templates</option><option value="image">Generate an image</option><option value="canvas">Interactive canvas</option><option value="audio">Audio sketch</option><option value="video">Video storyboard</option></select>
                 <button id="composer-skills" class="button quiet small" type="button" aria-haspopup="dialog">Use skills</button>
               </div>
               <div id="attachment-strip" class="attachment-strip" aria-label="Pending attachments" hidden></div>
-              <textarea id="message" name="message" placeholder="Describe the image you want to create…" aria-label="Message to Easel"></textarea>
+              <textarea id="message" name="message" placeholder="Describe what you want to make or change…" aria-label="Message to Easel"></textarea>
               <div class="composer-footer">
                 <span id="composer-help" class="composer-help">Enter to send · Ctrl+Enter for a new line</span>
-                <span id="video-help" class="sr-only">Video generation is unavailable until a video tool is connected.</span>
-                <button id="send" class="button accent" type="submit" disabled><span id="send-label">Create</span><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h9M8 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                <button id="send" class="button accent" type="submit" disabled><span id="send-label">Send</span><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h9M8 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
               </div>
             </div>
           </form>
@@ -384,47 +520,54 @@
       </section>
       <div id="workbench-splitter" class="workbench-splitter" role="separator" aria-label="Resize sidebar and canvas panels" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="55" aria-valuenow="36" tabindex="0"></div>
       <section class="panel canvas-panel" aria-label="HTML canvas workspace">
+        <div id="open-canvas-tabs" class="canvas-tabs" role="group" aria-label="Open project files and images" hidden></div>
         <div class="canvas-toolbar">
           <div class="canvas-heading"><h2 id="canvas-title">Canvas</h2><span class="canvas-state"><span id="canvas-state-dot" class="state-dot" aria-hidden="true"></span><span id="canvas-state">Ready</span></span></div>
-          <div class="canvas-toolbar-actions"><button id="new-canvas-open" class="button outline small" type="button">New canvas</button><button id="canvas-undo" class="button outline small" type="button" disabled>Undo</button><button id="export-current" class="button primary small" type="button" disabled>Export HTML</button></div>
+          <div class="canvas-toolbar-actions"><button id="new-canvas-open" class="button quiet small" type="button">New HTML</button><button id="canvas-files-open" class="button quiet small" type="button" aria-haspopup="dialog" disabled>Files</button><button id="canvas-devices-open" class="button quiet small" type="button" title="Camera and microphone access" disabled>Devices</button><button id="canvas-undo" class="button quiet small" type="button" disabled>Undo</button><button id="export-current" class="button quiet small" type="button" disabled>Export project</button></div>
         </div>
-        <div id="open-canvas-tabs" class="canvas-tabs" role="group" aria-label="Open canvases" hidden></div>
         <div id="canvas-host" class="canvas-host">
           <div id="canvas-empty" class="canvas-empty">
             <svg class="canvas-illustration" viewBox="0 0 280 200" fill="none" aria-hidden="true"><rect x="48" y="30" width="184" height="140" rx="4" stroke="currentColor" stroke-width="1.5"/><path d="M49 49h182" stroke="currentColor" stroke-width="1.5"/><circle cx="62" cy="39.5" r="2.5" fill="#b84e38"/><circle cx="72" cy="39.5" r="2.5" fill="#ad7930"/><rect x="72" y="72" width="79" height="76" rx="2" fill="#e9eee7" stroke="currentColor"/><path d="m82 135 21-27 15 16 10-10 13 21H82Z" fill="#c8d5c7" stroke="currentColor" stroke-width="1.2"/><circle cx="127" cy="88" r="7" fill="#d9a65f"/><path d="M169 79h43M169 92h34M169 105h39M169 124h43M169 137h27" stroke="#b7c3b8" stroke-width="2" stroke-linecap="round"/><path d="M117 18h46" stroke="#b84e38" stroke-width="2" stroke-linecap="round"/><path d="M140 7v22" stroke="#b84e38" stroke-width="2" stroke-linecap="round"/></svg>
             <strong>Your next idea goes here</strong>
-            <span>Generate an image, then bring it onto a canvas to arrange, refine, and export your composition.</span>
-            <button id="canvas-empty-new" class="button primary" type="button">Start a canvas</button>
+            <span>Open a project file or image from the drawer, or create a project to begin.</span>
+            <button id="canvas-empty-new" class="button primary" type="button">Create a project</button>
           </div>
+          <section id="image-viewer" class="image-viewer" aria-label="Full media preview" data-zoom="fit" hidden><div class="image-viewer-stage"><img id="image-viewer-image" alt="" /><video id="media-viewer-video" controls preload="metadata" playsinline hidden></video><audio id="media-viewer-audio" controls preload="metadata" hidden></audio></div><div class="image-viewer-footer"><span id="image-viewer-info" role="status"></span><div class="button-row"><button id="image-size-toggle" class="button quiet small" type="button">Actual size</button><button id="image-use-chat" class="button quiet small" type="button">Use in chat</button></div></div></section>
         </div>
       </section>
     </main>
     <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
-      <div class="dialog-head"><div><h2 id="settings-title">Settings</h2><p class="dialog-description">Manage connections, creative skills, and offline canvas kits in one place.</p></div><button id="settings-close" class="button outline small" type="button">Done</button></div>
+      <div class="dialog-head"><div><h2 id="settings-title">Settings</h2><p class="dialog-description">Manage credentials, available models, creative skills, and canvas kits.</p></div><button id="settings-close" class="button outline small" type="button">Done</button></div>
       <div class="settings-shell">
         <nav class="settings-nav" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
-          <button id="settings-tab-connections" class="settings-tab" type="button" role="tab" aria-selected="true" aria-controls="settings-connections"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="3"/><path d="M16.4 11.7 17.5 12.6l-1.7 2.9-1.4-.5a6.8 6.8 0 0 1-1.5.8l-.3 1.4h-3.3L9 15.8a6.8 6.8 0 0 1-1.5-.8l-1.4.5-1.7-2.9 1.1-.9a5.7 5.7 0 0 1 0-1.5l-1.1-.9 1.7-2.9 1.4.5A6.8 6.8 0 0 1 9 6.1l.3-1.4h3.3l.3 1.4a6.8 6.8 0 0 1 1.5.8l1.4-.5 1.7 2.9-1.1.9a5.7 5.7 0 0 1 0 1.5Z"/></svg>Connections</button>
+          <button id="settings-tab-credentials" class="settings-tab" type="button" role="tab" aria-selected="true" aria-controls="settings-credentials"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6.5" cy="7" r="3.5"/><path d="m9 9.5 7 7m-3-3 2-2m-4 0 2-2"/></svg>Credentials</button>
+          <button id="settings-tab-models" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-models"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="4.5" width="11" height="11" rx="2"/><path d="M7.5 1.8v2.7m5-2.7v2.7m-5 11v2.7m5-2.7v2.7M1.8 7.5h2.7m-2.7 5h2.7m11-5h2.7m-2.7 5h2.7"/><rect x="8" y="8" width="4" height="4" rx=".5"/></svg>Models</button>
           <button id="settings-tab-skills" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-skills"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 2.8 12 7l4.6.7-3.3 3.2.8 4.6-4.1-2.2-4.1 2.2.8-4.6-3.3-3.2L8 7l2-4.2Z"/></svg>Skills <span id="skill-count" class="active-count" aria-label="0 active skills">0</span></button>
           <button id="settings-tab-kits" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-kits"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 5-4 5 4 5M13 5l4 5-4 5M11.5 3l-3 14"/></svg>Kits</button>
         </nav>
-        <section id="settings-connections" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-connections">
-          <div class="settings-section-head"><h3>Connections</h3><p>Save your endpoints and select a LiteLLM model. API keys stay encrypted on this device.</p></div>
-          <form id="settings-form" class="settings-form">
-            <label class="field" for="easel-url">Easel endpoint<input id="easel-url" name="easelBaseUrl" type="url" /></label>
-            <label class="field" for="easel-key">Easel API key<input id="easel-key" name="easelApiKey" type="password" autocomplete="new-password" placeholder="Optional" /></label>
-            <label class="check"><input id="clear-easel-key" type="checkbox" /> Clear saved Easel key</label>
-            <label class="field" for="litellm-url">LiteLLM endpoint<input id="litellm-url" name="litellmBaseUrl" type="url" /></label>
-            <label class="field" for="litellm-key">LiteLLM API key<input id="litellm-key" name="litellmApiKey" type="password" autocomplete="new-password" placeholder="Optional" /></label>
-            <label class="check"><input id="clear-litellm-key" type="checkbox" /> Clear saved LiteLLM key</label>
-            <label class="field" for="litellm-model">LiteLLM model<select id="litellm-model" name="litellmModel" aria-describedby="settings-status"></select></label>
-            <div class="button-row" aria-label="LiteLLM connection tests">
-              <button id="litellm-refresh-models" class="button outline small" type="button">Refresh models</button>
-              <button id="litellm-test-chat" class="button outline small" type="button">Test text</button>
-              <button id="litellm-test-image" class="button outline small" type="button">Test image</button>
-            </div>
-            <button class="button primary settings-submit" type="submit">Save connections</button>
-            <p id="settings-status" role="status" aria-live="polite"></p>
-          </form>
+        <section id="settings-credentials" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-credentials">
+          <div class="settings-section-head"><h3>Credentials</h3><p>Save an endpoint and its API key. Each endpoint can provide both Agent and Media models. Keys are encrypted on this device.</p></div>
+          <div class="settings-block">
+            <div class="settings-block-head"><h4>Saved endpoints</h4><button id="connection-add" class="button outline small" type="button" aria-expanded="false" aria-controls="connection-form">Add endpoint</button></div>
+            <div id="connection-list" aria-label="Saved model endpoints"></div>
+            <p id="connections-empty" hidden>No endpoints yet. Add one to discover its models.</p>
+            <form id="connection-form" class="settings-form endpoint-editor" hidden>
+              <h4 id="connection-editor-title">Add endpoint</h4>
+              <div class="endpoint-form-grid">
+                <label class="field endpoint-url" for="connection-url">Endpoint URL<input id="connection-url" type="url" required maxlength="2048" placeholder="https://api.example.com/v1" /><span class="field-hint">Use the API base URL. Models are discovered when you save.</span></label>
+                <label class="field" for="connection-name"><span>Name <span class="field-hint">(optional)</span></span><input id="connection-name" type="text" maxlength="80" placeholder="Uses the endpoint hostname" /></label>
+                <label class="field" for="connection-key">API key<input id="connection-key" type="password" maxlength="4096" autocomplete="new-password" placeholder="Optional for local endpoints" /><span id="connection-key-hint" class="field-hint">Leave blank if this endpoint needs no key.</span></label>
+              </div>
+              <label id="connection-clear-wrap" class="check" hidden><input id="connection-clear-key" type="checkbox" /> Remove saved key</label>
+              <div class="button-row"><button id="connection-save" class="button primary" type="submit">Save endpoint</button><button id="connection-cancel" class="button quiet" type="button">Cancel</button></div>
+            </form>
+            <p id="connection-status" role="status" aria-live="polite"></p>
+          </div>
+        </section>
+        <section id="settings-models" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-models" hidden>
+          <div class="settings-section-head"><h3>Available models</h3><p>Enable the models you want to use. Icons show automatic categories: Agent for chat and tools, Media for image generation. Green means confirmed; muted means unverified.</p><p>Check sends a tool call request and generates one test image when supported. Your endpoint may charge for these requests.</p></div>
+          <div class="model-catalog-actions"><button id="models-refresh" class="button outline small" type="button">Refresh models</button><p id="model-catalog-status" role="status" aria-live="polite"></p></div>
+          <div id="model-catalog" class="model-catalog"></div>
         </section>
         <section id="settings-skills" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-skills" hidden>
           <div class="settings-section-head"><h3>Creative skills</h3><p>Reusable instructions stay on this device. Enabled skills accompany your next request.</p></div>
@@ -456,19 +599,42 @@
             <label class="kit-option"><input type="checkbox" data-kit="three" /><span><strong>Three.js</strong><small>Offline 3D scenes, materials, cameras, and animation.</small></span><span class="runtime-badge active">Bundled</span></label>
             <label class="kit-option"><input type="checkbox" data-kit="phaser" /><span><strong>Phaser</strong><small>2D game scenes, input, sprites, and physics.</small></span><span class="runtime-badge active">Bundled</span></label>
             <label class="kit-option"><input type="checkbox" data-kit="matter" /><span><strong>Matter.js</strong><small>Rigid-body physics for interactive 2D prototypes.</small></span><span class="runtime-badge active">Bundled</span></label>
-            <label class="kit-option"><input type="checkbox" data-kit="tone" /><span><strong>Tone.js</strong><small>Audio synthesis and sequencing after a user gesture.</small></span><span class="runtime-badge active">Bundled</span></label>
+            <label class="kit-option"><input type="checkbox" data-kit="tone" checked /><span><strong>Tone.js</strong><small>Audio synthesis and sequencing after a user gesture.</small></span><span class="runtime-badge active">Bundled</span></label>
+            <label class="kit-option"><input type="checkbox" data-kit="p5" /><span><strong>p5.js</strong><small>Creative coding with 2D and WebGL. p5 2.x; audio uses Tone.js.</small></span><span class="runtime-badge active">Bundled</span></label>
           </div>
-          <p id="kit-status" class="kit-status" role="status" aria-live="polite">Selected kits are included in each new canvas and in its exported HTML.</p>
+          <p id="kit-status" class="kit-status" role="status" aria-live="polite">Selected kits are included in each new canvas and its exported HTML. Existing canvases keep the kits they were created with.</p>
         </section>
       </div>
     </dialog>
     <dialog id="new-canvas-dialog" aria-labelledby="new-canvas-title">
       <div class="dialog-head"><h2 id="new-canvas-title">Create canvas</h2><button id="new-canvas-close" class="button outline small" type="button">Cancel</button></div>
       <form id="new-canvas-form" class="settings-form">
-        <label class="field" for="new-canvas-name">Canvas name<input id="new-canvas-name" name="title" type="text" maxlength="120" autocomplete="off" placeholder="e.g. Spring campaign board" required /></label>
+        <label class="field" for="new-canvas-name"><span id="new-item-name-label">Project name</span><input id="new-canvas-name" name="title" type="text" maxlength="120" autocomplete="off" placeholder="e.g. Spring campaign" required /></label>
+        <div class="new-canvas-kits">
+          <div class="new-canvas-kits-head"><strong>Canvas kits</strong><button id="new-canvas-kits-change" class="button outline small" type="button">Change kits</button></div>
+          <p id="new-canvas-kits"></p>
+          <p id="new-canvas-audio-hint"></p>
+        </div>
+        <p id="new-canvas-status" role="status" aria-live="polite"></p>
         <div class="new-canvas-actions"><button id="new-canvas-submit" class="button primary" type="submit">Create empty canvas</button></div>
       </form>
     </dialog>
+    <dialog id="canvas-files-dialog" class="canvas-files-dialog" aria-labelledby="canvas-files-title">
+      <div class="dialog-head"><div><h2 id="canvas-files-title">Project files</h2><p id="canvas-files-description" class="dialog-description">Browse the saved source. Edits are made through chat.</p></div><button id="canvas-files-close" class="button outline small" type="button">Done</button></div>
+      <p id="canvas-files-summary" class="canvas-files-summary" role="status" aria-live="polite">Loading files...</p>
+      <div class="canvas-files-layout">
+        <nav id="canvas-files-list" class="canvas-files-list" aria-label="Canvas source files"></nav>
+        <section class="canvas-file-view" aria-labelledby="canvas-file-path">
+          <h3 id="canvas-file-path" class="canvas-file-heading">Select a file</h3>
+          <pre id="canvas-file-source" class="canvas-file-source" tabindex="0" aria-label="Saved file contents"></pre>
+          <div class="canvas-file-footer"><p id="canvas-file-status" role="status" aria-live="polite"></p><div class="button-row"><button id="canvas-file-previous" class="button outline small" type="button" disabled>Previous</button><button id="canvas-file-next" class="button outline small" type="button" disabled>Next</button></div></div>
+        </section>
+      </div>
+    </dialog>
+    <script src="../node_modules/markdown-it/dist/browser/markdown-it.umd.min.js"></script>
+    <script src="./connection-settings.js"></script>
+    <script src="./project-workspace.js"></script>
+    <script src="./themed-dropdown.js"></script>
     <script src="./renderer.js"></script>
   </body>
 </html>

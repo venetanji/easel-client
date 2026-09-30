@@ -1,4 +1,5 @@
 const OpenAI = require('openai');
+const { abortError, combinedSignal, isTurnAbort, throwIfAborted } = require('./turn-abort');
 
 const DEFAULT_LITELLM_BASE_URL = 'http://127.0.0.1:4000/v1';
 const NO_AUTH_API_KEY = 'easel-client-no-auth';
@@ -82,13 +83,20 @@ function toResponsesTools(tools = []) {
     }));
 }
 
-async function collectStreamedCompletion(stream) {
+async function collectStreamedCompletion(stream, { signal, onText } = {}) {
   let completedResponse;
   let text = '';
   const streamedFunctionCalls = new Map();
+  const stop = () => stream.controller?.abort();
+  signal?.addEventListener('abort', stop, { once: true });
+  try {
+  if (signal?.aborted) stop();
+  throwIfAborted(signal);
   for await (const event of stream) {
+    throwIfAborted(signal);
     if (event.type === 'response.output_text.delta' || event.type === 'response.refusal.delta') {
       text += event.delta || '';
+      onText?.(text);
     } else if (event.type === 'response.output_item.added' && event.item?.type === 'function_call') {
       streamedFunctionCalls.set(event.output_index, event.item);
     } else if (event.type === 'response.function_call_arguments.delta') {
@@ -105,6 +113,11 @@ async function collectStreamedCompletion(stream) {
       completedResponse = event.response;
     }
   }
+  if (signal?.aborted || stream.controller?.signal?.aborted) throw abortError(signal, text);
+  } catch (error) {
+    if (isTurnAbort(error, signal)) throw abortError(signal, text);
+    throw error;
+  } finally { signal?.removeEventListener('abort', stop); }
 
   const output = Array.isArray(completedResponse?.output) && completedResponse.output.length
     ? completedResponse.output
@@ -143,6 +156,7 @@ function createLiteLLMClient({
   model,
   fetchImpl = globalThis.fetch,
   openAIClientFactory = (options) => new OpenAI(options),
+  signal: turnSignal,
 }) {
   const normalizedBaseUrl = normalizeLiteLLMBaseUrl(baseUrl || '');
   const cleanModel = typeof model === 'string' ? model.trim() : '';
@@ -166,18 +180,22 @@ function createLiteLLMClient({
   return {
     model: cleanModel,
     baseUrl: normalizedBaseUrl,
-    async createCompletion({ messages, tools, signal } = {}) {
+    async createCompletion({ messages, instructions, tools, signal: requestSignal, onText } = {}) {
+      const signal = combinedSignal(turnSignal, requestSignal);
       if (!Array.isArray(messages) || messages.length === 0) throw new Error('Chat messages are required.');
       try {
+        throwIfAborted(signal);
         const stream = await client.responses.create({
           model: cleanModel,
           input: toResponsesInput(messages),
+          ...(typeof instructions === 'string' && instructions ? { instructions } : {}),
           ...(Array.isArray(tools) && tools.length ? { tools: toResponsesTools(tools) } : {}),
           stream: true,
-          ...(signal ? { signal } : {}),
-        });
-        return await collectStreamedCompletion(stream);
+        }, signal ? { signal } : undefined);
+        if (signal?.aborted) { stream.controller?.abort(); throw abortError(signal); }
+        return await collectStreamedCompletion(stream, { signal, onText: onText ? (text) => onText(redact(text, key)) : undefined });
       } catch (error) {
+        if (isTurnAbort(error, signal)) throw abortError(signal, error.partialText ? redact(error.partialText, key) : undefined);
         throw new Error(redact(error, key));
       }
     },

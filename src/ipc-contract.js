@@ -1,8 +1,38 @@
 const IPC_CHANNELS = Object.freeze({
   GET_SETTINGS: 'settings:get',
   SAVE_SETTINGS: 'settings:save',
+  SAVE_CONNECTION: 'connections:save',
+  REMOVE_CONNECTION: 'connections:remove',
+  SELECT_MODEL: 'models:select',
+  GET_MODEL_CATALOG: 'models:catalog',
+  UPDATE_MODEL: 'models:update',
+  CHECK_MODEL_CAPABILITIES: 'models:check-capabilities',
+  OPEN_EXTERNAL: 'links:open-external',
+  LIST_CANVAS_FILES: 'canvas:files:list',
+  READ_CANVAS_FILE: 'canvas:files:read',
+  CREATE_PROJECT: 'projects:create',
+  RENAME_PROJECT: 'projects:rename',
+  EXPORT_PROJECT: 'projects:export',
+  LIST_PROJECT_DOCUMENTS: 'projects:documents:list',
+  CREATE_PROJECT_DOCUMENT: 'projects:documents:create',
+  OPEN_PROJECT_DOCUMENT: 'projects:documents:open',
+  GET_PROJECT_ASSETS: 'projects:assets:list',
+  GET_PROJECT_ASSET: 'projects:assets:get',
+  GET_LIBRARY_ASSET: 'assets:get',
+  SAVE_LIBRARY_ASSET: 'assets:save',
+  ATTACH_PROJECT_ASSET: 'projects:assets:attach',
+  SAVE_PROJECT_ASSET: 'projects:assets:save',
+  HIDE_CANVAS_PREVIEW: 'canvas:preview:hide',
+  MANAGE_CANVAS_DEVICES: 'canvas:devices:manage',
+  CLOSE_CANVAS: 'canvases:close',
+  LIST_CANVAS_INPUTS: 'canvas:inputs:list',
+  RETRY_CANVAS_INPUT: 'canvas:inputs:retry',
   SEND_MESSAGE: 'chat:send',
+  STOP_AGENT: 'chat:stop',
   CLEAR_CHAT: 'chat:clear',
+  GET_CHAT: 'chat:get',
+  LIST_CHATS: 'chat:list',
+  OPEN_CHAT: 'chat:open',
   AGENT_EVENT: 'agent:event',
   LIST_ASSETS: 'assets:list',
   LIST_CANVASES: 'canvases:list',
@@ -30,7 +60,7 @@ const MAX_SKILL_NAME_LENGTH = 80;
 const MAX_SKILL_INSTRUCTIONS_LENGTH = 32_000;
 const MAX_TOTAL_SKILL_INSTRUCTIONS_LENGTH = 48_000;
 const MAX_CANVAS_BOUNDS = 10_000;
-const ALLOWED_RUNTIME_KITS = new Set(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone']);
+const ALLOWED_RUNTIME_KITS = new Set(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone', 'p5']);
 const MAX_CHAT_ATTACHMENTS = 6;
 const MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 64 * 1024 * 1024;
@@ -120,12 +150,7 @@ function validateChatOptions(value) {
     }
     return { name, instructions };
   });
-  const kits = value.kits ?? [];
-  if (!Array.isArray(kits) || kits.length > ALLOWED_RUNTIME_KITS.size) throw new Error('Canvas kit preferences are invalid.');
-  const cleanKits = [...new Set(kits.map((kit) => {
-    if (typeof kit !== 'string' || !ALLOWED_RUNTIME_KITS.has(kit)) throw new Error('Canvas kit preference is invalid.');
-    return kit;
-  }))];
+  const cleanKits = validateCanvasKits(value.kits);
   const attachments = value.attachments ?? [];
   if (!Array.isArray(attachments) || attachments.length > MAX_CHAT_ATTACHMENTS) {
     throw new Error(`Attach up to ${MAX_CHAT_ATTACHMENTS} files per message.`);
@@ -195,6 +220,35 @@ function validateChatOptions(value) {
   };
 }
 
+function validateConnectionInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Endpoint details are required.');
+  for (const key of Object.keys(input)) {
+    if (!['id', 'name', 'baseUrl', 'apiKey', 'clearApiKey'].includes(key)) throw new Error(`Unsupported endpoint field: ${key}`);
+  }
+  if (input.id !== undefined) validateOpaqueId(input.id, 'Endpoint ID');
+  for (const [key, limit] of [['name', 80], ['baseUrl', 2048], ['apiKey', 4096]]) {
+    if (input[key] !== undefined && (typeof input[key] !== 'string' || input[key].length > limit)) throw new Error(`Endpoint ${key} is invalid or too long.`);
+  }
+  if (!input.baseUrl?.trim()) throw new Error('Endpoint URL is required.');
+  if (input.clearApiKey !== undefined && typeof input.clearApiKey !== 'boolean') throw new Error('Clear API key must be a boolean.');
+  return { ...(input.id ? { id: input.id } : {}), name: (input.name || '').trim(), baseUrl: input.baseUrl.trim(), apiKey: (input.apiKey || '').trim(), clearApiKey: input.clearApiKey === true };
+}
+
+function validateModelSelection(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+    || Object.keys(input).some((key) => !['connectionId', 'model'].includes(key))) throw new Error('Model selection is invalid.');
+  return { connectionId: validateOpaqueId(input.connectionId, 'Endpoint ID'), model: validateLiteLLMModelInput(input.model) };
+}
+
+function validateModelConfiguration(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+    || Object.keys(input).some((key) => !['connectionId', 'model', 'enabled', 'roles'].includes(key))) throw new Error('Model configuration is invalid.');
+  const selection = validateModelSelection({ connectionId: input.connectionId, model: input.model });
+  if (typeof input.enabled !== 'boolean') throw new Error('Model enabled state must be a boolean.');
+  if (!Array.isArray(input.roles) || input.roles.length > 2 || input.roles.some((role) => !['agent', 'media'].includes(role))) throw new Error('Choose Agent, Media, or both roles.');
+  return { ...selection, enabled: input.enabled, roles: [...new Set(input.roles)] };
+}
+
 function validateOpaqueId(value, label = 'ID') {
   if (typeof value !== 'string' || !/^[a-f0-9]{32}$/.test(value)) throw new Error(`${label} is invalid.`);
   return value;
@@ -206,6 +260,30 @@ function validateCanvasTitle(value) {
   if (!title) throw new Error('Canvas name is required.');
   if (title.length > 120) throw new Error('Canvas name must be at most 120 characters.');
   return title;
+}
+
+function validateProjectAssetId(value) {
+  if (typeof value !== 'string' || !/^(?:[a-f0-9]{32}|[a-f0-9]{64})$/.test(value)) throw new Error('Project asset ID is invalid.');
+  return value;
+}
+
+function validateDocumentPath(value) {
+  const documentPath = require('./canvas-project').validateFilePath(value);
+  if (!/\.html?$/i.test(documentPath)) throw new Error('Project documents must be authored HTML files.');
+  return documentPath;
+}
+
+function validateProjectInput(input = {}, { document = false } = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['title', 'kits', ...(document ? ['path'] : [])].includes(key))) throw new Error('Project details are invalid.');
+  return { title: validateCanvasTitle(input.title || (document ? 'Untitled document' : 'Untitled project')), ...(input.kits === undefined ? {} : { kits: validateCanvasKits(input.kits) }), ...(document && input.path !== undefined ? { path: validateDocumentPath(input.path) } : {}) };
+}
+
+function validateCanvasKits(value = []) {
+  if (!Array.isArray(value) || value.length > ALLOWED_RUNTIME_KITS.size) throw new Error('Canvas kit preferences are invalid.');
+  return [...new Set(value.map((kit) => {
+    if (typeof kit !== 'string' || !ALLOWED_RUNTIME_KITS.has(kit)) throw new Error('Canvas kit preference is invalid.');
+    return kit;
+  }))];
 }
 
 function validateCanvasBounds(value) {
@@ -230,6 +308,13 @@ module.exports = {
   validateChatOptions,
   validateCanvasBounds,
   validateCanvasTitle,
+  validateCanvasKits,
   validateOpaqueId,
+  validateProjectAssetId,
+  validateDocumentPath,
+  validateProjectInput,
   validateSettingsInput,
+  validateConnectionInput,
+  validateModelSelection,
+  validateModelConfiguration,
 };

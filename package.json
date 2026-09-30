@@ -24,7 +24,10 @@
   "dependencies": {
     "@easel/media-mcp": "0.0.1",
     "@modelcontextprotocol/sdk": "1.30.0",
-    "openai": "7.15.0"
+    "acorn": "^8.18.0",
+    "markdown-it": "^15.0.2",
+    "openai": "7.15.0",
+    "parse5": "8.0.1"
   },
   "repository": {
     "type": "git",
@@ -41,6 +44,7 @@
     "electron-builder": "^26.0.12",
     "esbuild": "^0.28.2",
     "matter-js": "^0.20.0",
+    "p5": "2.3.4",
     "phaser": "^4.2.1",
     "three": "^0.186.1",
     "tone": "^15.1.22"

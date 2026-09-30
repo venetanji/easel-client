@@ -1,6 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
+const { createChatStore } = require('../src/chat-store');
 const { createChatService, defaultMcpLaunchOptions } = require('../src/chat-service');
 
 function reply(text) {
@@ -73,4 +76,40 @@ test('requires a configured LiteLLM model and still closes MCP on agent errors',
   });
   await assert.rejects(service.sendMessage('hello'), /proxy failed/);
   assert.equal(closed, true);
+});
+
+test('restores saved chat context and reopens archived chats after starting a new chat', async (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-chat-service-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const requests = [];
+  const createService = () => createChatService({
+    chatStore: createChatStore({ userDataPath }), settingsStore: settingsStore(), assetStore: {},
+    llmFactory: () => ({ async createCompletion({ messages }) { requests.push(messages); return reply('Instrument ready.'); } }),
+    mcpFactory: async () => ({ async listTools() { return []; }, async close() {} }),
+    mcpLaunchOptions: () => ({ command: 'node' }),
+  });
+  const first = createService();
+  const sent = await first.sendMessage('Build an instrument');
+  const second = createService();
+  assert.equal((await second.getCurrentChat()).id, sent.chatId);
+  await second.sendMessage('Add bass');
+  assert.ok(requests[1].some((m) => m.role === 'assistant' && m.content === 'Instrument ready.'));
+  second.clearHistory();
+  assert.equal((await second.getCurrentChat()).history.length, 0);
+  assert.equal(second.listChats().length, 1);
+  assert.equal((await second.openChat(sent.chatId)).history.length, 4);
+});
+
+test('keeps unsaved chat context and prevents losing it when disk writes fail', async () => {
+  const service = createChatService({
+    chatStore: { getActive: () => null, save() { throw new Error('Disk full'); } },
+    settingsStore: settingsStore(), assetStore: {},
+    llmFactory: () => ({ async createCompletion() { return reply('Ready.'); } }),
+    mcpFactory: async () => ({ async listTools() { return []; }, async close() {} }),
+    mcpLaunchOptions: () => ({ command: 'node' }),
+  });
+  const result = await service.sendMessage('Build a canvas');
+  assert.match(result.saveWarning, /could not be saved/);
+  assert.throws(() => service.clearHistory(), /Disk full/);
+  assert.equal((await service.getCurrentChat()).history.length, 2);
 });

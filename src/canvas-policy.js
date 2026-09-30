@@ -1,18 +1,20 @@
 const MAX_HTML_BYTES = 1_048_576;
+const { addCanvasLifecycle } = require('./canvas-runtime');
 const MAX_CANVAS_DOCUMENT_BYTES = 8 * 1_048_576;
 const MAX_ASSETS = 8;
 const MAX_ASSET_BYTES = 32 * 1024 * 1024;
 const MAX_BASE64_LENGTH = Math.ceil(MAX_ASSET_BYTES / 3) * 4;
-const MAX_SNAPSHOT_BYTES = MAX_CANVAS_DOCUMENT_BYTES + MAX_BASE64_LENGTH + 65_536;
-const ALLOWED_CANVAS_KITS = new Set(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone']);
-const BUNDLED_CANVAS_KITS = new Set(['three', 'phaser', 'matter', 'tone']);
+// Export/runtime may carry one asset URL in authored markup and one in the resolver.
+const MAX_SNAPSHOT_BYTES = MAX_CANVAS_DOCUMENT_BYTES + 2 * MAX_BASE64_LENGTH + 4 * 1_048_576 + 65_536;
+const ALLOWED_CANVAS_KITS = new Set(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone', 'p5']);
+const BUNDLED_CANVAS_KITS = new Set(['three', 'phaser', 'matter', 'tone', 'p5']);
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const CSP = [
   "default-src 'none'",
-  "script-src 'unsafe-inline'",
+  "script-src 'unsafe-inline' blob:",
   "style-src 'unsafe-inline'",
   'img-src data: blob:',
-  "connect-src 'none'",
+  'connect-src data: blob:',
   'media-src data: blob:',
   'font-src data:',
   "object-src 'none'",
@@ -20,7 +22,6 @@ const CSP = [
   "worker-src 'none'",
   "form-action 'none'",
   "base-uri 'none'",
-  "navigate-to 'none'",
 ].join('; ');
 
 const RUNTIME_DIAGNOSTICS_SCRIPT = `<script id="easel-runtime-diagnostics">
@@ -70,7 +71,7 @@ const RUNTIME_DIAGNOSTICS_SCRIPT = `<script id="easel-runtime-diagnostics">
 
 function addRuntimeDiagnostics(html) {
   const clean = html.replace(/<script\s+id=["']easel-runtime-diagnostics["'][^>]*>[\s\S]*?<\/script>/gi, '');
-  return clean.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${RUNTIME_DIAGNOSTICS_SCRIPT}`);
+  return addCanvasLifecycle(clean.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${RUNTIME_DIAGNOSTICS_SCRIPT}`));
 }
 
 function insertKitScripts(html, scripts) {
@@ -94,6 +95,7 @@ function buildCanvasDocument({ html, assets = [], kits = [], kitBundles = {} } =
   let totalBytes = 0;
   let output = html;
   const names = new Set();
+  const mediaContents = new Set();
   for (const asset of assets) {
     if (!asset || typeof asset.name !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(asset.name)) {
       throw new Error('Canvas asset name is invalid.');
@@ -105,7 +107,10 @@ function buildCanvasDocument({ html, assets = [], kits = [], kitBundles = {} } =
     if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.data)) {
       throw new Error('Canvas image data must be base64.');
     }
-    totalBytes += Buffer.byteLength(asset.data, 'base64');
+    if (!mediaContents.has(asset.data)) {
+      mediaContents.add(asset.data);
+      totalBytes += Buffer.byteLength(asset.data, 'base64');
+    }
     output = output.split(`{{asset:${asset.name}}}`).join(`data:${asset.mimeType};base64,${asset.data}`);
   }
   if (totalBytes > MAX_ASSET_BYTES) throw new Error('Canvas assets exceed 32 MiB total.');
@@ -119,12 +124,14 @@ function buildCanvasDocument({ html, assets = [], kits = [], kitBundles = {} } =
     if (typeof source !== 'string' || !source) throw new Error(`The ${kit} canvas kit is unavailable. Rebuild the client and try again.`);
     const safeSource = source.replace(/<\/script/gi, '<\\/script');
     totalKitBytes += Buffer.byteLength(safeSource, 'utf8');
-    if (totalKitBytes > MAX_CANVAS_DOCUMENT_BYTES) throw new Error('Selected canvas kits exceed the offline bundle size limit.');
+    if (totalKitBytes > MAX_CANVAS_DOCUMENT_BYTES) throw new Error(`Selected kit bundles use ${totalKitBytes} bytes; limit ${MAX_CANVAS_DOCUMENT_BYTES} bytes. Media size is counted separately.`);
     return `<script data-easel-canvas-kit="${kit}">${safeSource}</script>`;
   }).join('');
   output = insertKitScripts(output, kitScripts);
-  if (Buffer.byteLength(output, 'utf8') > MAX_CANVAS_DOCUMENT_BYTES) {
-    throw new Error('Canvas document exceeds the offline canvas size limit.');
+  const assembledBytes = Buffer.byteLength(output, 'utf8');
+  if (assembledBytes > MAX_SNAPSHOT_BYTES) {
+    const contributions = assets.map((asset) => ({ name: asset.name, bytes: Buffer.byteLength(asset.data, 'base64'), embeddedBytes: asset.data.length }));
+    throw new Error(`Canvas assembly uses ${assembledBytes} bytes; limit ${MAX_SNAPSHOT_BYTES} bytes. Source ${Buffer.byteLength(html)} bytes; kit bundles ${totalKitBytes} bytes; unique media budget ${MAX_ASSET_BYTES} bytes. Asset contributions: ${JSON.stringify(contributions)}. Attach existing assets incrementally instead of rebuilding embedded media.`);
   }
 
   const policy = `<meta http-equiv="Content-Security-Policy" content="${CSP}">`;
@@ -139,7 +146,7 @@ function buildCanvasDocument({ html, assets = [], kits = [], kitBundles = {} } =
 
 function buildCanvasSnapshotDocument(html) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('Canvas HTML is required.');
-  if (Buffer.byteLength(html, 'utf8') > MAX_SNAPSHOT_BYTES) throw new Error('Canvas snapshot exceeds the stored asset limit.');
+  if (Buffer.byteLength(html, 'utf8') > MAX_SNAPSHOT_BYTES) throw new Error(`Canvas assembly uses ${Buffer.byteLength(html, 'utf8')} bytes; limit ${MAX_SNAPSHOT_BYTES} bytes. Source files and media have separate limits; inspect list_canvas_files for asset contributions.`);
   if (/\b(?:src|href|poster|action)\s*=\s*["']?\s*(?:https?:|file:|\/\/)/i.test(html)) {
     throw new Error('Canvas cannot reference external URLs.');
   }

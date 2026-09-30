@@ -1,6 +1,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const esbuild = require('esbuild');
+const vm = require('node:vm');
+const { BUNDLED_CANVAS_KITS, prepareToneBundle } = require('../src/canvas-kits');
 
 const root = path.resolve(__dirname, '..');
 const outputPath = path.join(root, 'canvas-kits');
@@ -41,7 +43,23 @@ async function buildCanvasKits() {
   const toneRoot = packageRoot('tone');
   const tone = fs.readFileSync(path.join(toneRoot, 'build', 'Tone.js'), 'utf8');
   const toneLicense = fs.readFileSync(path.join(toneRoot, 'build', 'Tone.js.LICENSE.txt'), 'utf8').trim();
-  fs.writeFileSync(path.join(outputPath, 'tone.js'), withLicense(`${tone}\n/*\n${toneLicense}\n*/\n`, 'LICENSE.md', toneRoot), 'utf8');
+  fs.writeFileSync(path.join(outputPath, 'tone.js'), prepareToneBundle(withLicense(`${tone}\n${toneLicense}\n`, 'LICENSE.md', toneRoot)), 'utf8');
+
+  // Use the published classic bundle: its global is p5 and it skips network-loaded translations.
+  const p5Root = path.resolve(path.dirname(require.resolve('p5')), '..');
+  const p5Version = require(path.join(p5Root, 'package.json')).version;
+  const p5Notice = `/*! p5.js ${p5Version}\n` +
+    'Unmodified upstream library, LGPL-2.1. Unminified library: p5.source.js.\n' +
+    `Upstream source: https://github.com/processing/p5.js/tree/v${p5Version}\n*/\n`;
+  for (const [output, input] of [['p5.js', 'p5.min.js'], ['p5.source.js', 'p5.js']]) {
+    const source = fs.readFileSync(path.join(p5Root, 'lib', input), 'utf8');
+    fs.writeFileSync(path.join(outputPath, output), p5Notice + withLicense(source, 'license.txt', p5Root), 'utf8');
+  }
+
+  for (const kit of [...BUNDLED_CANVAS_KITS, 'p5.source']) {
+    const filename = path.join(outputPath, `${kit}.js`);
+    new vm.Script(fs.readFileSync(filename, 'utf8'), { filename });
+  }
 }
 
 buildCanvasKits().catch((error) => {

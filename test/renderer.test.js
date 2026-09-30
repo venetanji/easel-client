@@ -103,6 +103,20 @@ test('keeps the saved model and reports a useful status when catalog refresh fai
   assert.match(status.textContent, /could not load.*server unavailable/i);
 });
 
+test('keeps settings loaded while the model catalog request is pending', async () => {
+  const select = element('select');
+  let complete;
+  const request = refreshLiteLLMModels({
+    client: { listLiteLLMModels: () => new Promise((resolve) => { complete = resolve; }) },
+    select, statusElement: element(),
+  });
+  select.value = 'saved/model';
+  complete([{ id: 'first/model', name: 'First model' }]);
+  await request;
+  assert.equal(select.value, 'saved/model');
+  assert.equal(select.children[0].value, 'saved/model');
+});
+
 test('runs only the explicitly selected text or image connection probe', async () => {
   const status = element();
   const selected = element('select');
@@ -164,12 +178,15 @@ test('submits chat messages and always re-enables the send button', async () => 
 
 test('creates a named canvas through the client and reports its title', async () => {
   const status = element();
+  let selectedKits;
   const result = await createCanvas({
-    client: { async createCanvas(title) { return { id: 'c'.repeat(32), title }; } },
+    client: { async createCanvas(title, kits) { selectedKits = kits; return { id: 'c'.repeat(32), title }; } },
     title: 'Campaign board',
+    kits: ['canvas-2d', 'tone'],
     statusElement: status,
   });
   assert.equal(result.title, 'Campaign board');
+  assert.deepEqual(selectedKits, ['canvas-2d', 'tone']);
   assert.equal(status.textContent, 'Created Campaign board.');
 });
 
