@@ -60,3 +60,19 @@ test('serves the allowlisted tools through MCP without external services', async
   assert.equal(generated.isError, undefined);
   assert.deepEqual(generated.content.map((item) => item.type), ['text', 'image']);
 });
+
+test('queued image guidance names the image retrieval tool', async (t) => {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createMediaServer({ easel: {
+    listModels: async () => ['qwen'],
+    generateImages: async () => ({ job: { id: 'image_job_123', status: 'queued', providerStatus: 'queued' } }),
+  } });
+  const client = new Client({ name: 'queued-image-test', version: '1.0.0' });
+  t.after(async () => { await client.close(); await server.close(); });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  const result = await client.callTool({ name: 'generate_image', arguments: { prompt: 'a cat' } });
+  const content = result.content.find((item) => item.type === 'text');
+  assert.equal(content?.type, 'text');
+  assert.match(JSON.parse(content!.text as string).guidance, /get_image_job/);
+});

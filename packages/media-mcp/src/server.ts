@@ -188,7 +188,7 @@ export function registerMediaTools(
 }
 
 function imageToolResult(images: ImageResult, verb: string, modelId?: string) {
-  if (!Array.isArray(images)) return videoToolResult({ job: images.job }, modelId);
+  if (!Array.isArray(images)) return videoToolResult({ job: images.job }, modelId, 'image');
   return {
     content: [
       { type: 'text' as const, text: `${verb} ${images.length} image${images.length === 1 ? '' : 's'}.` },
@@ -198,11 +198,11 @@ function imageToolResult(images: ImageResult, verb: string, modelId?: string) {
   };
 }
 
-function videoToolResult(result: VideoResult, modelId?: string) {
+function videoToolResult(result: VideoResult, modelId?: string, mediaType: 'image' | 'video' = 'video') {
   const job = { ...result.job, ...(modelId ? { modelId } : {}) };
   return {
     content: [
-      { type: 'text' as const, text: JSON.stringify({ job, downloaded: Boolean(result.media), ...(!['completed', 'failed', 'cancelled'].includes(job.status) ? { retryAfterSeconds: 15, guidance: 'Keep this job ID. Retrieve it later with get_video; do not resubmit.' } : {}) }) },
+      { type: 'text' as const, text: JSON.stringify({ job, downloaded: Boolean(result.media), ...(!['completed', 'failed', 'cancelled'].includes(job.status) ? { retryAfterSeconds: 15, guidance: `Keep this job ID. Retrieve it later with ${mediaType === 'image' ? 'get_image_job' : 'get_video'}; do not resubmit.` } : {}) }) },
       ...(result.media ? [{ type: 'resource' as const, resource: { uri: `easel-media://videos/${encodeURIComponent(job.id)}`, mimeType: result.media.mimeType, blob: result.media.data } }] : []),
     ],
     structuredContent: { job, downloaded: Boolean(result.media) },
