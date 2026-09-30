@@ -123,8 +123,8 @@ function fixture() {
     async deleteProject(id) {
       calls.push(['project', id]);
       if (!confirm) return { deleted: false, canceled: true };
-      projects.splice(0, projects.length);
-      projectAssets.splice(0, projectAssets.length);
+      projects.splice(projects.findIndex((project) => project.id === id), 1);
+      if (id === projectId) projectAssets.splice(0, projectAssets.length);
       return { deleted: true, projectDeleted: true };
     },
   };
@@ -287,6 +287,100 @@ test('project deletion requires confirmation, clears project tabs, and keeps orp
   assert.deepEqual(JSON.parse(state.stored.get('easel-studio.project-tabs.v1')), []);
   await state.nodes.get('all-media-list').children[0].children[0].listeners.click();
   assert.equal(state.workspace.getPreviewKind(), 'image');
+});
+
+test('a failed initial open keeps the picker selected and deletion available without an active canvas', async () => {
+  const state = fixture();
+  state.client.openProjectDocument = async () => { throw new Error('Invalid project reference'); };
+  state.nodes.get('project-select').value = state.projectId;
+  await state.nodes.get('project-select').listeners.change();
+  assert.equal(state.nodes.get('project-select').value, state.projectId);
+  assert.equal(state.workspace.getProjectId(), '');
+  assert.equal(state.nodes.get('project-delete').disabled, false);
+  assert.equal(state.nodes.get('project-delete').attributes['aria-label'], 'Delete Project');
+  assert.equal(state.nodes.get('project-rename').disabled, true);
+  await state.nodes.get('project-delete').listeners.click();
+  assert.deepEqual(state.calls.at(-1), ['project', state.projectId]);
+  assert.equal(state.nodes.get('project-select').value, state.projectId);
+  assert.equal(state.projects.length, 1);
+  state.confirm(true);
+  await state.nodes.get('project-delete').listeners.click();
+  assert.equal(state.projects.length, 0);
+  assert.equal(state.nodes.get('project-select').value, '');
+  assert.equal(state.nodes.get('project-delete').disabled, true);
+});
+
+test('deletion after a failed switch targets the picker and preserves the previously open project', async () => {
+  const state = fixture();
+  const brokenId = 'd'.repeat(32);
+  state.projects.push({ id: brokenId, title: 'Broken project' });
+  await state.workspace.openProject(state.projectId);
+  const selection = state.selections.at(-1);
+  const savedTabs = state.stored.get('easel-studio.project-tabs.v1');
+  const open = state.client.openProjectDocument;
+  state.client.openProjectDocument = async (id, path) => {
+    if (id === brokenId) throw new Error('Invalid project reference');
+    return open(id, path);
+  };
+  state.nodes.get('project-select').value = brokenId;
+  await state.nodes.get('project-select').listeners.change();
+  assert.equal(state.workspace.getProjectId(), state.projectId);
+  assert.equal(state.nodes.get('project-select').value, brokenId);
+  assert.equal(state.selections.at(-1), selection);
+  assert.equal(state.nodes.get('canvases-list').hidden, true);
+  assert.equal(state.nodes.get('project-kit-list').querySelectorAll('input').every((input) => input.disabled), true);
+  assert.equal(state.nodes.get('project-delete').attributes['aria-label'], 'Delete Broken project');
+  await state.workspace.refreshProjects(false);
+  assert.equal(state.nodes.get('project-select').value, brokenId);
+  assert.match(state.nodes.get('canvases-empty').textContent, /could not be opened/);
+  assert.equal(state.nodes.get('canvases-empty').hidden, false);
+  assert.equal(state.nodes.get('project-kit-list').querySelectorAll('input').every((input) => input.disabled), true);
+  assert.equal(state.nodes.get('all-media-list').querySelectorAll('button').every((button) => button.disabled), true);
+  await state.nodes.get('project-delete').listeners.click();
+  assert.deepEqual(state.calls.at(-1), ['project', brokenId]);
+  assert.equal(state.nodes.get('project-select').value, brokenId);
+  assert.equal(state.stored.get('easel-studio.project-tabs.v1'), savedTabs);
+  state.confirm(true);
+  await state.nodes.get('project-delete').listeners.click();
+  assert.equal(state.projects.some((project) => project.id === state.projectId), true);
+  assert.equal(state.workspace.getProjectId(), state.projectId);
+  assert.equal(state.nodes.get('project-select').value, state.projectId);
+  assert.equal(state.selections.at(-1), selection);
+  assert.equal(state.nodes.get('canvases-list').hidden, false);
+  assert.equal(state.stored.get('easel-studio.project-tabs.v1'), savedTabs);
+});
+
+test('an unopenable selection still respects busy guards and can recover by retrying', async () => {
+  const state = fixture();
+  const open = state.client.openProjectDocument;
+  state.client.openProjectDocument = async () => { throw new Error('Invalid project reference'); };
+  await assert.rejects(state.workspace.openProject(state.projectId), /Invalid project reference/);
+  state.busy(true);
+  state.workspace.updateBusy();
+  assert.equal(state.nodes.get('project-delete').disabled, true);
+  await state.nodes.get('project-delete').listeners.click();
+  assert.equal(state.calls.some(([type]) => type === 'project'), false);
+  state.busy(false);
+  state.workspace.updateBusy();
+  assert.equal(state.nodes.get('project-delete').disabled, false);
+  state.client.openProjectDocument = open;
+  await state.workspace.openProject(state.projectId);
+  assert.equal(state.workspace.getProjectId(), state.projectId);
+  assert.equal(state.nodes.get('canvases-list').hidden, false);
+  assert.equal(state.nodes.get('project-rename').disabled, false);
+  assert.equal(state.statuses.at(-1)[0], '');
+});
+
+test('a project with no openable documents remains selected for deletion', async () => {
+  const state = fixture();
+  state.client.listProjectDocuments = async () => ({ documents: [] });
+  await assert.rejects(state.workspace.openProject(state.projectId), /no HTML document/);
+  assert.equal(state.nodes.get('project-select').value, state.projectId);
+  assert.equal(state.nodes.get('project-delete').disabled, false);
+  state.confirm(true);
+  await state.nodes.get('project-delete').listeners.click();
+  assert.deepEqual(state.calls.at(-1), ['project', state.projectId]);
+  assert.equal(state.projects.length, 0);
 });
 
 test('deleting the last canvas handles project deletion and surfaces media cleanup warnings', async () => {

@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const path = require('node:path');
 const acorn = require('acorn');
+const { cssImportRules, sanitizeGoogleFontsCss, sanitizeGoogleFontsHtml } = require('./canvas-fonts');
 
 const MAX_FILE_BYTES = 1_048_576;
 const MAX_PROJECT_BYTES = 4 * MAX_FILE_BYTES;
@@ -283,38 +284,6 @@ function validateJavaScriptFiles(project, names) {
   return { checkedFiles: names.filter((name) => /\.m?js$/i.test(name)), moduleFiles: [...moduleFiles] };
 }
 
-function cssImportRules(source) {
-  const rules = [];
-  let depth = 0;
-  for (let index = 0; index < source.length; index += 1) {
-    if (source.startsWith('/*', index)) {
-      const end = source.indexOf('*/', index + 2);
-      index = end < 0 ? source.length : end + 1;
-      continue;
-    }
-    const character = source[index];
-    if (character === '"' || character === "'") {
-      const quote = character;
-      while (++index < source.length && source[index] !== quote) if (source[index] === '\\') index += 1;
-      continue;
-    }
-    if (character === '{') depth += 1;
-    if (character === '}') depth = Math.max(0, depth - 1);
-    if (!depth && /^@import\b/i.test(source.slice(index, index + 8))) {
-      const start = index;
-      let quote = '';
-      while (++index < source.length) {
-        if (source[index] === '\\') { index += 1; continue; }
-        if (quote) { if (source[index] === quote) quote = ''; }
-        else if (source[index] === '"' || source[index] === "'") quote = source[index];
-        else if (source[index] === ';') break;
-      }
-      rules.push({ start, end: index + 1, text: source.slice(start, index + 1) });
-    }
-  }
-  return rules;
-}
-
 function assembleProject(project, { readKit, readAsset, documentPath, includeSnapshot = true, maxOutputBytes = Infinity } = {}) {
   validateProject(project);
   const { files, manifest } = project;
@@ -369,7 +338,7 @@ function assembleProject(project, { readKit, readAsset, documentPath, includeSna
   }
   function cssText(name, ancestry = []) {
     if (ancestry.includes(name)) throw new Error('Circular CSS imports are unsupported.');
-    let text = files[name];
+    let text = sanitizeGoogleFontsCss(files[name]);
     for (const rule of cssImportRules(text).reverse()) {
       const match = /^@import\s+(?:url\(\s*)?(["'])([^"']+)\1\s*\)?\s*([^;]*);$/i.exec(rule.text);
       if (!match) throw new Error('CSS imports must use quoted relative paths.');
@@ -383,7 +352,7 @@ function assembleProject(project, { readKit, readAsset, documentPath, includeSna
     }
     return resolveAssets(text, name);
   }
-  let html = cleanHostDocument(files[entry]);
+  let html = sanitizeGoogleFontsHtml(cleanHostDocument(files[entry]));
   let hasModules = false;
   const moduleRoots = new Set();
   let styleIndex = 0;

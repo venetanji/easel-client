@@ -39,6 +39,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   const mediaSeenStorageKey = 'easel-studio.media-seen.v1';
   let projects = [];
   let projectId = '';
+  let selectedProjectId = '';
   let documents = [];
   let assets = [];
   let libraryAssets = [];
@@ -81,13 +82,13 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     item.type = 'button';
     item.setAttribute('aria-label', label);
     item.addEventListener('click', () => run(action));
-    item.disabled = operation || Boolean(isBusy?.());
+    item.disabled = operation || selectedProjectId !== projectId || Boolean(isBusy?.());
     return item;
   }
   function report(error) { onStatus(error?.message || String(error), true); }
   function deleteButton(label, action) {
     const item = createDeleteButton(document, label, () => run(action));
-    item.disabled = operation || Boolean(isBusy?.());
+    item.disabled = operation || selectedProjectId !== projectId || Boolean(isBusy?.());
     return item;
   }
   async function run(action) {
@@ -293,6 +294,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     document.getElementById('project-image-count').textContent = String(current.length);
     document.getElementById('all-media-count').textContent = String(all.length);
     updateMediaNotices();
+    updateBusy();
   }
   function mediaCard(asset, library, inProject) {
     const kind = mediaKind(asset);
@@ -470,7 +472,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       checkbox.dataset.projectKit = kit.id;
       checkbox.checked = projectKits.includes(kit.id);
       checkbox.dataset.unavailable = String(!kit.installed);
-      checkbox.disabled = !projectId || operation || Boolean(isBusy?.()) || (checkbox.dataset.unavailable === 'true' && !checkbox.checked);
+      checkbox.disabled = !projectId || operation || selectedProjectId !== projectId || Boolean(isBusy?.()) || (checkbox.dataset.unavailable === 'true' && !checkbox.checked);
       checkbox.addEventListener('change', () => run(async () => {
         guard();
         const owner = projectId;
@@ -503,6 +505,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     }));
     projectKitStatus.textContent = projectId ? 'Shared by every HTML canvas in this project.' : 'Select a project to choose its kits.';
     projectKitStatus.dataset.error = 'false';
+    updateBusy();
   }
   async function deleteFile(path) {
     guard();
@@ -532,7 +535,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   }
   async function deleteProject() {
     guard();
-    const owner = projectId;
+    const owner = selectedProjectId;
     if (!owner) return;
     operation = true;
     updateBusy();
@@ -584,9 +587,8 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       option.value = project.id;
       return option;
     }));
-    picker.value = projectId;
-    document.getElementById('project-rename').disabled = !projectId || operation || Boolean(isBusy?.());
-    document.getElementById('project-delete').disabled = !projectId || operation || Boolean(isBusy?.());
+    picker.value = selectedProjectId;
+    updateBusy();
   }
   function renderTabs() {
     const visible = [...tabs.values()].filter((tab) => tab.projectId === projectId);
@@ -653,12 +655,15 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   async function openProject(id, documentPath) {
     guard();
     if (!id) return;
+    // The picker owns deletion; the active project changes only after the host opens it.
+    selectedProjectId = id;
     const version = ++selectionVersion;
     operation = true;
     updateBusy();
     try {
       if (!projects.some((project) => project.id === id)) projects = await client.listCanvases();
       if (version !== selectionVersion) return;
+      renderPicker();
       const listing = await client.listProjectDocuments(id);
       const entries = Array.isArray(listing) ? listing : listing.documents || [];
       const saved = [...tabs.values()].filter((tab) => tab.projectId === id).at(-1);
@@ -676,13 +681,22 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       await loadProjectContents(id);
       if (version !== selectionVersion || id !== projectId) return;
       if (!documentPath && isMediaTab(saved)) await openMedia({ id: saved.resource, name: saved.title }, saved.library);
+      onStatus('');
+    } catch (error) {
+      if (version === selectionVersion && id !== projectId) {
+        const name = projects.find((project) => project.id === id)?.title || 'selected project';
+        throw new Error(`Could not open ${name}. Delete still targets this selected project. ${error.message || error}`);
+      }
+      throw error;
     } finally { operation = false; updateBusy(); onBounds(); }
   }
   async function refreshProjects(restore = true) {
     projects = await client.listCanvases();
+    if (!projects.some((project) => project.id === selectedProjectId)) selectedProjectId = projectId;
     renderPicker();
     if (projectId) await loadProjectContents(projectId);
     else await Promise.all([refreshAssets(), refreshKits()]);
+    updateBusy();
     if (restore && !restored) {
       restored = true;
       const legacy = read('easel-studio.open-canvases.v1', []).at(-1);
@@ -703,6 +717,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       return;
     }
     projectId = id;
+    selectedProjectId = id;
     hideMedia();
     renderPicker();
     await loadProjectContents(id);
@@ -717,6 +732,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     projects = await client.listCanvases();
     if (metadata.createdProject && !projectId) {
       projectId = id;
+      selectedProjectId = id;
       await client.hideCanvasPreview();
       hideMedia();
       renderPicker();
@@ -730,6 +746,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   function acceptDeletion(event) {
     const update = async () => {
       if (event.type === 'project-deleted' || event.projectDeleted) {
+        if (selectedProjectId === event.projectId) selectedProjectId = event.projectId === projectId ? '' : projectId;
         for (const [key, tab] of tabs) if (tab.projectId === event.projectId) tabs.delete(key);
         if (event.projectId === projectId) {
           selectionVersion += 1;
@@ -780,6 +797,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     if (event.projectId && event.projectId !== projectId) {
       projects = await client.listCanvases();
       projectId = event.projectId;
+      selectedProjectId = projectId;
       renderPicker();
       await loadProjectContents(projectId);
     }
@@ -814,13 +832,29 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       onBusy?.(operation);
     }
     const busy = operation || Boolean(isBusy?.());
+    const selectionPending = selectedProjectId !== projectId;
     picker.disabled = busy;
     for (const element of document.querySelectorAll('.project-document, .project-source-file, .library .delete-control, .media-drawer .delete-control, .project-media-actions button, .media-job-recovery button, button.project-thumbnail, .canvas-tab button, #project-new, #project-rename, #drawer-new-document')) {
-      element.disabled = busy || element.dataset.referenced === 'true' || (element.dataset.requiresProject === 'true' && !projectId);
+      element.disabled = busy || (selectionPending && element.id !== 'project-new') || element.dataset.referenced === 'true' || (element.dataset.requiresProject === 'true' && !projectId);
     }
-    for (const checkbox of projectKitList?.querySelectorAll('input') || []) checkbox.disabled = busy || !projectId || (checkbox.dataset.unavailable === 'true' && !checkbox.checked);
-    document.getElementById('project-rename').disabled = busy || !projectId;
-    document.getElementById('project-delete').disabled = busy || !projectId;
+    for (const checkbox of projectKitList?.querySelectorAll('input') || []) checkbox.disabled = busy || selectionPending || !projectId || (checkbox.dataset.unavailable === 'true' && !checkbox.checked);
+    document.getElementById('project-rename').disabled = busy || selectionPending || !projectId;
+    const deleteControl = document.getElementById('project-delete');
+    deleteControl.disabled = busy || !selectedProjectId;
+    const deleteLabel = selectedProjectId ? `Delete ${projects.find((project) => project.id === selectedProjectId)?.title || 'selected project'}` : 'Delete project';
+    deleteControl.title = deleteLabel;
+    deleteControl.setAttribute('aria-label', deleteLabel);
+    for (const element of [documentsList, document.getElementById('project-source-files'), projectKitList, mediaList]) element.hidden = selectionPending;
+    projectKitStatus.hidden = selectionPending;
+    document.getElementById('project-image-count').hidden = selectionPending;
+    if (selectionPending) {
+      const hint = document.getElementById('canvases-empty');
+      hint.hidden = false;
+      hint.textContent = operation ? 'Opening the selected project...' : 'This project could not be opened. Retry by selecting it again, or delete it above.';
+    } else {
+      document.getElementById('canvases-empty').hidden = documents.length > 0;
+      document.getElementById('canvases-empty').textContent = projectId ? 'Create an HTML canvas in this project.' : 'Select a project above to browse its documents.';
+    }
     document.getElementById('image-use-chat').disabled = busy || !isMediaTab();
   }
   drawerToggle.addEventListener('click', () => setDrawer(drawer.hidden));
@@ -831,7 +865,11 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   document.getElementById('project-rename').addEventListener('click', () => onCreate('rename', title()));
   document.getElementById('project-delete').addEventListener('click', () => run(deleteProject));
   document.getElementById('drawer-new-document').addEventListener('click', () => onCreate('document'));
-  picker.addEventListener('change', () => run(async () => { try { await openProject(picker.value); } finally { picker.value = projectId; } }));
+  picker.addEventListener('change', () => run(async () => {
+    const id = picker.value;
+    if (!id) { selectedProjectId = projectId; renderPicker(); return; }
+    try { await openProject(id); } finally { picker.value = selectedProjectId; }
+  }));
   document.getElementById('image-use-chat').addEventListener('click', () => run(() => attachMedia({ id: activeTab.resource, name: activeTab.title }, activeTab.library)));
   document.getElementById('image-size-toggle').addEventListener('click', () => {
     zoomed = !zoomed;

@@ -1,5 +1,6 @@
 const MAX_HTML_BYTES = 1_048_576;
 const { addCanvasLifecycle } = require('./canvas-runtime');
+const { sanitizeGoogleFontsHtml } = require('./canvas-fonts');
 const MAX_CANVAS_DOCUMENT_BYTES = 8 * 1_048_576;
 const MAX_ASSETS = 8;
 const MAX_ASSET_BYTES = 32 * 1024 * 1024;
@@ -88,6 +89,7 @@ function buildCanvasDocument({ html, assets = [], kits = [], kitBundles = {} } =
   if (Buffer.byteLength(html, 'utf8') > MAX_HTML_BYTES) throw new Error('Canvas HTML exceeds 1 MiB.');
   if (!Array.isArray(assets) || assets.length > MAX_ASSETS) throw new Error(`Canvas supports at most ${MAX_ASSETS} image assets.`);
   if (!Array.isArray(kits) || kits.length > ALLOWED_CANVAS_KITS.size) throw new Error('Canvas kits are invalid.');
+  html = sanitizeGoogleFontsHtml(html);
   if (/\b(?:src|href|poster|action)\s*=\s*["']?\s*(?:https?:|file:|\/\/)/i.test(html)) {
     throw new Error('Canvas cannot reference external URLs.');
   }
@@ -147,6 +149,7 @@ function buildCanvasDocument({ html, assets = [], kits = [], kitBundles = {} } =
 function buildCanvasSnapshotDocument(html) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('Canvas HTML is required.');
   if (Buffer.byteLength(html, 'utf8') > MAX_SNAPSHOT_BYTES) throw new Error(`Canvas assembly uses ${Buffer.byteLength(html, 'utf8')} bytes; limit ${MAX_SNAPSHOT_BYTES} bytes. Source files and media have separate limits; inspect list_canvas_files for asset contributions.`);
+  html = sanitizeGoogleFontsHtml(html);
   if (/\b(?:src|href|poster|action)\s*=\s*["']?\s*(?:https?:|file:|\/\/)/i.test(html)) {
     throw new Error('Canvas cannot reference external URLs.');
   }
