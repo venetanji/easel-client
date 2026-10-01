@@ -121,7 +121,7 @@ Relative script and stylesheet paths work inside the project. ES modules support
 | `attach_canvas_assets` | Attaches several saved IDs atomically without inserting visible images. IDs are deduplicated, and identical media shares the binary cache. |
 | `get_canvas_state` / `set_canvas_state` | Reads/writes opt-in `state.json`, exposed on load as `window.__easelProjectState`. |
 
-Limits are 100 source files, 1 MiB per file, 4 MiB total source, 32 MiB total project media, and 64 KiB persistent JSON state. Runtime variables remain separate from persistent state. File mutations default to source-only; `reload:true` applies them with cleanup, and `preserveState:true` also restores registered runtime/control state.
+Limits are 100 source files, 1 MiB per file, 4 MiB total source, and 64 KiB persistent JSON state. Total project media has no byte cap: saving checks available disk space, including space for atomic replacements. Individual media transfers retain their 32 MiB limit, and ZIP/document exports have separate size budgets. Runtime variables remain separate from persistent state. File mutations default to source-only; `reload:true` applies them with cleanup, and `preserveState:true` also restores registered runtime/control state.
 
 Authored source is authoritative: Save, JavaScript probes and asset attachment never adopt live renderer DOM. `add_image_to_canvas` updates authored HTML and the corresponding live image separately. `adopt_canvas_runtime_dom` is an explicit operation for cases that need a DOM snapshot; generated renderers and controls can become part of source when using it.
 

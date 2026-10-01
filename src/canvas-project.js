@@ -55,7 +55,6 @@ function validateProject(project) {
     if (asset.width !== undefined && (!Number.isInteger(asset.width) || asset.width < 1 || asset.width > 100_000)) throw new Error('Canvas asset width is invalid.');
     if (asset.height !== undefined && (!Number.isInteger(asset.height) || asset.height < 1 || asset.height > 100_000)) throw new Error('Canvas asset height is invalid.');
   }
-  if ([...assetSizes.values()].reduce((total, bytes) => total + bytes, 0) > 32 * MAX_FILE_BYTES) throw new Error('Canvas project media exceeds 32 MiB.');
   if (Object.hasOwn(project.files, 'state.json')) validateStateText(project.files['state.json']);
   return project;
 }

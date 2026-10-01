@@ -419,7 +419,8 @@ const CANVAS_CONTROLLER = {
     listMediaAssets: async ({ scope = 'library', projectId, limit = 30 } = {}) => {
       if (!['library', 'project'].includes(scope) || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Choose library/project scope and a limit from 1 to 100.');
       const assets = scope === 'project' ? CANVASES.listAssets(validateOpaqueId(projectId || requireCanvasView().getCurrentCanvasId(), 'Project ID')).assets : (await listStoredMedia()).filter((asset) => asset.kind !== 'job');
-      return { scope, assets: assets.slice(0, limit).map(({ id, name, mimeType, bytes, width, height, duration, codec, projectId: owner }) => ({ assetId: id, name, mimeType, bytes, width, height, duration, codec, ...(owner ? { projectId: owner } : {}) })), truncated: assets.length > limit };
+      const recent = [...assets].sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+      return { scope, order: 'newest_first', assets: recent.slice(0, limit).map(({ id, name, mimeType, bytes, width, height, duration, codec, updatedAt, projectId: owner }) => ({ assetId: id, name, mimeType, bytes, width, height, duration, codec, updatedAt, ...(owner ? { projectId: owner } : {}) })), truncated: recent.length > limit };
     },
     adoptCanvasDom: (options) => projectMutation('adoptCanvasDom', options),
     getCanvasSource: (options) => withCanvas((controller) => controller.getCanvasSource(options)),

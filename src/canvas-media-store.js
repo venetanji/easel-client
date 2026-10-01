@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { isGenericGeneratedName } = require('./media-names');
+const { assertStorageSpace, storageWriteError } = require('./storage-space');
 
 const MAX_MEDIA_BYTES = 32 * 1_048_576;
 const MAX_VIDEO_FRAMES = 6;
@@ -93,18 +94,20 @@ function createCanvasMediaStore({ userDataPath, fileSystem = fs, idFactory = () 
     const cleanName = (typeof name === 'string' ? name.trim().replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 160) : '') || (video ? 'Canvas recording' : 'Audio capture') + '.' + FORMATS[mimeType];
     const metadata = { id, name: cleanName, mimeType, bytes: bytes.length, digest: crypto.createHash('sha256').update(bytes).digest('hex'), thumbnail, updatedAt: Date.now(), ...(width ? { width } : {}), ...(height ? { height } : {}), ...(duration ? { duration } : {}), ...(codec ? { codec } : {}), ...(scope ? { scope } : {}), frames: samples.map((sample) => ({ timestamp: sample.timestamp, filename: sample.filename, bytes: sample.bytes.length, digest: crypto.createHash('sha256').update(sample.bytes).digest('hex') })) };
     fileSystem.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const metadataText = JSON.stringify(metadata);
+    assertStorageSpace(directory, [bytes.length, ...samples.map((sample) => sample.bytes.length), Buffer.byteLength(metadataText)], fileSystem);
     const temporary = path.join(directory, id + '.' + crypto.randomUUID() + '.tmp');
     fileSystem.mkdirSync(temporary, { mode: 0o700 });
     try {
       fileSystem.writeFileSync(path.join(temporary, 'media.' + FORMATS[mimeType]), bytes, { flag: 'wx', mode: 0o600 });
       for (const sample of samples) fileSystem.writeFileSync(path.join(temporary, sample.filename), sample.bytes, { flag: 'wx', mode: 0o600 });
-      fileSystem.writeFileSync(path.join(temporary, 'metadata.json'), JSON.stringify(metadata), { flag: 'wx', mode: 0o600 });
+      fileSystem.writeFileSync(path.join(temporary, 'metadata.json'), metadataText, { flag: 'wx', mode: 0o600 });
       fileSystem.renameSync(temporary, capturePath(id));
     } catch (error) {
       const root = path.resolve(directory);
       const target = path.resolve(temporary);
-      if (target.startsWith(root + path.sep) && path.dirname(target) === root) fileSystem.rmSync(target, { recursive: true, force: true });
-      throw error;
+      try { if (target.startsWith(root + path.sep) && path.dirname(target) === root) fileSystem.rmSync(target, { recursive: true, force: true }); } catch { /* Keep the original storage failure. */ }
+      throw storageWriteError(error);
     }
     return id;
   }

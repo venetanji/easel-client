@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { assertStorageSpace, storageWriteError } = require('./storage-space');
 
 const MAX_ASSET_BYTES = 32 * 1024 * 1024;
 const MAX_BASE64_LENGTH = Math.ceil(MAX_ASSET_BYTES / 3) * 4;
@@ -36,14 +37,15 @@ function createAssetStore({
     if (typeof id !== 'string' || !ID_PATTERN.test(id)) throw new Error('Asset ID generator returned an invalid ID.');
 
     fileSystem.mkdirSync(assetsPath, { recursive: true, mode: 0o700 });
+    assertStorageSpace(assetsPath, bytes.length, fileSystem);
     const filename = path.join(assetsPath, `${id}.${FORMATS[mimeType]}`);
     const temporary = `${filename}.${crypto.randomUUID()}.tmp`;
-    fileSystem.writeFileSync(temporary, bytes, { mode: 0o600, flag: 'wx' });
     try {
+      fileSystem.writeFileSync(temporary, bytes, { mode: 0o600, flag: 'wx' });
       fileSystem.renameSync(temporary, filename);
     } catch (error) {
-      fileSystem.rmSync(temporary, { force: true });
-      throw error;
+      try { fileSystem.rmSync(temporary, { force: true }); } catch { /* Keep the original storage failure. */ }
+      throw storageWriteError(error);
     }
     return id;
   }

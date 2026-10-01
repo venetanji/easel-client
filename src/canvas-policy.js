@@ -146,9 +146,9 @@ function buildCanvasDocument({ html, assets = [], kits = [], kitBundles = {} } =
   return addRuntimeDiagnostics(`<!doctype html><html><head><meta charset="utf-8">${policy}</head><body>${output}</body></html>`);
 }
 
-function buildCanvasSnapshotDocument(html) {
+function buildCanvasSnapshotDocument(html, { maxBytes = MAX_SNAPSHOT_BYTES } = {}) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('Canvas HTML is required.');
-  if (Buffer.byteLength(html, 'utf8') > MAX_SNAPSHOT_BYTES) throw new Error(`Canvas assembly uses ${Buffer.byteLength(html, 'utf8')} bytes; limit ${MAX_SNAPSHOT_BYTES} bytes. Source files and media have separate limits; inspect list_canvas_files for asset contributions.`);
+  if (Buffer.byteLength(html, 'utf8') > maxBytes) throw new Error(`Canvas assembly uses ${Buffer.byteLength(html, 'utf8')} bytes; limit ${maxBytes} bytes. Source files and media have separate limits; inspect list_canvas_files for asset contributions.`);
   html = sanitizeGoogleFontsHtml(html);
   if (/\b(?:src|href|poster|action)\s*=\s*["']?\s*(?:https?:|file:|\/\/)/i.test(html)) {
     throw new Error('Canvas cannot reference external URLs.');

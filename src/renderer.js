@@ -255,6 +255,7 @@ function renderAssistantAssetLinks(document, content, text, assetPreviews, pendi
   const assetLinks = /!?\[([^\]\r\n]{1,240})\]\(asset:\/\/([^\s)]{1,256})\)/gi;
   let cursor = 0;
   const resolvedAssetIds = [];
+  let unresolvedLinks = 0;
   for (const match of text.matchAll(assetLinks)) {
     const assetId = match[2].toLowerCase();
     const isValidAssetId = /^(?:[a-f0-9]{32}|[a-f0-9]{64})$/.test(assetId);
@@ -265,15 +266,17 @@ function renderAssistantAssetLinks(document, content, text, assetPreviews, pendi
       preview.image.alt = label;
       preview.caption.textContent = label;
       resolvedAssetIds.push(assetId);
+      content.append(document.createTextNode(match[0].replace(/^!/, '')));
     } else {
       // Keep the description readable if the image event reaches the renderer later.
       content.append(document.createTextNode(label));
+      unresolvedLinks += 1;
       if (isValidAssetId) pendingAssetCaptions?.set(assetId, label);
     }
     cursor = match.index + match[0].length;
   }
   content.append(document.createTextNode(text.slice(cursor)));
-  return { resolvedAssetIds, hasText: content.textContent.trim().length > 0 };
+  return { resolvedAssetIds, hasText: unresolvedLinks > 0 || text.replace(assetLinks, '').trim().length > 0 };
 }
 
 function appendMediaPreviewMessage(document, messagesElement, event, onAddToCanvas, options = {}) {
@@ -444,11 +447,12 @@ function skillCompatibility(skill, installedSkills) {
 
 let assistantMarkdown;
 
-function renderAssistantMarkdown(content) {
+function renderAssistantMarkdown(content, assetPreviews = new Map()) {
   if (typeof globalThis.markdownit !== 'function') return;
   if (!assistantMarkdown) {
     assistantMarkdown = globalThis.markdownit({ html: false, breaks: true, linkify: false });
     assistantMarkdown.validateLink = (value) => {
+      if (/^asset:\/\/(?:[a-f0-9]{32}|[a-f0-9]{64})$/i.test(value)) return true;
       try {
         const url = new URL(value);
         return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password;
@@ -460,8 +464,19 @@ function renderAssistantMarkdown(content) {
   content.innerHTML = assistantMarkdown.render(content.textContent);
   content.classList.add('markdown');
   for (const link of content.querySelectorAll('a[href]')) {
+    const assetId = /^asset:\/\/([a-f0-9]{32}|[a-f0-9]{64})$/i.exec(link.getAttribute('href'))?.[1]?.toLowerCase();
+    if (assetId) link.title = 'Show this media in chat';
     link.addEventListener('click', async (event) => {
       event.preventDefault();
+      if (assetId) {
+        const preview = assetPreviews.get(assetId);
+        if (preview?.message) {
+          preview.message.tabIndex = -1;
+          preview.message.scrollIntoView?.({ block: 'center' });
+          preview.message.focus?.({ preventScroll: true });
+        }
+        return;
+      }
       try { await globalThis.easelClient?.openExternal(link.href); }
       catch { link.title = 'Could not open this link in your browser.'; }
     });
@@ -489,7 +504,7 @@ function appendTextMessage(document, messagesElement, role, text, options = {}) 
       if (shouldFollow) messagesElement.scrollTop = messagesElement.scrollHeight;
       return null;
     }
-    renderAssistantMarkdown(content);
+    renderAssistantMarkdown(content, options.assetPreviews);
     message.append(content);
   } else if (role === 'user' && Array.isArray(options.attachments) && options.attachments.length > 0) {
     const content = document.createElement('div');
@@ -801,7 +816,7 @@ function renderStreamingAgentEvent({ document, messagesElement, event, streams, 
   if (stream.final) {
     content.replaceChildren();
     renderAssistantAssetLinks(document, content, stream.text, assetPreviews || new Map(), pendingAssetCaptions);
-    renderAssistantMarkdown(content);
+    renderAssistantMarkdown(content, assetPreviews);
   }
   stream.message.dataset.streaming = String(!stream.final);
   if (shouldFollow) messagesElement.scrollTop = messagesElement.scrollHeight;

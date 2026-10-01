@@ -5,6 +5,7 @@ const { buildCanvasDocument, buildCanvasSnapshotDocument } = require('./canvas-p
 const { imageElement, imageInsertionLocation } = require('./canvas-html');
 const { MAX_FILE_BYTES, MAX_FILES, assembleProject, digest, documentTitle, managedKitScripts, projectDocuments, projectFromDocument, readChunk, resolveDocumentPath, stripManagedKitScripts, validateFilePath, validateJavaScriptFiles, validateProject, validateStateText } = require('./canvas-project');
 const { createProjectZip } = require('./project-zip');
+const { assertStorageSpace, storageWriteError } = require('./storage-space');
 
 const ID_PATTERN = /^[a-f0-9]{32}$/;
 const ATTACHED_ID_PATTERN = /^(?:[a-f0-9]{32}|[a-f0-9]{64})$/;
@@ -139,13 +140,14 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
 
   function writeAtomic(filename, value) {
     fileSystem.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+    assertStorageSpace(path.dirname(filename), Buffer.isBuffer(value) ? value.length : Buffer.byteLength(value, 'utf8'), fileSystem);
     const temporary = `${filename}.${crypto.randomUUID()}.tmp`;
-    fileSystem.writeFileSync(temporary, value, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     try {
+      fileSystem.writeFileSync(temporary, value, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
       fileSystem.renameSync(temporary, filename);
     } catch (error) {
-      fileSystem.rmSync(temporary, { force: true });
-      throw error;
+      try { fileSystem.rmSync(temporary, { force: true }); } catch { /* Keep the original storage failure. */ }
+      throw storageWriteError(error);
     }
     return fileSystem.statSync(filename).mtimeMs;
   }
@@ -223,7 +225,8 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
       readAsset: (asset) => fileSystem.readFileSync(path.join(projectAssetsPath, asset.digest)),
       ...options,
     });
-    return addCanvasMetadata(buildCanvasSnapshotDocument(html), id, title);
+    // Validated project media has no aggregate storage cap; exports supply their own budget.
+    return addCanvasMetadata(buildCanvasSnapshotDocument(html, { maxBytes: options.maxOutputBytes ?? Infinity }), id, title);
   }
 
   function titleFromHtml(html) {
@@ -381,7 +384,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
 
   function update(id, snapshotHtml, { documentPath, restoreMetadata = false } = {}) {
     const existing = loadProject(id);
-    const document = buildCanvasSnapshotDocument(snapshotHtml);
+    const document = buildCanvasSnapshotDocument(snapshotHtml, { maxBytes: Infinity });
     const project = projectFromDocument(document, { previous: existing, documentPath, preferPrevious: !restoreMetadata, extractAssets, extractKits });
     project.id = id;
     project.title = restoreMetadata && typeof project.title === 'string' && project.title.trim() ? project.title : existing.title;
