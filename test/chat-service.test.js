@@ -31,6 +31,7 @@ test('uses a physical working directory for the packaged MCP process', () => {
 
   assert.equal(options.cwd, resourcesPath);
   assert.equal(options.args[0], path.join(resourcesPath, 'app.asar.unpacked', 'packages', 'media-mcp', 'dist', 'cli.js'));
+  assert.equal(options.env.NODE_PATH, path.join(resourcesPath, 'app.asar.unpacked', 'node_modules'));
 });
 
 test('polling model configurations include a name without a discovered catalog entry', () => {

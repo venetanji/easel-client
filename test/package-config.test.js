@@ -18,6 +18,9 @@ test('declares versioned cross-platform package scripts and MCP runtime files', 
   }
   assert.match(builder, /packages\/media-mcp\/dist/);
   assert.match(builder, /asarUnpack:/);
+  assert.match(builder, /asarUnpack:[\s\S]*?- node_modules\/\*\*\/\*/);
+  assert.match(builder, /afterPack: scripts\/check-packaged-media-mcp\.js/);
+  assert.match(builder, /afterSign: scripts\/check-signed-media-mcp\.js/);
   assert.match(builder, /AppImage/);
   assert.match(builder, /nsis/);
   assert.match(builder, /dmg/);

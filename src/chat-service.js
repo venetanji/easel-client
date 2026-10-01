@@ -26,7 +26,7 @@ function defaultMcpLaunchOptions(settings, secrets, { isPackaged = false, resour
       PATH: process.env.PATH || '',
       HOME: process.env.HOME || '',
       NODE_PATH: isPackaged
-        ? path.join(resourcesPath, 'app.asar/node_modules')
+        ? path.join(resourcesPath, 'app.asar.unpacked/node_modules')
         : path.join(appRoot, 'node_modules'),
       ELECTRON_RUN_AS_NODE: '1',
       EASEL_BASE_URL: settings.easelBaseUrl,

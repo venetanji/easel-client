@@ -12,6 +12,10 @@ asar: true
 asarUnpack:
   - packages/media-mcp/dist/**/*
   - packages/media-mcp/package.json
+  # The MCP child uses ESM imports, which require dependencies on disk.
+  - node_modules/**/*
+afterPack: scripts/check-packaged-media-mcp.js
+afterSign: scripts/check-signed-media-mcp.js
 extraResources:
   - from: build/icon.png
     to: app-icon.png
