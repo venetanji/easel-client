@@ -162,7 +162,7 @@ npm run dist:mac
 npm run dist:linux
 ```
 
-The test workflow installs Chromium and verifies a real offline screenshot. Desktop PR checks build unsigned Windows, macOS, and Linux packages and upload only the package files (not unpacked app trees) as Actions artifacts for review. The workflow does not sign or notarize builds.
+The test workflow installs Chromium and verifies a real offline screenshot. Desktop PR checks build Windows, macOS, and Linux packages without release credentials and upload only the package files (not unpacked app trees) as Actions artifacts for review. PR and local macOS packages use ad hoc signatures. Release and manual macOS builds use Developer ID signing and Apple notarization; see [macOS signing setup](docs/macos-signing.md).
 
 ### Publish a release
 

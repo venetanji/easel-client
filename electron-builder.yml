@@ -21,12 +21,19 @@ win:
     - nsis
     - zip
 mac:
+  identity: "-"
+  hardenedRuntime: false
+  notarize: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     NSCameraUsageDescription: Easel canvases can use your camera when you allow access.
     NSMicrophoneUsageDescription: Easel canvases can use your microphone when you allow access.
   target:
     - dmg
     - zip
+dmg:
+  sign: false
 linux:
   target:
     - AppImage
