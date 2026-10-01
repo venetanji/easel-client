@@ -1,0 +1,109 @@
+name: Update macOS Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful manual Desktop Builds run on main
+        required: true
+        type: string
+      release_tag:
+        description: Existing release tag to update
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: desktop-refs/tags/${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - name: Verify source build and release
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" > build.json
+          jq -e --arg repo "$GITHUB_REPOSITORY" '
+            .repository.full_name == $repo and
+            .path == ".github/workflows/desktop.yml" and
+            .head_branch == "main" and .event == "workflow_dispatch" and
+            .status == "completed" and .conclusion == "success"
+          ' build.json > /dev/null
+          source_sha=$(jq -r .head_sha build.json)
+          gh api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$source_sha" \
+            --header 'Accept: application/vnd.github.raw+json' > package.json
+          version=$(jq -r .version package.json)
+          [[ "$RELEASE_TAG" == "v$version" ]]
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v8
+        with:
+          name: easel-mac-${{ inputs.build_run_id }}
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+          path: assets
+      - name: Replace macOS downloads and verify hashes
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          PACKAGE_VERSION: ${{ steps.source.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir publish
+          for extension in dmg zip; do
+            mapfile -t files < <(find assets -type f -name "Easel Studio-$PACKAGE_VERSION-mac-arm64.$extension")
+            [[ ${#files[@]} == 1 ]]
+            cp -- "${files[0]}" "publish/Easel.Studio-$PACKAGE_VERSION-mac-arm64.$extension"
+          done
+          gh release upload "$RELEASE_TAG" publish/*.dmg publish/*.zip \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > release.json
+          node <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const release = JSON.parse(fs.readFileSync('release.json', 'utf8'));
+          for (const name of fs.readdirSync('publish')) {
+            const bytes = fs.readFileSync(`publish/${name}`);
+            const digest = `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
+            const asset = release.assets.find(item => item.name === name);
+            if (!asset || asset.state !== 'uploaded' || asset.size !== bytes.length || asset.digest !== digest) {
+              throw new Error(`Release asset verification failed: ${name}`);
+            }
+            console.log(`Verified ${name}: ${digest}`);
+          }
+          const { GITHUB_REPOSITORY, SOURCE_SHA, BUILD_RUN_ID, RELEASE_TAG } = process.env;
+          const start = '<!-- easel-macos-signing -->';
+          const end = '<!-- /easel-macos-signing -->';
+          const update = `${start}\n## macOS Signing Update\n\n` +
+            `The macOS DMG and ZIP are Developer ID signed and Apple notarized. ` +
+            `Both the app and DMG passed signature verification, notarization ticket validation, ` +
+            `and Gatekeeper assessment in [Desktop Builds run ${BUILD_RUN_ID}]` +
+            `(https://github.com/${GITHUB_REPOSITORY}/actions/runs/${BUILD_RUN_ID}).\n\n` +
+            `These packages were built from [${SOURCE_SHA.slice(0, 7)}]` +
+            `(https://github.com/${GITHUB_REPOSITORY}/commit/${SOURCE_SHA}). ` +
+            `The source tag \`${RELEASE_TAG}\` remains the original release tag.\n${end}\n\n`;
+          let notes = (release.body || '').replace(
+            /<!-- easel-macos-signing -->[\s\S]*?<!-- \/easel-macos-signing -->\s*/g, ''
+          ).replace('This first release is unsigned and is not notarized.',
+            'The macOS packages are signed with Developer ID and notarized by Apple. Windows packages are unsigned.');
+          notes = notes.includes('## Downloads')
+            ? notes.replace('## Downloads', update + '## Downloads')
+            : update + notes;
+          fs.writeFileSync('release-notes.md', notes);
+          NODE
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md

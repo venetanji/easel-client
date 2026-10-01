@@ -47,3 +47,10 @@ Run **Desktop Builds > Run workflow** on the signing branch to build signed
 artifacts without publishing a release. Once merged, future version tags use
 the same signing path. Existing releases are not retroactively signed; their
 artifacts must be explicitly replaced or a new version released.
+
+To replace an existing release's macOS downloads, run **Update macOS Release**
+with the ID of a successful manual **Desktop Builds** run on `main` and the
+matching release tag. It transfers the verified artifacts within GitHub,
+checks the uploaded SHA-256 hashes, and records the build commit and verification
+link in the release notes. It requires no signing credentials and updates only
+the macOS DMG and ZIP.
