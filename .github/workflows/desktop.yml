@@ -32,6 +32,7 @@ jobs:
           - os: ubuntu-latest
             target: linux
     runs-on: ${{ matrix.os }}
+    environment: ${{ matrix.target == 'mac' && github.event_name != 'pull_request' && 'desktop-build' || 'desktop-checks' }}
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
     steps:
@@ -63,9 +64,22 @@ jobs:
         shell: bash
         run: test -f node_modules/electron/dist/version
       - name: Package desktop app
+        if: matrix.target != 'mac' || github.event_name == 'pull_request'
         run: npm run dist:${{ matrix.target }}
         env:
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+      - name: Sign and notarize macOS app and disk image
+        if: matrix.target == 'mac' && github.event_name != 'pull_request'
+        shell: bash
+        run: bash scripts/sign-macos.sh
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
       - name: Package headless MCP server
         shell: bash
         run: tar -czf release/easel-media-mcp-${{ matrix.target }}.tar.gz -C packages/media-mcp dist package.json README.md
