@@ -1,0 +1,96 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { readInstalledSkills } = require('../src/skill-catalog');
+const { MEDIA_REFERENCE_TOOLS } = require('../src/media-reference-tools');
+
+const skillDirectory = path.join(__dirname, '..', '.agents', 'skills', 'easel-media');
+const referencesDirectory = path.join(skillDirectory, 'references');
+const catalogBytes = fs.readFileSync(path.join(referencesDirectory, 'lora-catalog.json'));
+const catalog = JSON.parse(catalogBytes);
+
+test('the bundled LoRA snapshot preserves all pinned server entries', () => {
+  assert.equal(catalog.length, 38);
+  assert.equal(new Set(catalog.map((entry) => entry.id)).size, catalog.length);
+  assert.equal(crypto.createHash('sha256').update(catalogBytes).digest('hex'),
+    '3faba4af15374f19d833556527ba77efb6fc22d18318cf43fdec1608f92af556');
+  for (const entry of catalog) {
+    assert.match(entry.id, /^[a-z0-9.-]+$/);
+    assert.ok(['ltx-2', 'ltx-2.3', 'ltx-2.5'].includes(entry.family));
+    assert.match(entry.revision, /^[a-f0-9]{40}$/);
+    assert.equal(typeof entry.supported, 'boolean');
+    assert.ok(Array.isArray(entry.requires));
+    assert.ok(entry.validation);
+    assert.ok(entry.files.length > 0);
+    for (const file of entry.files) {
+      assert.match(file.filename, /^[a-zA-Z0-9._-]+\.safetensors$/);
+      assert.ok(Number.isSafeInteger(file.bytes) && file.bytes > 0);
+      assert.match(file.sha256, /^[a-f0-9]{64}$/);
+    }
+  }
+});
+
+test('snapshot support is limited to seven cameras and three validated server recipes', () => {
+  assert.deepEqual(catalog.filter((entry) => entry.supported).map((entry) => entry.id).sort(), [
+    'camera-dolly-in', 'camera-dolly-left', 'camera-dolly-out', 'camera-dolly-right',
+    'camera-jib-down', 'camera-jib-up', 'camera-static', 'cinemagraph', 'ingredients', 'slow-motion',
+  ]);
+  for (const entry of catalog.filter((item) => !item.supported)) {
+    assert.equal(entry.validation, 'not_tested');
+  }
+});
+
+test('the readable inventory documents every registered ID exactly once', () => {
+  const inventory = fs.readFileSync(path.join(referencesDirectory, 'loras.md'), 'utf8');
+  const documentedIds = [...inventory.matchAll(/^\| `([^`]+)` \|/gm)].map((match) => match[1]);
+  assert.deepEqual(documentedIds.sort(), catalog.map((entry) => entry.id).sort());
+});
+
+test('skill reference links remain local and resolve inside the bundled skill', () => {
+  const filenames = [path.join(skillDirectory, 'SKILL.md'),
+    ...fs.readdirSync(referencesDirectory).filter((name) => name.endsWith('.md'))
+      .map((name) => path.join(referencesDirectory, name))];
+  let referenceCount = 0;
+  for (const filename of filenames) {
+    const contents = fs.readFileSync(filename, 'utf8');
+    for (const match of contents.matchAll(/\]\(([^)]+)\)/g)) {
+      const destination = path.resolve(path.dirname(filename), match[1]);
+      assert.ok(destination.startsWith(skillDirectory + path.sep), match[1]);
+      assert.ok(fs.statSync(destination).isFile(), match[1]);
+      referenceCount += 1;
+    }
+  }
+  assert.ok(referenceCount >= 6);
+});
+
+test('the skill distinguishes target models, tool gaps and current fan-out limits', () => {
+  const skill = fs.readFileSync(path.join(skillDirectory, 'SKILL.md'), 'utf8');
+  assert.match(skill, /name: easel-media/);
+  assert.match(skill, /`qwen-image-2\.1`/);
+  assert.match(skill, /`ltx-2\.5`/);
+  assert.match(skill, /Current client limit: at most four nonempty segments/);
+  assert.match(skill, /no current MCP adapter-discovery tool/);
+  assert.match(skill, /not a video timeline/);
+  assert.match(skill, /no idempotency recovery contract/);
+});
+
+test('in-app skill injection includes every adapter and the essential creative guidance', () => {
+  const skill = readInstalledSkills(path.dirname(skillDirectory))
+    .find((entry) => entry.name === 'easel-media');
+  assert.ok(skill);
+  assert.equal(skill.truncated, false);
+  assert.equal(skill.compatibility, 'supported');
+  const documentedIds = [...skill.instructions.matchAll(/^\| `([^`]+)` \|/gm)]
+    .map((match) => match[1]);
+  assert.deepEqual(documentedIds.sort(), catalog.map((entry) => entry.id).sort());
+  const normalizedInstructions = skill.instructions.replace(/\s+/g, ' ');
+  for (const practice of ['pose-neutral', 'master audio', 'motion_speed', 'guide-token', '8n+1']) {
+    assert.ok(normalizedInstructions.includes(practice), practice);
+  }
+  for (const toolName of ['list_media_jobs', 'list_media_assets', 'inspect_media_asset']) {
+    assert.ok(MEDIA_REFERENCE_TOOLS.some((tool) => tool.function.name === toolName));
+    assert.ok(skill.instructions.includes('`' + toolName + '`'));
+  }
+});
