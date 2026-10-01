@@ -13,7 +13,7 @@ const MEDIA_REFERENCE_TOOLS = Object.freeze([
   } },
   { type: 'function', function: {
     name: 'list_media_assets',
-    description: 'List saved images, canvas screenshots, recordings and audio as compact asset references. Chats are independent of projects. No binary data is returned.',
+    description: 'List saved images, canvas screenshots, recordings and audio newest first, with timestamps and compact asset references. Use scope:"library" after native Codex generation, including when project attachment fails. Project scope includes only attached assets. Chats are independent of projects. No binary data is returned.',
     parameters: { type: 'object', additionalProperties: false, properties: {
       scope: { type: 'string', enum: ['library', 'project'], default: 'library' },
       projectId: PROJECT_ID,

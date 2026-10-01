@@ -36,13 +36,13 @@ export async function generateVideo(options: GenerateVideoInput & ProviderOption
   if (!model || model.length > 256) throw new Error('Choose a video generation model (at most 256 characters).');
   const seconds = options.seconds ?? 4;
   if (!Number.isInteger(seconds) || seconds < 1 || seconds > 60) throw new Error('Video duration must be an integer from 1 to 60 seconds; supported durations depend on the model.');
-  const size = options.size ?? '1280x720';
-  if (!/^\d{2,5}x\d{2,5}$/.test(size)) throw new Error('Video size must use WIDTHxHEIGHT format.');
+  const size = options.size;
+  if (size !== undefined && !/^\d{2,5}x\d{2,5}$/.test(size)) throw new Error('Video size must use WIDTHxHEIGHT format.');
   const form = new FormData();
   form.append('prompt', prompt);
   form.append('model', model);
   form.append('seconds', String(seconds));
-  form.append('size', size);
+  if (size !== undefined) form.append('size', size);
   if (options.inputReference) appendImage(form, 'input_reference', decodeImageUpload(options.inputReference, 'Video reference image'));
   const apiKey = options.apiKey || '';
   const result = await requestJson(`${normalizeEaselBaseUrl(options.baseUrl)}/v1/videos`, {

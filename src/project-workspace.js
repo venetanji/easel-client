@@ -1,3 +1,5 @@
+const WorkspaceActionIcons = typeof module !== 'undefined' ? require('./ui-icons') : EaselUiIcons;
+
 function createDeleteButton(document, label, action) {
   const button = document.createElement('button');
   button.type = 'button';
@@ -15,7 +17,7 @@ function createDeleteButton(document, label, action) {
   return button;
 }
 
-function createProjectWorkspace({ document, client, storage, onSelection, onStatus, onBounds, onAttach, onCreate, onFiles, onBusy, onDrawerChange, isBusy }) {
+function createProjectWorkspace({ document, client, storage, onSelection, onStatus, onBounds, onAttach, onCreate, onFiles, onDevices, onBusy, onDrawerChange, isBusy }) {
   const picker = document.getElementById('project-select');
   const drawer = document.querySelector('.library');
   const drawerToggle = document.getElementById('nav-explorer');
@@ -24,6 +26,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   const mediaList = document.getElementById('media-list');
   const allMediaList = document.getElementById('all-media-list');
   const mediaUnreadBadge = document.getElementById('media-unread');
+  const mediaGenerationIndicator = document.getElementById('media-generating');
   const projectKitList = document.getElementById('project-kit-list');
   const projectKitStatus = document.getElementById('project-kit-status');
   const documentsList = document.getElementById('canvases-list');
@@ -85,6 +88,9 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     item.disabled = operation || selectedProjectId !== projectId || Boolean(isBusy?.());
     return item;
   }
+  function iconButton(label, icon, action) {
+    return WorkspaceActionIcons.setActionIcon(document, button('', 'icon-button', action, label), icon, label);
+  }
   function report(error) { onStatus(error?.message || String(error), true); }
   function deleteButton(label, action) {
     const item = createDeleteButton(document, label, () => run(action));
@@ -118,14 +124,23 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     svg.append(path);
     return svg;
   }
+  function updateMediaActivity(unread = [...mediaNotices.values()].filter((notice) => !notice.acknowledged).length) {
+    const active = new Set([...assets, ...libraryAssets]
+      .filter((asset) => asset.kind === 'job' && ['queued', 'generating', 'downloading'].includes(asset.job?.status))
+      .map((asset) => asset.job.id)).size;
+    if (mediaGenerationIndicator) mediaGenerationIndicator.hidden = active === 0;
+    const open = !mediaDrawer.hidden;
+    const progress = active ? `, ${active} media ${active === 1 ? 'job' : 'jobs'} in progress` : '';
+    mediaDrawerToggle.setAttribute('aria-label', `${open ? 'Hide' : 'Show'} media${unread ? `, ${unread} new ${unread === 1 ? 'asset' : 'assets'}` : ''}${progress}`);
+    mediaDrawerToggle.title = `Media${progress}`;
+  }
   function updateMediaNotices() {
     const unread = [...mediaNotices.values()].filter((notice) => !notice.acknowledged).length;
     if (mediaUnreadBadge) {
       mediaUnreadBadge.hidden = unread === 0;
       mediaUnreadBadge.textContent = unread > 99 ? '99+' : String(unread);
     }
-    const open = !mediaDrawer.hidden;
-    mediaDrawerToggle.setAttribute('aria-label', `${open ? 'Hide' : 'Show'} media${unread ? `, ${unread} new ${unread === 1 ? 'asset' : 'assets'}` : ''}`);
+    updateMediaActivity(unread);
     try { storage?.setItem(mediaNoticeStorageKey, JSON.stringify([...mediaNotices.values()].slice(-256))); } catch {}
     try { storage?.setItem(mediaSeenStorageKey, JSON.stringify([...knownMedia].slice(-1024))); } catch {}
     const newest = [...mediaNotices.values()].at(-1)?.assetId;
@@ -283,8 +298,9 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   }
   function renderAssets() {
     const attached = new Set(assets.map((asset) => asset.id));
-    const current = assets.filter((asset) => mediaKind(asset));
-    const all = libraryAssets.filter((asset) => mediaKind(asset));
+    const newestFirst = (left, right) => Number(right.createdAt || right.updatedAt || 0) - Number(left.createdAt || left.updatedAt || 0);
+    const current = assets.filter((asset) => mediaKind(asset)).sort(newestFirst);
+    const all = libraryAssets.filter((asset) => mediaKind(asset)).sort(newestFirst);
     mediaList.replaceChildren(...current.map((asset) => asset.kind === 'job' ? jobCard(asset) : mediaCard(asset, false, true)));
     allMediaList.replaceChildren(...all.map((asset) => asset.kind === 'job' ? jobCard(asset) : mediaCard(asset, true, attached.has(asset.id))));
     const empty = document.getElementById('media-empty');
@@ -339,8 +355,8 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
         actions.append(add);
       }
     }
-    actions.append(button('Use in chat', 'button quiet small', () => attachMedia(asset, library)));
-    actions.append(button('Download', 'button quiet small', () => downloadMedia(asset.id, library)));
+    actions.append(iconButton('Use in chat', 'useInChat', () => attachMedia(asset, library)));
+    actions.append(iconButton('Download', 'download', () => downloadMedia(asset.id, library)));
     const heading = node('div', 'project-media-heading');
     const trash = deleteButton(`${library ? 'Delete from library' : 'Remove from project'}: ${label.textContent}`, () => deleteMedia(asset.id, library));
     if (library && (inProject || asset.referenceCount > 0 || asset.projectIds?.length)) {
@@ -365,6 +381,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       const card = [...list.children].find((item) => item.dataset.jobId === job.id);
       if (card) updateJobCard(card, updated);
     }
+    updateMediaActivity();
     return true;
   }
   async function addToProject(asset) {
@@ -573,7 +590,16 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       const detail = node('small', '', path);
       item.append(detail);
       const row = node('div', 'project-file-row');
-      row.append(item, deleteButton(`Delete ${path}`, () => deleteFile(path)));
+      const devices = button('', 'fold-button project-file-device', () => onDevices?.(path, devices), `Camera and microphone for ${entry.title || path}`);
+      devices.title = `Camera and microphone for ${path}`;
+      devices.setAttribute('aria-haspopup', 'dialog');
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      for (const [name, value] of Object.entries({ viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) svg.setAttribute(name, value);
+      const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      shape.setAttribute('d', 'M3 6h3l1.5-2h5L14 6h3v10H3V6Zm10 5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z');
+      svg.append(shape);
+      devices.append(svg);
+      row.append(item, devices, deleteButton(`Delete ${path}`, () => deleteFile(path)));
       return row;
     }));
     document.getElementById('canvases-empty').hidden = documents.length > 0;
@@ -597,9 +623,19 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       group.dataset.active = String(activeTab && keyFor(tab) === keyFor(activeTab));
       group.setAttribute('role', 'group');
       group.setAttribute('aria-label', tab.title);
-      const selectButton = button(tab.title, 'canvas-tab-select', () => tab.kind === 'document' ? openDocument(tab.resource) : openMedia({ id: tab.resource, name: tab.title }, tab.library));
+      const selectButton = button('', 'canvas-tab-select', () => {
+        if (activeTab && keyFor(tab) === keyFor(activeTab)) { setDrawer(drawer.hidden, false); return; }
+        return tab.kind === 'document' ? openDocument(tab.resource) : openMedia({ id: tab.resource, name: tab.title }, tab.library);
+      }, tab.title);
+      selectButton.append(node('span', 'canvas-tab-name', tab.title));
+      if (tab.kind === 'document') {
+        const dot = node('span', 'state-dot ready canvas-tab-status');
+        dot.setAttribute('aria-hidden', 'true');
+        selectButton.append(dot);
+        selectButton.setAttribute('aria-label', `${tab.title} - Ready`);
+      }
       selectButton.setAttribute('aria-pressed', group.dataset.active);
-      selectButton.title = tab.kind === 'document' ? tab.resource : tab.title;
+      selectButton.title = `${tab.kind === 'document' ? `${tab.resource} - Ready` : tab.title}${group.dataset.active === 'true' ? ' - Toggle project files' : ''}`;
       const close = button('', 'canvas-tab-close', () => closeTab(tab), `Close ${tab.title}`);
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       svg.setAttribute('viewBox', '0 0 16 16');
@@ -819,12 +855,14 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       return result;
     } finally { operation = false; updateBusy(); }
   }
-  async function exportCurrent() {
+  async function exportCurrent({ projectOnly = false } = {}) {
     if (!projectId && !isMediaTab()) throw new Error('Open a project first.');
-    const result = isMediaTab()
+    if (projectOnly && !projectId) throw new Error('Open a project first.');
+    const media = !projectOnly && isMediaTab();
+    const result = media
       ? activeTab.library ? await client.saveLibraryAsset(activeTab.resource) : await client.saveProjectAsset(projectId, activeTab.resource)
       : await client.exportProject(projectId);
-    if (!result?.canceled) onStatus(isMediaTab() ? 'Media downloaded.' : 'Project exported as ZIP.');
+    if (!result?.canceled) onStatus(media ? 'Media downloaded.' : 'Project exported as ZIP.');
   }
   function updateBusy() {
     if (reportedOperation !== operation) {
@@ -834,7 +872,8 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     const busy = operation || Boolean(isBusy?.());
     const selectionPending = selectedProjectId !== projectId;
     picker.disabled = busy;
-    for (const element of document.querySelectorAll('.project-document, .project-source-file, .library .delete-control, .media-drawer .delete-control, .project-media-actions button, .media-job-recovery button, button.project-thumbnail, .canvas-tab button, #project-new, #project-rename, #drawer-new-document')) {
+    document.getElementById('export-current').disabled = busy || selectionPending || !projectId;
+    for (const element of document.querySelectorAll('.project-document, .project-file-device, .project-source-file, .library .delete-control, .media-drawer .delete-control, .project-media-actions button, .media-job-recovery button, button.project-thumbnail, .canvas-tab button, #project-new, #project-rename, #drawer-new-document')) {
       element.disabled = busy || (selectionPending && element.id !== 'project-new') || element.dataset.referenced === 'true' || (element.dataset.requiresProject === 'true' && !projectId);
     }
     for (const checkbox of projectKitList?.querySelectorAll('input') || []) checkbox.disabled = busy || selectionPending || !projectId || (checkbox.dataset.unavailable === 'true' && !checkbox.checked);
@@ -856,6 +895,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       document.getElementById('canvases-empty').textContent = projectId ? 'Create an HTML canvas in this project.' : 'Select a project above to browse its documents.';
     }
     document.getElementById('image-use-chat').disabled = busy || !isMediaTab();
+    document.getElementById('image-download').disabled = busy || !isMediaTab();
   }
   drawerToggle.addEventListener('click', () => setDrawer(drawer.hidden));
   document.getElementById('library-collapse').addEventListener('click', () => setDrawer(false));
@@ -871,6 +911,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     try { await openProject(id); } finally { picker.value = selectedProjectId; }
   }));
   document.getElementById('image-use-chat').addEventListener('click', () => run(() => attachMedia({ id: activeTab.resource, name: activeTab.title }, activeTab.library)));
+  document.getElementById('image-download').addEventListener('click', () => run(exportCurrent));
   document.getElementById('image-size-toggle').addEventListener('click', () => {
     zoomed = !zoomed;
     preview.dataset.zoom = zoomed ? 'actual' : 'fit';

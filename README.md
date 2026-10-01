@@ -54,6 +54,8 @@ Install the official Codex CLI on PATH, then select **Codex**. Use browser or de
 
 Embedded Codex enables its native image generation and editing tool. Completed PNG, JPEG, and WebP images are imported into Media, attached to the originating project when it is still open, and previewed in chat. Saved chat history retains Easel asset IDs; the agent can find them with `list_media_assets` and use them in canvas source. This uses the signed-in account's Codex usage limits, independently of endpoint credentials. Availability depends on the installed CLI, model/provider, and account. See [Codex image generation](https://learn.chatgpt.com/docs/image-generation). External MCP controllers use their own native image tools; Easel imports only native results emitted by its embedded app-server.
 
+Native image tools and configured Easel Media endpoints are available in the same Codex session. Request a configured model by name to use that endpoint; the agent discovers its exact ID with `list_models`. Easel checks that its MCP tools are ready before starting a turn. Routine Easel tools are authorized through the selected controller; destructive operations retain native user confirmation.
+
 The child process uses only Easel MCP, the OpenAI provider, a dedicated working directory, disabled shell/other host tools, and a read-only sandbox. It does not inherit unrelated MCP servers or OpenAI API-key/base-URL environment settings. Canvas edits use the same host executor as Built-in and External MCP. Native command/file/network approvals are unavailable. The app-server protocol is experimental; this integration is exercised with Codex CLI 0.159.2.
 
 Choose a model in the chat composer. Each conversation retains its Codex thread ID. Saved canvas answers and media completions continue that thread only when its controller, conversation, model and canvas/project are selected. Interrupted responses require an explicit retry. This route accepts images and sampled video frames; audio attachments are rejected while preserving the draft.
@@ -64,6 +66,8 @@ Official references: [Codex authentication](https://learn.chatgpt.com/docs/auth)
 
 Choose or create a named **Project** from the header. Each project holds shared source files, media references, and multiple HTML canvases. The folder icon opens the retractable **Files** drawer; the media icon opens a separate **Media** drawer with **In this project** above **All media**. Open documents and media appear as tabs above the viewer. **New HTML** adds another canvas to the selected project. Existing saved canvases appear as projects containing one document.
 
+The viewer has one tab row with a trailing **+** to create an HTML canvas. Clicking the selected document tab toggles the Files drawer. Project ZIP download and Undo live in that drawer, and each HTML document has a camera/microphone settings icon. Chat Copy, New chat, and media Open, Download, and Use in chat actions use labeled icons. Project media and All media are sorted newest first.
+
 Generated images automatically join the current project. In **All media**, use **Add to project** to attach a saved image without inserting it into a canvas. Click a thumbnail to preview its full-resolution image; **Actual size** switches from fit to a scrollable preview, and **Download image** saves the original bytes. **Use in chat** adds the image as a composer attachment, subject to the usual attachment limits and model input support.
 
 Media can belong to several projects. Removing an attachment keeps the saved media in **All media**, including media left with no project. The project trash control asks whether to keep its media or delete media that no other project uses. Deleting the last HTML canvas offers the same project confirmation. Global media deletion is blocked while a project still uses the asset.
@@ -71,6 +75,8 @@ Media can belong to several projects. Removing an attachment keeps the saved med
 The agent can use `edit_image` with saved `imageAssetIds` and an optional PNG `maskAssetId`, or `create_image_variation` with one `imageAssetId`. The host reads the saved references and uploads multipart image data to the selected Media model's endpoint. The model's tool arguments and saved tool results contain IDs rather than image bytes. Support depends on the provider/model; Easel accepts general image references for variations, while DALL-E 2 requires a square PNG under 4 MiB. Edited and varied images automatically join the project like generated images.
 
 `list_media_assets` lists reusable library/project IDs, and `inspect_media_asset` provides a temporary image observation. Live screenshots join the media library and project. `record_canvas_video` records a selected visible HTML canvas as silent video, with bounded JPEG frame samples; `get_video_frames` retrieves those saved samples for the agent. Videos appear in Media and support playback, download and **Use in chat**. Video input uses sampled still frames rather than the full video or its audio track. Recording a DOM-only composition or adding audio to the recording is not supported by this canvas recording path.
+
+Live captures also appear in chat and remain visible when a saved conversation is reopened. For source work, `list_canvas_files({includeAssets:false})` omits the media manifest. `present_canvas` returns actual saved file paths and revisions; related replacements can be batched in `apply_canvas_file_patches` before one reload. Source reads accept at most 24,000 bytes, and live captures wait at most eight frames and already include validation.
 
 **Export project** saves a ZIP containing offline HTML previews at their original paths, real media files, bundled kits, and authored source under `.easel/source/`. A canonical project record lives at `.easel/project.json`. Export preserves authored source rather than transient renderer DOM, with limits of 128 MiB per assembled document and 256 MiB for the full uncompressed archive. Canvas-to-chat actions require the Easel host when viewing exported HTML.
 
@@ -115,7 +121,7 @@ Relative script and stylesheet paths work inside the project. ES modules support
 | `attach_canvas_assets` | Attaches several saved IDs atomically without inserting visible images. IDs are deduplicated, and identical media shares the binary cache. |
 | `get_canvas_state` / `set_canvas_state` | Reads/writes opt-in `state.json`, exposed on load as `window.__easelProjectState`. |
 
-Limits are 100 source files, 1 MiB per file, 4 MiB total source, 32 MiB total project media, and 64 KiB persistent JSON state. Runtime variables remain separate from persistent state. File mutations default to source-only; `reload:true` applies them with cleanup, and `preserveState:true` also restores registered runtime/control state.
+Limits are 100 source files, 1 MiB per file, 4 MiB total source, and 64 KiB persistent JSON state. Total project media has no byte cap: saving checks available disk space, including space for atomic replacements. Individual media transfers retain their 32 MiB limit, and ZIP/document exports have separate size budgets. Runtime variables remain separate from persistent state. File mutations default to source-only; `reload:true` applies them with cleanup, and `preserveState:true` also restores registered runtime/control state.
 
 Authored source is authoritative: Save, JavaScript probes and asset attachment never adopt live renderer DOM. `add_image_to_canvas` updates authored HTML and the corresponding live image separately. `adopt_canvas_runtime_dom` is an explicit operation for cases that need a DOM snapshot; generated renderers and controls can become part of source when using it.
 
@@ -169,10 +175,10 @@ The test workflow installs Chromium and verifies a real offline screenshot. Desk
 Push a version tag on the merged release commit:
 
 ```sh
-git tag -a v0.0.1 -m "Easel Studio 0.0.1"
-git push origin v0.0.1
+git tag -a v0.0.2 -m "Easel Studio 0.0.2"
+git push origin v0.0.2
 ```
 
 The **Desktop Builds** workflow builds all three platforms and creates a GitHub Release with separate Windows EXE/ZIP, macOS DMG/ZIP, and Linux AppImage/DEB downloads. The release job runs only after every platform succeeds. It generates a changelog and prepends `docs/releases/<tag>.md` when that file exists. Publishing a `v*` release from the GitHub UI also runs the build and attaches its packages; reruns replace matching assets on the existing release.
 
-Tags must match the current `package.json` version, optionally followed by a prerelease suffix such as `v0.0.1-rc.1`. Those suffixes mark the release as a prerelease. Manual **Run workflow** builds upload Actions artifacts without publishing a release. Runs for the same ref are serialized so an in-progress release build can finish. Headless MCP tarballs remain available in the Actions artifacts.
+Tags must match the current `package.json` version, optionally followed by a prerelease suffix such as `v0.0.2-rc.1`. Those suffixes mark the release as a prerelease. Manual **Run workflow** builds upload Actions artifacts without publishing a release. Runs for the same ref are serialized so an in-progress release build can finish. Headless MCP tarballs remain available in the Actions artifacts.

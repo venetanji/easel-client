@@ -3,7 +3,7 @@ const path = require('node:path');
 const { createCodexAppServer } = require('./codex-app-server');
 const { validateChatMessage } = require('./ipc-contract');
 
-const EASEL_INSTRUCTIONS = 'You are the Easel creative canvas assistant. Work through the easel MCP tools for canvas source, rendering, media, and user choices. For image creation or editing, use native Codex image_generation when available unless the user requests a configured media endpoint. Easel automatically imports completed native images into its media library and the originating project. After generation, call list_media_assets to obtain the saved asset IDs for canvas attachments and references; do not regenerate an image because project attachment failed. Native generation uses the signed-in Codex account. The shell workspace is an empty host-managed read-only directory, not the canvas project. Never edit files or run shell commands to change canvas content. Use installed offline kits, local media references, and installed OS fonts. Inspect relevant source files in bounded chunks and validate the actual canvas after edits. Native host confirmation governs destructive operations. request_canvas_input ends your turn until the user responds; do not poll for the answer.';
+const EASEL_INSTRUCTIONS = require('./harness-instructions').CODEX_INSTRUCTIONS;
 
 function defaultInput({ text, attachments = [] }) {
   const input = text ? [{ type: 'text', text }] : [];
@@ -90,6 +90,8 @@ function createCodexChatService({
   let chatId = '';
   let title = '';
   let threadId = '';
+  let loadedThreadId = '';
+  let loadedThreadOptions = '';
   let origin = {};
   let history = [];
   let active;
@@ -293,6 +295,8 @@ function createCodexChatService({
   }
 
   function handleExit(error) {
+    loadedThreadId = '';
+    loadedThreadOptions = '';
     if (!server.getState?.().closing) lastError = error.message;
     const turn = active;
     if (!turn || turn.settled) return;
@@ -325,7 +329,8 @@ function createCodexChatService({
       const context = await prepare((getTurnContext || getContext)?.(options)) || {};
       const model = context.model || selectedModel || await prepare(getModel?.(options)) || '';
       const effort = context.effort || selectedEffort;
-      const instructions = [EASEL_INSTRUCTIONS, context.instructions || await prepare(getInstructions?.(options)) || ''].filter(Boolean).join('\n\n');
+      const instructions = [EASEL_INSTRUCTIONS,
+        context.instructions || await prepare(getInstructions?.(options)) || ''].filter(Boolean).join('\n\n');
       origin = context.origin || { ...(context.projectId ? { projectId: context.projectId } : {}), model };
       turn.origin = origin;
       turn.kits = context.kits || options.kits || [];
@@ -343,16 +348,23 @@ function createCodexChatService({
       history.push({ role: 'user', content: text || 'Review the attached media.', ...(options.attachmentRefs ? { canvasMediaRefs: options.attachmentRefs } : {}), ...(options.canvasInputRequestId ? { canvasInputRequestId: options.canvasInputRequestId } : {}), ...(options.mediaJobId ? { mediaJobId: options.mediaJobId } : {}), ...(options.mediaJobResult ? { mediaJobResult: options.mediaJobResult } : {}) });
       save();
       const threadOptions = { cwd, modelProvider: 'openai', sandbox: 'read-only', approvalPolicy: 'on-request', approvalsReviewer: 'user', developerInstructions: instructions, ...(model ? { model } : {}) };
+      const threadOptionsKey = JSON.stringify(threadOptions);
       if (turn.stopping) return { ok: true, cancelled: true, text: 'Stopped.', chatId };
       if (!threadId) {
         const started = await prepare(server.startThread({ ...threadOptions, ephemeral: false }));
         if (!started.thread?.id) throw new Error('Codex did not return a thread ID.');
         threadId = started.thread.id;
+        loadedThreadId = threadId;
+        loadedThreadOptions = threadOptionsKey;
         save();
-      } else {
+      } else if (loadedThreadId !== threadId || loadedThreadOptions !== threadOptionsKey) {
         await prepare(server.resumeThread({ ...threadOptions, threadId, excludeTurns: true }));
+        loadedThreadId = threadId;
+        loadedThreadOptions = threadOptionsKey;
       }
       turn.threadId = threadId;
+      // Thread startup/resume can return before its MCP catalog is ready.
+      await prepare(server.waitForEaselTools?.(threadId));
       if (turn.stopping) return { ok: true, cancelled: true, text: 'Stopped.', chatId };
       await prepare(onTurnReady?.({ chatId, threadId, turnId: '', origin, options }));
       if (turn.stopping) return { ok: true, cancelled: true, text: 'Stopped.', chatId };

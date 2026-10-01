@@ -36,6 +36,7 @@ const { createAssetStore } = require('./asset-store');
 const { createCanvasStore } = require('./canvas-store');
 const { createCanvasView } = require('./canvas-view');
 const { createCanvasHistory } = require('./canvas-history');
+const { producedMediaAssets } = require('./media-tool-results');
 const { createChatService, defaultMcpLaunchOptions } = require('./chat-service');
 const { createMediaMcpClient } = require('./media-mcp-client');
 const { createAgentControl } = require('./agent-control');
@@ -46,7 +47,7 @@ const { createAgentRouter } = require('./agent-router');
 const { createCodexAppServer, resolveCodexExecutable } = require('./codex-app-server');
 const { createCodexChatService, defaultInput } = require('./codex-chat-service');
 const { decodeCodexImage } = require('./codex-image-output');
-const { handleMcpResult } = require('./agent');
+const { handleMcpResult, formatRuntimeKitInstructions } = require('./agent');
 const { createChatStore } = require('./chat-store');
 const { createCanvasInputStore } = require('./canvas-input-store');
 const { renderCanvasInputScript, dismissCanvasInputScript } = require('./canvas-input-runtime');
@@ -335,7 +336,11 @@ const presentToolCanvas = (artifact) => withCanvas(async (controller) => {
     await saveCanvasBeforeSwitch(controller);
     const id = controller.getCurrentCanvasId();
     const before = id ? CANVASES.get(id).html : '';
-    try { return await controller.present(artifact); }
+    try {
+      const saved = await controller.present(artifact);
+      const source = CANVASES.listFiles(saved.id, { includeAssets: false });
+      return { ...saved, files: saved.files || source.files, projectRevision: source.projectRevision };
+    }
     finally { if (id && CANVASES.get(id).html !== before) CANVAS_HISTORY.record(id, before); }
   });
 const CANVAS_CONTROLLER = {
@@ -414,7 +419,8 @@ const CANVAS_CONTROLLER = {
     listMediaAssets: async ({ scope = 'library', projectId, limit = 30 } = {}) => {
       if (!['library', 'project'].includes(scope) || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Choose library/project scope and a limit from 1 to 100.');
       const assets = scope === 'project' ? CANVASES.listAssets(validateOpaqueId(projectId || requireCanvasView().getCurrentCanvasId(), 'Project ID')).assets : (await listStoredMedia()).filter((asset) => asset.kind !== 'job');
-      return { scope, assets: assets.slice(0, limit).map(({ id, name, mimeType, bytes, width, height, duration, codec, projectId: owner }) => ({ assetId: id, name, mimeType, bytes, width, height, duration, codec, ...(owner ? { projectId: owner } : {}) })), truncated: assets.length > limit };
+      const recent = [...assets].sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+      return { scope, order: 'newest_first', assets: recent.slice(0, limit).map(({ id, name, mimeType, bytes, width, height, duration, codec, updatedAt, projectId: owner }) => ({ assetId: id, name, mimeType, bytes, width, height, duration, codec, updatedAt, ...(owner ? { projectId: owner } : {}) })), truncated: recent.length > limit };
     },
     adoptCanvasDom: (options) => projectMutation('adoptCanvasDom', options),
     getCanvasSource: (options) => withCanvas((controller) => controller.getCanvasSource(options)),
@@ -483,12 +489,13 @@ const BUILTIN_CHAT = createChatService({
   presentCanvas: presentToolCanvas,
   canvasController: CANVAS_CONTROLLER,
   onEvent: emitAgentEvent,
+  onStateChanged: () => emitControlState(),
 });
 
 const CODEX_CWD = path.join(app.getPath('userData'), 'codex-workspace');
 fs.mkdirSync(CODEX_CWD, { recursive: true, mode: 0o700 });
 const CODEX_SERVER = createCodexAppServer({ cwd: CODEX_CWD,
-  getMcpConnection: () => AGENT_CONTROL.getBackend() === 'codex' ? MCP_SERVER?.getConnectionInfo() : undefined,
+  getMcpConnection: () => MCP_SERVER?.getConnectionInfo(),
 });
 const CODEX_CHAT = createCodexChatService({
   appServer: CODEX_SERVER, cwd: CODEX_CWD, chatStore: CHAT_STORE.forBackend('codex'),
@@ -498,7 +505,8 @@ const CODEX_CHAT = createCodexChatService({
     const model = CODEX_CHAT.getState().model;
     if (!model) throw new Error('Choose an available Codex model in chat before sending.');
     return { model, kits: projectKits, origin: { model, projectId: canvasView?.getCurrentCanvasId() || '' },
-      instructions: [TOOL_HOST.instructions, `Enabled offline kits: ${projectKits.join(', ') || 'none'}.`,
+      instructions: [`Active project view: ${JSON.stringify({ projectId: canvasView?.getCurrentCanvasId() || '', documentPath: canvasView?.getCurrentDocumentPath() || '' })}`,
+        formatRuntimeKitInstructions(projectKits) || 'Enabled offline kits: none.',
         ...skills.map((skill) => `Skill: ${skill.name}\n${skill.instructions}`)].join('\n\n') };
   },
   hydrateChat: hydrateCodexChat,
@@ -647,8 +655,7 @@ async function hydrateCodexChat(snapshot) {
     if (message.role !== 'tool') continue;
     try {
       const output = JSON.parse(message.content);
-      const values = [output, output.structuredContent, ...(output.content || []).filter((block) => block.type === 'text').map((block) => { try { return JSON.parse(block.text); } catch { return null; } })];
-      for (const value of values.filter(Boolean)) for (const asset of [...(value.assets || []), ...(value.assetId ? [{ assetId: value.assetId }] : [])]) if (!references.has(asset.assetId)) references.set(asset.assetId, asset);
+      for (const asset of producedMediaAssets(output, message.name)) if (!references.has(asset.assetId)) references.set(asset.assetId, asset);
     } catch {}
   }
   let bytes = 0;
@@ -802,7 +809,7 @@ function registerIpcHandlers() {
   });
   ipcMain.handle(IPC_CHANNELS.LIST_CANVAS_FILES, (event, id) => {
     assertTrustedSender(event, mainWindow);
-    return CANVASES.listFiles(validateOpaqueId(id, 'Canvas ID'));
+    return CANVASES.listFiles(validateOpaqueId(id, 'Canvas ID'), { includeAssets: false });
   });
   ipcMain.handle(IPC_CHANNELS.READ_CANVAS_FILE, (event, id, input) => {
     assertTrustedSender(event, mainWindow);
@@ -1189,11 +1196,14 @@ function registerIpcHandlers() {
 async function createWindow() {
   await CHAT.cancelShutdown({ schedule: false });
   await MCP_SERVER.start();
+  const appIcon = app.isPackaged ? path.join(process.resourcesPath, 'app-icon.png') : path.join(__dirname, '..', 'build', 'icon.png');
+  if (process.platform === 'darwin') app.dock?.setIcon(appIcon);
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 900,
     minWidth: 960,
     minHeight: 720,
+    icon: appIcon,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

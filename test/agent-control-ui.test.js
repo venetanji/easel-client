@@ -28,6 +28,7 @@ function fixture() {
   const document = {
     getElementById(id) { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); },
     createElement: element,
+    createElementNS: (_namespace, tag) => element(tag),
     createTextNode: (text) => { const node = element(); node.textContent = text; return node; },
   };
   const composer = element(); composer.className = 'composer';

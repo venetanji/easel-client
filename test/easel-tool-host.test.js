@@ -40,6 +40,21 @@ test('shares the tool allowlist and validates requests before dispatch', async (
   assert.match(invalid.content[0].text, /unsupported|unexpected|not allowed/i);
 });
 
+test('external canvas failures return targeted path and offline-kit guidance', async () => {
+  const f = fixture({
+    presentCanvas: async () => { throw new Error('This document path already exists. Choose a new path.'); },
+    canvasController: { async writeCanvasFile() { throw new Error('Only relative local project references are supported: https://cdn.example/p5.min.js'); } },
+  });
+  const collision = await f.host.callTool('present_canvas', { html: '<!doctype html><html><head></head><body></body></html>' });
+  assert.equal(collision.isError, true);
+  assert.match(collision.structuredContent.guidance, /write_canvas_file/);
+  assert.doesNotMatch(collision.structuredContent.guidance, /assets:\[/);
+  const offline = await f.host.callTool('write_canvas_file', { path: 'index.html', content: '<script src="https://cdn.example/p5.min.js"></script>' });
+  assert.equal(offline.isError, true);
+  assert.match(offline.structuredContent.guidance, /Project files > Canvas kits/);
+  assert.match(offline.structuredContent.guidance, /wait for confirmation/);
+});
+
 test('saves and attaches synchronous images once and returns one image observation', async () => {
   const f = fixture();
   const result = await f.host.callTool('generate_image', { prompt: 'light study' });
@@ -64,6 +79,30 @@ test('registers queued video once with the accepted project and origin', async (
   assert.equal(f.receipts[0].turnOptions.option, 'retained');
   assert.deepEqual(f.receipts[0].turnOptions.kits, ['canvas-2d', 'tone']);
   assert.equal(result.structuredContent.monitoredJob.id, 'local-job');
+});
+
+test('queued jobs return compact host monitoring guidance without nested standalone polling prose', async () => {
+  const f = fixture();
+  const job = { id: 'remote-video', status: 'queued', modelId: 'video-model' };
+  f.setResponse({ content: [{ type: 'text', text: JSON.stringify({ job, guidance: 'Retrieve with get_video later.' }) }], structuredContent: { job } });
+  const result = await f.host.callTool('generate_video', { prompt: 'moving light', model: 'video-model' });
+  assert.deepEqual(result.structuredContent.job, job);
+  assert.deepEqual(result.structuredContent.text, []);
+  assert.equal(result.structuredContent.monitoredJob.id, 'local-job');
+  assert.equal(result.structuredContent.monitoredJob.origin, undefined);
+  assert.equal(result.structuredContent.monitoredJob.turnOptions, undefined);
+  assert.match(result.structuredContent.guidance, /End the turn; do not poll, retrieve, or resubmit/);
+  assert.doesNotMatch(JSON.stringify(result), /Retrieve with get_video later/);
+  assert.ok(JSON.stringify(result).length < 1500);
+});
+
+test('synchronous generation preserves provider notes once without serializing them inside more JSON', async () => {
+  const f = fixture();
+  f.setResponse({ content: [{ type: 'text', text: 'Provider note.' }, { type: 'image', data: 'YWJj', mimeType: 'image/png' }] });
+  const result = await f.host.callTool('generate_image', { prompt: 'light study' });
+  assert.deepEqual(result.structuredContent.text, ['Provider note.']);
+  assert.equal(f.saved.length, 1);
+  assert.equal(f.attached.length, 1);
 });
 
 test('canceled queued video submission retains its detached receipt and remains busy until saved', async () => {

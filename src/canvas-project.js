@@ -55,7 +55,6 @@ function validateProject(project) {
     if (asset.width !== undefined && (!Number.isInteger(asset.width) || asset.width < 1 || asset.width > 100_000)) throw new Error('Canvas asset width is invalid.');
     if (asset.height !== undefined && (!Number.isInteger(asset.height) || asset.height < 1 || asset.height > 100_000)) throw new Error('Canvas asset height is invalid.');
   }
-  if ([...assetSizes.values()].reduce((total, bytes) => total + bytes, 0) > 32 * MAX_FILE_BYTES) throw new Error('Canvas project media exceeds 32 MiB.');
   if (Object.hasOwn(project.files, 'state.json')) validateStateText(project.files['state.json']);
   return project;
 }
@@ -239,24 +238,25 @@ function moduleBootstrap(files, roots) {
 }
 
 function validateJavaScriptFiles(project, names) {
-  const entry = project.manifest.entry;
   const moduleFiles = new Set();
   const classicFiles = new Set();
   const roots = new Set();
-  for (const match of project.files[entry].matchAll(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi)) {
-    const tag = match[0];
-    const openingEnd = tag.indexOf('>') + 1;
-    const opening = tag.slice(0, openingEnd);
-    const type = getAttribute(opening, 'type')?.toLowerCase() || '';
-    const source = getAttribute(opening, 'src');
-    if (type === 'module') {
-      if (source) roots.add(sourcePath(source, entry, project.files));
-      else rewriteModuleImports(tag.slice(openingEnd, tag.lastIndexOf('</')), entry, project.files, roots);
-    } else if (['', 'text/javascript', 'application/javascript'].includes(type)) {
-      if (source) classicFiles.add(sourcePath(source, entry, project.files));
-      else if (names.includes(entry)) {
-        try { acorn.parse(tag.slice(openingEnd, tag.lastIndexOf('</')), { ecmaVersion: 'latest', sourceType: 'script' }); }
-        catch (error) { throw new Error(`Inline script in ${entry} has invalid JavaScript: ${error.message}`); }
+  for (const { path: entry } of projectDocuments(project)) {
+    for (const match of cleanHostDocument(project.files[entry]).matchAll(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi)) {
+      const tag = match[0];
+      const openingEnd = tag.indexOf('>') + 1;
+      const opening = tag.slice(0, openingEnd);
+      const type = getAttribute(opening, 'type')?.toLowerCase() || '';
+      const source = getAttribute(opening, 'src');
+      if (type === 'module') {
+        if (source) roots.add(sourcePath(source, entry, project.files));
+        else rewriteModuleImports(tag.slice(openingEnd, tag.lastIndexOf('</')), entry, project.files, roots);
+      } else if (['', 'text/javascript', 'application/javascript'].includes(type)) {
+        if (source) classicFiles.add(sourcePath(source, entry, project.files));
+        else if (names.includes(entry)) {
+          try { acorn.parse(tag.slice(openingEnd, tag.lastIndexOf('</')), { ecmaVersion: 'latest', sourceType: 'script' }); }
+          catch (error) { throw new Error(`Inline script in ${entry} has invalid JavaScript: ${error.message}`); }
+        }
       }
     }
   }
@@ -284,7 +284,7 @@ function validateJavaScriptFiles(project, names) {
   return { checkedFiles: names.filter((name) => /\.m?js$/i.test(name)), moduleFiles: [...moduleFiles] };
 }
 
-function assembleProject(project, { readKit, readAsset, documentPath, includeSnapshot = true, maxOutputBytes = Infinity } = {}) {
+function assembleProject(project, { readKit, readAsset, documentPath, includeSnapshot = true, maxOutputBytes = Infinity, validateOnly = false } = {}) {
   validateProject(project);
   const { files, manifest } = project;
   const entry = resolveDocumentPath(project, documentPath);
@@ -292,6 +292,7 @@ function assembleProject(project, { readKit, readAsset, documentPath, includeSna
   const assetUrls = new Map();
   const assetPayloads = new Map();
   function assetUrl(asset) {
+    if (validateOnly) return `blob:easel-preflight/${asset.id}`;
     if (!assetUrls.has(asset.id)) {
       if (!assetPayloads.has(asset.digest)) {
         const bytes = readAsset(asset);
@@ -391,6 +392,9 @@ function assembleProject(project, { readKit, readAsset, documentPath, includeSna
     return `${attributes} data-easel-project-file="${escapeAttribute(name)}" data-easel-project-rendered="${digest(rendered)}">${rendered}</script>`;
   });
   html = resolveAssets(html, entry);
+  const modules = hasModules ? moduleBootstrap(Object.fromEntries(Object.entries(files).filter(([name]) => /\.m?js$/i.test(name)).map(([name, source]) => [name, resolveAssets(source, name)])), moduleRoots) : '';
+  // Check every document's source graph without repeatedly embedding shared media or kits.
+  if (validateOnly) return html;
   let kits = '';
   for (const kit of manifest.kits) {
     if (!kit.digest) continue;
@@ -411,7 +415,7 @@ function assembleProject(project, { readKit, readAsset, documentPath, includeSna
   const payloadSource = JSON.stringify(payloads);
   const assetBootstrap = `<script id="easel-project-assets">(() => {const payloads=${payloadSource};window.__easelProjectAssets=Object.freeze(Object.fromEntries(Object.entries(${assetSource}).map(([id,asset])=>[id,Object.freeze({...asset,url:'data:'+asset.mimeType+';base64,'+payloads[asset.digest]})])));window.__easelProjectAssetsReady=Promise.resolve(window.__easelProjectAssets);})();</script>`;
   const state = Object.hasOwn(files, 'state.json') ? `<script id="easel-project-state">window.__easelProjectState=${JSON.stringify(validateStateText(files['state.json'])).replace(/</g, '\\u003c')};</script>` : '';
-  const assembled = injectHead(html, `${assetBootstrap}${kits}${snapshot}${state}${hasModules ? moduleBootstrap(Object.fromEntries(Object.entries(files).filter(([name]) => /\.m?js$/i.test(name)).map(([name, source]) => [name, resolveAssets(source, name)])), moduleRoots) : ''}`);
+  const assembled = injectHead(html, `${assetBootstrap}${kits}${snapshot}${state}${modules}`);
   if (Buffer.byteLength(assembled, 'utf8') > maxOutputBytes) throw new Error(`Assembled document ${entry} exceeds its ${maxOutputBytes}-byte export budget.`);
   return assembled;
 }

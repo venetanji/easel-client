@@ -35,40 +35,15 @@ const RUNTIME_KIT_GUIDANCE = Object.freeze({
   phaser: 'Phaser: the offline Phaser global is bundled into new canvases. Use it for structured 2D game scenes, input, sprites, and arcade physics.',
   matter: 'Matter.js: the offline Matter global is bundled into new canvases. Use it for rigid-body physics and connect its engine loop to a responsive canvas.',
   tone: 'Tone.js: the offline Tone global is bundled into new canvases with a timer clock (workers are blocked). Use it for synthesis and sequencing. Custom Tone.Context instances must use clockSource:"timeout". Add visible Play and Stop controls, call await Tone.start() inside the Play click handler, then start the synth or sequence. Never start audio automatically during page load.',
-  p5: 'p5.js: the offline p5 global is bundled into new canvases. Prefer instance mode (new p5(sketch, root)) for creative coding, drawing and interactions; call instance.remove() in registered app disposal. p5.sound is not included; use Tone.js when its kit is enabled for audio.',
+  p5: 'p5.js: use the offline p5 global in instance mode (new p5(sketch, root)). Give the mount a definite height before measuring it; in a bounded flex/grid layout use min-height:0 so a generated canvas cannot grow its parent on every resize. Resize from the mount bounds, use the p5 draw loop only, and call instance.remove() in registered disposal. p5.sound is not included; use the enabled Tone.js kit for audio.',
 });
-const SYSTEM_PROMPT = [
-  'You are Easel, a creative canvas and media assistant.',
-  'Conversations are independent of projects and retain all earlier user messages. The active project is the current tool destination, not a conversation boundary. Work in named projects containing multiple authored HTML documents and shared files/media. The project ID and HTML document path identify the current view; list_canvas_documents lists siblings and open_canvas_document selects one without changing source or the project default entry. present_canvas and create_canvas add documents to the active project. New generated media automatically attaches to the active project library, and never appears in authored HTML or the scene unless the user asks for a composition or explicit image placement. Viewing an image preview is separate from editing HTML. Use attach_canvas_asset for library attachment only; use file edits or add_image_to_canvas only for requested placement.',
-  'Use only the provided tools. Generate images with enabled Media models from list_models and use present_canvas for local HTML/JavaScript compositions. Use the exact model ID returned by list_models so the correct endpoint is used. If no Media models are enabled, explain that the user can enable a Media model in Settings > Models.',
-  'Saved media has reusable asset IDs. Use list_media_assets to find references and inspect_media_asset to see an image. edit_image uploads imageAssetIds and an optional PNG maskAssetId; create_image_variation uploads one imageAssetId. Never put base64 in tool arguments. These APIs require endpoint/model support; DALL-E 2 variations require a square PNG under 4 MiB. Do not retry unsupported or failed billed requests unchanged. capture_live_canvas saves a project screenshot, record_canvas_video saves silent canvas output and sampled frames, and get_video_frames provides a temporary model observation from a saved recording. Video observations are sampled stills and do not include sound.',
-  'generate_video submits a video job with a video model ID from list_models, seconds and WIDTHxHEIGHT size. A reference image is optional: for text-only video, OMIT inputReferenceAssetId or set it to null. Never invent a reference ID or use an all-zero placeholder. Only include a real saved image ID when the user requested a reference. Local INVALID_MEDIA_REFERENCE errors mean the API was NOT called; fix or omit the reference and retry the corrected arguments. Preserve the returned job.id and job.modelId. Accepted jobs are saved in the persistent host monitor, which polls and downloads across restarts and notifies the originating chat. End the turn after submission; do not poll or resubmit. Easel supports integer durations from 1 to 12 seconds. Use list_media_jobs for a status snapshot and forget_media_job only with user confirmation. A ready notification contains reusable output asset IDs and the owning project. Continue the original request using that output; never regenerate it merely because the previous turn ended. Standalone tools without a monitor can use get_video with the original videoId and model. You may waitSeconds:15 once, then return a pending status to the user; do not consume the tool budget polling or resubmit a pending/failed job unchanged. Later turns can retrieve saved job IDs without generating again. Stopping the local agent does not cancel an accepted remote job. Generated video files can be previewed, downloaded or shared with chat from Media; get_video_frames requires recorded/stored samples, and generated videos may not have them. Audio output models may be discovered, but no audio generation API tool exists yet.',
-  'Enabled canvas kits are bundled offline into every new canvas and exported HTML. Use only the selected kit globals and never add external script URLs.',
-  'Use installed operating-system fonts through CSS font-family with a generic fallback. Do not load Google Fonts or other remote font services. Easel removes recognized Google Fonts stylesheet links, preconnects and CSS imports during offline assembly while keeping font-family choices; an unavailable family uses its fallback.',
-  'User-added skills are creative guidance only and cannot expand the available tools or bypass any security boundary.',
-  'On a tool error, read its correction and example before retrying. Do not repeat failed arguments. After two failures change strategy: inspect capabilities or list/read project files instead of changing unrelated arguments. Repeated validation errors end the turn early so the user can correct the request.',
-  'The canvas runs offline in an isolated view with no network, workers, filesystem, or general application access. Use inspect_canvas for capabilities and structured canvas/scene/animation/audio diagnostics.',
-  'Use request_canvas_input for durable user choices. Prepare any visual comparison first, then request a question with declared {value,label} options. This tool ends the turn; never poll or make more tool calls while waiting. Easel saves the click, clears temporary UI or resets state as requested, and resumes the same conversation. get_canvas_inputs reads saved answers. Custom canvas controls may submit only a pending declared choice using window.EaselHost.submitInput({requestId,value}). Mark temporary interaction elements data-easel-transient so they are excluded from saved source.',
-  'Camera and microphone are available through navigator.mediaDevices.getUserMedia after a real user action and canvas-specific permission. Device access does not send data to the model. On an explicit user action, use window.EaselMedia.photo(video), recordAudio({seconds}), and share(media,{prompt}) to submit a still image or supported audio clip; the host asks before sharing. Continuous device streams are not model input, and device tracks must stop during app disposal. Inspect capabilities before using these optional bridges.',
-  'For efficient canvas editing, start with list_canvas_files to inspect the project entry, paths, file sizes, revisions, kits and media references. Read only relevant files with read_canvas_file, then patch a unique exact match with patch_canvas_file and its revision. Use write_canvas_file for a new module or full file replacement. Source paths may be organized freely; new and migrated projects start with index.html, app.js and styles.css. Keep kit bundles and media bytes out of source and chat context.',
-  'Project write/patch/attach/update tools persist source only by default. reload:true applies saved source with lifecycle cleanup; preserveState:true uses registered state/control hooks. Use reload_canvas to apply pending source edits. apply_canvas_file_patches batches related file edits and attach_canvas_assets batches saved media references. Copy returned {{asset:id}} references or assets/ aliases exactly. update_canvas_project changes the entry or installed kit dependencies. Source revisions detect concurrent edits.',
-  'delete_canvas_file and delete_media_asset preview their target and require confirmation through the host. Cancel leaves saved files and media unchanged. Do not assume approval or repeat a cancelled deletion. Remove known source references before requesting deletion. Deleting the last HTML asks the user to delete the whole project and choose whether to keep its media. Media shared with other projects is retained. File deletions refresh and validate a surviving document; project deletion closes its view. Library deletion is blocked while projects use the asset.',
-  'Persist canvas changes through file/source tools. execute_canvas_javascript affects the live runtime only; Save, reopening and export use persisted project files and do not implicitly adopt runtime DOM. add_image_to_canvas explicitly attaches an asset and inserts an image into authored source and the live view without copying other runtime DOM. Use execute_canvas_javascript for inspection and temporary experiments. adopt_canvas_runtime_dom explicitly adopts a DOM snapshot when requested, with limitations for modules, renderers, audio and runtime variables; prefer targeted file edits.',
-  'get_canvas_state and set_canvas_state manage opt-in persistent JSON in state.json, separate from live renderer state and durable user answers. It loads as window.__easelProjectState; runtime variables are not automatically saved. For legacy combined HTML inspection, get_canvas_source with section:scripts or section:app excludes bundled kits, and apply_canvas_patch edits stored source. Never retrieve document.outerHTML and megabytes of bundled libraries for routine edits.',
-  'Register canvas apps with window.EaselCanvas.registerApp({ id, root, renderer, scene, camera, audio, dispose, getState, restoreState }). The dispose callback must stop renderer-owned loops and dispose geometry/materials/audio nodes. State hooks exchange JSON scene state across managed reloads. Do not claim unregistered legacy resources were all disposed.',
-  'After changes, use validate_canvas for the actual open document and capture_live_canvas to see its current pixels. capture_canvas_screenshot renders supplied HTML and is not a picture of the open scene. Audio requires a real user gesture; never claim sound was heard from state checks alone.',
-  'Use create_canvas to add a named empty HTML canvas to the active project; it starts a project when none is selected. Canvas documents share the project files and media. Generated media is attached to this project automatically. Attach other saved images with attach_canvas_asset or attach_canvas_assets, edit source files, and reload. add_image_to_canvas inserts one saved image into authored source and the live view; it leaves sourcePendingReload true until the updated asset map is loaded.',
-  'When referencing an image in canvas HTML or JavaScript, including a WebGL texture Image.src, use asset:// followed by the exact asset ID and include that asset in the assets array. The host embeds attached assets as local data URLs.',
-  'When composing generated images, use only complete 32-character asset IDs returned by image tools. Copy each ID exactly into the assets array; never invent, shorten, or use a placeholder ID.',
-  'When returning a generated image in chat, use a Markdown link like [Short description](asset://ID), replacing ID with the exact 32-character assetId returned by the image tool. Never use placeholder text, angle brackets, or ellipses for the ID.',
-  'Before making audio in an existing canvas, call inspect_canvas and confirm its runtime reports Tone.js. If Tone.js is missing, say the Tone kit must be enabled when creating the canvas. When Tone.js is present, add visible Play and Stop controls and start audio only inside a user click handler with await Tone.start().',
-].join(' ');
+const SYSTEM_PROMPT = require('./harness-instructions').BUILTIN_INSTRUCTIONS;
 
 const PRESENT_CANVAS_TOOL = Object.freeze({
   type: 'function',
   function: {
     name: 'present_canvas',
-    description: 'Create and open a new authored HTML document inside the active named project, with optional generated image assets and selected offline kits. Existing project documents are preserved.',
+    description: 'Create and open a complete new HTML document inside the active project. Existing documents are preserved. Inherits enabled project kits; does not enable additional libraries. Use local kit globals, never CDN scripts. No preceding create_canvas call is needed.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -100,7 +75,7 @@ const CANVAS_TOOLS = Object.freeze([
     type: 'function',
     function: {
       name: 'create_canvas',
-      description: 'Add and open a named empty HTML canvas in the active project. Creates a project if none is selected. Existing project files and media are shared.',
+      description: 'Add and open a named empty HTML canvas in the active project. Creates a project if none is selected. Existing project kits, files and media are shared; this does not enable another kit. For a complete new sketch use present_canvas directly.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -232,6 +207,10 @@ function argumentExample(schema, key = '', depth = 0) {
   return examples[key] ?? (schema?.type === 'string' ? `<${key}>` : {});
 }
 
+function isOfflineReferenceFailure(error) {
+  return /Only relative local project references are supported:\s*(?:https?:|\/\/)|(?:external URLs|external script URLs)/i.test(error);
+}
+
 function toolCorrection(name, descriptor, error, code) {
   const schema = descriptor?.function?.parameters;
   if (name === 'generate_video' && validationFailure(error, code, name) && /reference|inputReferenceAssetId|projectId/i.test(error)) return {
@@ -239,7 +218,17 @@ function toolCorrection(name, descriptor, error, code) {
     example: { model: schema?.properties?.model?.enum?.[0] || 'MODEL_ID_FROM_list_models', prompt: 'A cat blinking in warm morning light.', seconds: 4 },
     exampleNote: 'Use an enabled video model ID. Reference images are optional; this example generates from text only.',
   };
-  if (name === 'present_canvas') return {
+  if (isOfflineReferenceFailure(error) && (name === 'present_canvas' || PROJECT_CANVAS_TOOLS.some((tool) => tool.function.name === name))) return {
+    correction: 'The canvas runs offline. Remove external script/link/import URLs. Use the bundled library global without a CDN script. If p5, Three.js, Tone.js or another required kit is missing, ask the user to enable it under Project files > Canvas kits, then wait for confirmation before continuing. Images must use attached media references. Relative script/link paths refer only to authored project files.',
+    exampleNote: 'Enabled kits are reported in creation receipts and list_canvas_files. Do not claim a kit is enabled or retry the same URL.',
+  };
+  if (name === 'present_canvas' && /document path already exists|dependency conflicts with an existing file/i.test(error)) return {
+    correction: 'present_canvas creates a NEW document. Choose an unused path or omit path to allocate one automatically. To fill an empty document already returned by create_canvas, use write_canvas_file on that documentPath instead; do not create it again. The existing files are preserved.',
+    example: { html: '<!doctype html><html><head><title>New sketch</title></head><body></body></html>', title: 'New sketch' },
+    alternate: { tool: 'write_canvas_file' },
+    exampleNote: 'For an existing document, use its returned documentPath and revision.',
+  };
+  if (name === 'present_canvas' && /asset|assets|image references?/i.test(error)) return {
     correction: "Use assets:[{name:'texture',assetId:'...'}]. Replace ... with a complete 32-character asset ID returned by an image tool; use that same asset://ID in HTML. Assets must be an array of these objects, without image data or keys named after assets.",
     example: { html: '<!doctype html><html><head></head><body><img src="asset://ASSET_ID_FROM_TOOL_RESULT"></body></html>', assets: [{ name: 'texture', assetId: 'ASSET_ID_FROM_TOOL_RESULT' }] },
     exampleNote: 'Replace ASSET_ID_FROM_TOOL_RESULT with a real ID returned by a tool. For a canvas without images, omit assets.',
@@ -370,13 +359,18 @@ async function handleMcpResult(result, mediaAssetStore, onEvent, { generated = f
     const detail = (result.content || []).filter((item) => item.type === 'text' && typeof item.text === 'string').map((item) => item.text).join('\n').slice(0, 2000);
     throw new Error(detail || 'Media MCP tool failed.');
   }
-  const text = [];
+  const text = Array.isArray(result?.structuredContent?.text) ? result.structuredContent.text.filter((value) => typeof value === 'string') : [];
   const assets = Array.isArray(result?.structuredContent?.assets) ? result.structuredContent.assets : [];
   const savedMedia = [];
   const saveErrors = [];
   const job = result?.structuredContent?.job;
   for (const item of result?.content || []) {
-    if (item.type === 'text' && typeof item.text === 'string') text.push(item.text);
+    if (item.type === 'text' && typeof item.text === 'string') {
+      let metadata;
+      try { metadata = JSON.parse(item.text); } catch { /* Preserve ordinary provider notes. */ }
+      // Job metadata already has a typed field; provider polling prose is for standalone clients.
+      if (!job || metadata?.job?.id !== job.id) text.push(item.text);
+    }
     const media = ['image', 'audio'].includes(item.type) ? { data: item.data, mimeType: item.mimeType }
       : item.type === 'resource' ? { data: item.resource?.blob, mimeType: item.resource?.mimeType } : null;
     if (media && typeof media.data === 'string' && SAVED_MEDIA_TYPES.has(media.mimeType)) {
@@ -456,7 +450,9 @@ async function executeEaselTool(name, args, {
     const selectedKits = [...new Set(Array.isArray(kits) ? kits.filter((kit) => ALLOWED_RUNTIME_KITS.has(kit)) : [])];
     const created = await canvasController.createEmpty(args.title.trim(), selectedKits);
     onEvent?.({ type: 'canvas', title: created.title, canvasId: created.id, projectId: created.id, projectTitle: created.projectTitle || created.title, documentPath: created.documentPath, documentTitle: created.documentTitle });
-    content = JSON.stringify({ ok: true, message: 'HTML canvas created and opened in the project.', projectId: created.id, canvasId: created.id, title: created.title, documentPath: created.documentPath, documentTitle: created.documentTitle });
+    const enabledKits = Array.isArray(created.kits) ? created.kits : selectedKits;
+    content = JSON.stringify({ ok: true, message: 'HTML canvas created and opened in the project.', projectId: created.id, canvasId: created.id, title: created.title, documentPath: created.documentPath, documentTitle: created.documentTitle, kits: enabledKits,
+      kitGuidance: 'Use only these enabled kit globals. If a required kit is missing, ask the user to enable it under Project files > Canvas kits before continuing. Do not add CDN scripts.' });
   } else if (name === 'present_canvas') {
     try {
       const html = args.html;
@@ -473,12 +469,13 @@ async function executeEaselTool(name, args, {
       const selectedKits = [...new Set(Array.isArray(kits) ? kits.filter((kit) => ALLOWED_RUNTIME_KITS.has(kit)) : [])];
       const saved = await presentCanvas({ html: canvasHtml, title: args.title || 'Easel Canvas', ...(args.path ? { path: args.path } : {}), assets, kits: selectedKits });
       onEvent?.({ type: 'canvas', title: saved?.title || args.title || 'Easel Canvas', canvasId: saved?.id || '', projectId: saved?.id || '', projectTitle: saved?.projectTitle || saved?.title, documentPath: saved?.documentPath, documentTitle: saved?.documentTitle });
-      content = JSON.stringify({ ok: true, message: 'Project document saved and opened.', projectId: saved?.id || '', canvasId: saved?.id || '', documentPath: saved?.documentPath, documentTitle: saved?.documentTitle });
+      content = JSON.stringify({ ok: true, message: 'Project document saved and opened. Inline scripts and styles may be extracted; use the returned file paths and revisions for edits.', projectId: saved?.id || '', canvasId: saved?.id || '', documentPath: saved?.documentPath, documentTitle: saved?.documentTitle, files: saved?.files, projectRevision: saved?.projectRevision, kits: Array.isArray(saved?.kits) ? saved.kits : selectedKits });
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Canvas could not be opened.';
       content = JSON.stringify({
         ok: false,
-        error: error instanceof Error ? error.message : 'Canvas could not be opened.',
-        guidance: "Correct the canvas HTML or asset references. Use assets:[{name:'texture',assetId:'...'}], replacing ... with the full 32-character ID returned by an image tool, and reference that same asset://ID in HTML.",
+        error: message,
+        guidance: toolCorrection(name, PRESENT_CANVAS_TOOL, message).correction,
       });
     }
   } else if (name === 'inspect_canvas') {
@@ -507,7 +504,8 @@ async function executeEaselTool(name, args, {
       const result = await canvasController[method](args, { signal });
       content = typeof result === 'string' ? result : JSON.stringify(result);
     } catch (error) {
-      content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Canvas project tool failed.', guidance: name === 'delete_canvas_file' ? 'Inspect the current files and revisions. Remove reported references before retrying. Deleting the last HTML offers project deletion. Deletion requires user confirmation and accepts no reload options.' : 'List the current project and read the affected file before retrying. A failed reload can leave a source edit saved; reload:false changes persisted files only.' });
+      const message = error instanceof Error ? error.message : 'Canvas project tool failed.';
+      content = JSON.stringify({ ok: false, error: message, guidance: isOfflineReferenceFailure(message) ? toolCorrection(name, undefined, message).correction : name === 'delete_canvas_file' ? 'Inspect the current files and revisions. Remove reported references before retrying. Deleting the last HTML offers project deletion. Deletion requires user confirmation and accepts no reload options.' : 'List the current project and read the affected file before retrying. A failed reload can leave a source edit saved; reload:false changes persisted files only.' });
     }
   } else if (SOURCE_CANVAS_TOOLS.some((tool) => tool.function.name === name)) {
     try {
@@ -519,10 +517,12 @@ async function executeEaselTool(name, args, {
       if (name === 'capture_live_canvas') {
         const { data, ...metadata } = result;
         liveCaptures.push(result);
+        onEvent?.({ type: 'image', assetId: result.assetId, mimeType: result.mimeType, data, name: 'Live canvas capture.png', width: result.width, height: result.height, projectId: result.canvasId, chatId: context.chatId, generated: false });
         content = JSON.stringify({ ok: true, ...metadata, message: 'PNG captured from the current live canvas. The image is provided separately for visual inspection.' });
       } else if (name === 'record_canvas_video' || name === 'get_video_frames') {
         const { frames: videoFrames, data, thumbnail, ...metadata } = result;
         for (const frame of videoFrames || []) liveCaptures.push({ ...frame, mimeType: 'image/jpeg', assetId: result.assetId, observation: `Recorded canvas asset://${result.assetId} at ${frame.timestamp.toFixed(2)} seconds. Silent video sampled as still frames.` });
+        if (name === 'record_canvas_video') onEvent?.({ type: 'media', assetId: result.assetId, mimeType: result.mimeType, name: result.name || 'Canvas recording', width: result.width, height: result.height, duration: result.duration, thumbnail, projectId: result.canvasId, chatId: context.chatId, captured: true });
         content = JSON.stringify({ ok: true, ...metadata, sampledFrames: (videoFrames || []).map(({ timestamp }) => ({ timestamp })), message: 'Video references are reusable; sampled stills are provided separately for visual inspection.' });
       } else content = typeof result === 'string' ? result : JSON.stringify(result);
     } catch (error) {
@@ -566,8 +566,14 @@ async function executeEaselTool(name, args, {
         return result;
       }), signal);
       throwIfAborted(signal);
-      content = await handleMcpResult(result, mediaAssetStore, onEvent, { generated: MEDIA_OUTPUT_TOOLS.has(name), projectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets });
-      if (awaitingMediaJob) content = JSON.stringify({ ...JSON.parse(content), monitoredJob: awaitingMediaJob, guidance: 'The host polls, downloads and saves this job across restarts. End the turn; do not poll or resubmit.' });
+      content = name === 'list_models' && !result.isError && Array.isArray(result.structuredContent?.models)
+        ? JSON.stringify({ models: result.structuredContent.models })
+        : await handleMcpResult(result, mediaAssetStore, onEvent, { generated: MEDIA_OUTPUT_TOOLS.has(name), projectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets });
+      if (awaitingMediaJob) {
+        const fields = ['id', 'remoteId', 'modelId', 'mediaType', 'projectId', 'status', 'estimatedWaitSeconds', 'estimatedCompletionAt'];
+        const monitoredJob = Object.fromEntries(fields.filter((field) => awaitingMediaJob[field] !== undefined).map((field) => [field, awaitingMediaJob[field]]));
+        content = JSON.stringify({ ...JSON.parse(content), monitoredJob, guidance: 'The host monitors and saves this job across restarts, then adds its chat preview and notifies you. End the turn; do not poll, retrieve, or resubmit.' });
+      }
     }
   }
 
@@ -848,6 +854,7 @@ module.exports = {
   SYSTEM_PROMPT,
   CANVAS_TOOLS,
   formatSkillInstructions,
+  formatRuntimeKitInstructions,
   handleMcpResult,
   MAX_TOOL_CALLS,
   PRESENT_CANVAS_TOOL,

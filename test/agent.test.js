@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { runAgentTurn, PRESENT_CANVAS_TOOL } = require('../src/agent');
+const { runAgentTurn, PRESENT_CANVAS_TOOL, toolCorrection } = require('../src/agent');
 
 function response(message) {
   return { choices: [{ message }] };
@@ -149,13 +149,33 @@ test('creates a named preset canvas through the host controller tool', async () 
       return completions.shift();
     } },
     mcp: { async listTools() { return mediaTools; } },
-    canvasController: { async createEmpty(title) { createdTitle = title; return { id: 'd'.repeat(32), title }; } },
+    kits: ['p5'],
+    canvasController: { async createEmpty(title) { createdTitle = title; return { id: 'd'.repeat(32), title, kits: ['tone'] }; } },
     assetStore: { async save() {}, async get() {} },
     onEvent(event) { events.push(event); },
   });
   assert.equal(result.text, 'Created the image study canvas.');
   assert.equal(createdTitle, 'Image study');
+  const receipt = JSON.parse(result.history.find((message) => message.role === 'tool').content);
+  assert.deepEqual(receipt.kits, ['tone']);
+  assert.match(receipt.kitGuidance, /ask the user to enable it under Project files > Canvas kits/);
   assert.ok(events.some((event) => event.type === 'canvas' && event.canvasId === 'd'.repeat(32)));
+});
+
+test('canvas corrections explain collisions and offline dependencies without unrelated attachment advice', () => {
+  const collision = toolCorrection('present_canvas', PRESENT_CANVAS_TOOL, 'This document path already exists. Choose a new path.');
+  assert.match(collision.correction, /omit path to allocate one automatically/);
+  assert.match(collision.correction, /write_canvas_file/);
+  assert.doesNotMatch(collision.correction, /assets:\[/);
+  assert.equal(collision.example.assets, undefined);
+  const offline = toolCorrection('write_canvas_file', undefined, 'Only relative local project references are supported: https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js');
+  assert.match(offline.correction, /ask the user to enable it under Project files > Canvas kits/);
+  assert.match(offline.correction, /wait for confirmation/);
+  assert.match(offline.correction, /bundled library global without a CDN script/);
+  const unrelated = toolCorrection('present_canvas', PRESENT_CANVAS_TOOL, 'Canvas HTML is required.');
+  assert.doesNotMatch(unrelated.correction, /assets:\[/);
+  const attachment = toolCorrection('present_canvas', PRESENT_CANVAS_TOOL, 'Canvas asset references must be an array.');
+  assert.match(attachment.correction, /assets:\[/);
 });
 
 test('returns structured errors for unknown tools and malformed arguments', async () => {

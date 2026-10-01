@@ -5,6 +5,7 @@ const { buildCanvasDocument, buildCanvasSnapshotDocument } = require('./canvas-p
 const { imageElement, imageInsertionLocation } = require('./canvas-html');
 const { MAX_FILE_BYTES, MAX_FILES, assembleProject, digest, documentTitle, managedKitScripts, projectDocuments, projectFromDocument, readChunk, resolveDocumentPath, stripManagedKitScripts, validateFilePath, validateJavaScriptFiles, validateProject, validateStateText } = require('./canvas-project');
 const { createProjectZip } = require('./project-zip');
+const { assertStorageSpace, storageWriteError } = require('./storage-space');
 
 const ID_PATTERN = /^[a-f0-9]{32}$/;
 const ATTACHED_ID_PATTERN = /^(?:[a-f0-9]{32}|[a-f0-9]{64})$/;
@@ -139,13 +140,14 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
 
   function writeAtomic(filename, value) {
     fileSystem.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+    assertStorageSpace(path.dirname(filename), Buffer.isBuffer(value) ? value.length : Buffer.byteLength(value, 'utf8'), fileSystem);
     const temporary = `${filename}.${crypto.randomUUID()}.tmp`;
-    fileSystem.writeFileSync(temporary, value, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     try {
+      fileSystem.writeFileSync(temporary, value, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
       fileSystem.renameSync(temporary, filename);
     } catch (error) {
-      fileSystem.rmSync(temporary, { force: true });
-      throw error;
+      try { fileSystem.rmSync(temporary, { force: true }); } catch { /* Keep the original storage failure. */ }
+      throw storageWriteError(error);
     }
     return fileSystem.statSync(filename).mtimeMs;
   }
@@ -223,7 +225,8 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
       readAsset: (asset) => fileSystem.readFileSync(path.join(projectAssetsPath, asset.digest)),
       ...options,
     });
-    return addCanvasMetadata(buildCanvasSnapshotDocument(html), id, title);
+    // Validated project media has no aggregate storage cap; exports supply their own budget.
+    return addCanvasMetadata(buildCanvasSnapshotDocument(html, { maxBytes: options.maxOutputBytes ?? Infinity }), id, title);
   }
 
   function titleFromHtml(html) {
@@ -255,6 +258,10 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
 
   function commitProject(id, project) {
     validateProject(project);
+    for (const document of projectDocuments(project)) {
+      const source = assembleProject(project, { documentPath: document.path, validateOnly: true });
+      buildCanvasSnapshotDocument(source, { maxBytes: Infinity });
+    }
     const html = assemble(project, id, project.title);
     const record = { ...project };
     delete record.updatedAt;
@@ -376,12 +383,16 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     assemble(project, id, title.trim(), { documentPath: name });
     validateJavaScriptFiles({ ...project, manifest: { ...project.manifest, entry: name } }, Object.keys(document.files));
     const ignoredDocumentKits = requestedKits.filter((kit) => !project.manifest.kits.some((selected) => selected.name === kit));
-    return { ...commitProject(id, project), documentPath: name, documentTitle: title.trim(), documents: projectDocuments(project), dependencyPaths: Object.keys(document.files).filter((filename) => filename !== name), kits: project.manifest.kits.map((kit) => kit.name), ...(ignoredDocumentKits.length ? { ignoredDocumentKits, kitGuidance: 'HTML documents inherit the project kit selection. Use update_canvas_project with kits to change dependencies for every document.' } : {}), atomic: true };
+    const files = Object.entries(document.files).map(([filename, content]) => ({
+      path: filename, bytes: Buffer.byteLength(content, 'utf8'), lines: content.split('\n').length,
+      revision: digest(content), kind: filename === name ? 'entry' : path.posix.extname(filename).slice(1),
+    }));
+    return { ...commitProject(id, project), documentPath: name, documentTitle: title.trim(), files, documents: projectDocuments(project), dependencyPaths: Object.keys(document.files).filter((filename) => filename !== name), kits: project.manifest.kits.map((kit) => kit.name), ...(ignoredDocumentKits.length ? { ignoredDocumentKits, kitGuidance: 'HTML documents inherit the project kit selection. Use update_canvas_project with kits to change dependencies for every document.' } : {}), atomic: true };
   }
 
   function update(id, snapshotHtml, { documentPath, restoreMetadata = false } = {}) {
     const existing = loadProject(id);
-    const document = buildCanvasSnapshotDocument(snapshotHtml);
+    const document = buildCanvasSnapshotDocument(snapshotHtml, { maxBytes: Infinity });
     const project = projectFromDocument(document, { previous: existing, documentPath, preferPrevious: !restoreMetadata, extractAssets, extractKits });
     project.id = id;
     project.title = restoreMetadata && typeof project.title === 'string' && project.title.trim() ? project.title : existing.title;
@@ -451,13 +462,16 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return { id, title: project.title, version: project.version, manifest: project.manifest, documents: projectDocuments(project), contributions, projectRevision: projectRevision(project), updatedAt: project.updatedAt, files: Object.entries(project.files).map(([file, content]) => ({ path: file, bytes: Buffer.byteLength(content, 'utf8'), lines: content.split('\n').length, revision: digest(content), kind: file === project.manifest.entry ? 'entry' : file === 'state.json' ? 'state' : path.posix.extname(file).slice(1) })), contract: { source: 'Project files are persisted independently from the open runtime. Use reload_canvas to apply edits. Write dependency files before referencing them; remove references before deleting files. apply_canvas_file_patches validates and commits all matches against original files in one revision.', documents: 'Every authored HTML file is a canvas document identified by its stable relative path. Opening a document does not change the default manifest.entry. Documents share project source files, kits, media and state.json.', kits: 'Named dependencies are stored outside editable source.', assets: 'Attach assets before using them. Await EaselCanvas.assets.ready, then EaselCanvas.assets.getUrl(id) returns an offline URL for attached IDs without querying the DOM. Source can also use {{asset:id}} or a local assets/ path in HTML/CSS. Media bytes never appear in source reads.', modules: 'Classic scripts execute in document order at their tag position; async/defer are removed when inlined. Place app.js at the body end, or use type=module for deferred execution. ES modules support relative static and literal dynamic imports through a local blob import map; bare package/HTTP imports and computed dynamic imports are unsupported.', state: 'state.json is opt-in persistent JSON, available initially as window.__easelProjectState; runtime state is not saved automatically.' } };
   }
 
-  function listFiles(id, { directory = '', offset = 0, limit = 100 } = {}) {
+  function listFiles(id, { directory = '', offset = 0, limit = 100, includeAssets = true } = {}) {
+    if (typeof includeAssets !== 'boolean') throw new Error('includeAssets must be a boolean.');
     if (directory && (!/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\/?$/.test(directory) || directory.split('/').includes('..'))) throw new Error('Project directory is invalid.');
     if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > MAX_FILES) throw new Error('File list offset/limit is invalid.');
     const project = getProject(id);
     const prefix = directory ? `${directory.replace(/\/$/, '')}/` : '';
     const files = project.files.filter((file) => file.path.startsWith(prefix)).sort((left, right) => left.path.localeCompare(right.path));
-    return { ...project, files: files.slice(offset, offset + limit), totalFiles: files.length, nextOffset: offset + limit < files.length ? offset + limit : null };
+    const manifest = { ...project.manifest };
+    if (!includeAssets) delete manifest.assets;
+    return { ...project, manifest, assetReferencesIncluded: includeAssets, files: files.slice(offset, offset + limit), totalFiles: files.length, nextOffset: offset + limit < files.length ? offset + limit : null };
   }
 
   function readFile(id, args = {}) {
@@ -478,8 +492,9 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     const project = loadProject(id);
     checkRevisions(project, name, args);
     project.files[name] = extractAssets(args.content, project.manifest.assets);
+    const syntax = validateJavaScriptFiles(project, [name]);
     const saved = commitProject(id, project);
-    return { ...saved, path: name, revision: digest(project.files[name]), bytes: Buffer.byteLength(project.files[name], 'utf8'), effects: { source: 'persisted', runtime: 'unchanged until reload' } };
+    return { ...saved, path: name, revision: digest(project.files[name]), bytes: Buffer.byteLength(project.files[name], 'utf8'), syntax, effects: { source: 'persisted', runtime: 'unchanged until reload' } };
   }
 
   function patchFile(id, args = {}) {
@@ -618,7 +633,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
       try {
         assets = cachedMediaMetadata(projectFile, () => {
           const project = loadProject(id, { readOnly: true });
-          return project.manifest.assets.map((asset) => ({ ...asset, updatedAt: project.updatedAt }));
+          return project.manifest.assets.map((asset) => ({ ...asset, updatedAt: assetTimestamp(asset) }));
         });
       }
       catch (error) { throw new Error(`Cannot inspect media references for project ${id}: ${error.message}`); }
@@ -804,10 +819,16 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return preview;
   }
 
+  function assetTimestamp(asset) {
+    if (Number.isFinite(asset.createdAt || asset.updatedAt)) return asset.createdAt || asset.updatedAt;
+    try { return fileSystem.statSync(path.join(projectAssetsPath, asset.digest)).mtimeMs; }
+    catch { return 0; }
+  }
+
   function listAssets(id, { offset = 0, limit = 200 } = {}) {
     if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error('Project asset list offset/limit is invalid.');
     const project = loadProject(id);
-    return { id, title: project.title, assets: project.manifest.assets.slice(offset, offset + limit).map((asset) => ({ ...asset, name: asset.name || path.posix.basename(asset.path), projectId: id })), totalAssets: project.manifest.assets.length, nextOffset: offset + limit < project.manifest.assets.length ? offset + limit : null, projectRevision: projectRevision(project), updatedAt: project.updatedAt };
+    return { id, title: project.title, assets: project.manifest.assets.slice(offset, offset + limit).map((asset) => ({ ...asset, name: asset.name || path.posix.basename(asset.path), projectId: id, updatedAt: assetTimestamp(asset) })), totalAssets: project.manifest.assets.length, nextOffset: offset + limit < project.manifest.assets.length ? offset + limit : null, projectRevision: projectRevision(project), updatedAt: project.updatedAt };
   }
 
   function getAsset(id, assetId, { thumbnail = false } = {}) {

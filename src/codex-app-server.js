@@ -6,7 +6,7 @@ const { StringDecoder } = require('node:string_decoder');
 const MCP_TOKEN_ENV = 'EASEL_CODEX_MCP_TOKEN';
 // A 32 MiB image occupies more space when encoded in a protocol message.
 const MAX_LINE_BYTES = 64 * 1024 * 1024;
-const DISABLED_CODEX_FEATURES = ['shell_tool', 'unified_exec', 'code_mode', 'code_mode_host', 'apps', 'plugins', 'remote_plugin', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'in_app_browser', 'in_app_local_automation', 'multi_agent', 'hooks', 'workspace_dependencies', 'view_image', 'skill_search', 'skill_mcp_dependency_install'];
+const DISABLED_CODEX_FEATURES = ['shell_tool', 'unified_exec', 'code_mode', 'apps', 'plugins', 'remote_plugin', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'in_app_browser', 'in_app_local_automation', 'multi_agent', 'hooks', 'workspace_dependencies', 'view_image', 'skill_search', 'skill_mcp_dependency_install'];
 
 function abortError() {
   const error = new Error('Codex request stopped.');
@@ -59,7 +59,8 @@ function resolveCodexExecutable({ executable, env = process.env, platform = proc
 function launchOptions({ cwd, connection, executable, env = process.env }) {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw new Error('Codex needs a dedicated absolute Easel working directory.');
   const args = ['app-server', '--listen', 'stdio://', '-c', 'model_provider="openai"', '-c', 'sandbox_mode="read-only"', '-c', 'approval_policy="on-request"', '-c', 'web_search="disabled"'];
-  args.push('--enable', 'image_generation');
+  // Native tools and MCP calls need the tool host even with code mode disabled.
+  args.push('--enable', 'code_mode_host', '--enable', 'image_generation');
   for (const feature of DISABLED_CODEX_FEATURES) args.push('--disable', feature);
   const childEnv = { ...env };
   // Embedded Codex uses managed ChatGPT auth, independent of the host's API setup.
@@ -77,6 +78,8 @@ function launchOptions({ cwd, connection, executable, env = process.env }) {
   }
   // Replace the entire server table so this child does not inherit unrelated MCP endpoints.
   args.push('-c', `mcp_servers=${mcpConfiguration}`);
+  // Selecting Codex authorizes Easel tools; destructive tools confirm in Easel.
+  if (connection) args.push('-c', 'mcp_servers.easel.default_tools_approval_mode="approve"');
   return { command: executable, args, options: { cwd, env: childEnv, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] } };
 }
 
@@ -92,7 +95,7 @@ function createCodexAppServer({
   onExit,
   requestTimeoutMs = 60_000,
   serverRequestTimeoutMs = 120_000,
-  clientInfo = { name: 'easel_studio', title: 'Easel Studio', version: '0.0.1' },
+  clientInfo = { name: 'easel_studio', title: 'Easel Studio', version: require('../package.json').version },
 } = {}) {
   let child;
   let starting;
@@ -250,6 +253,25 @@ function createCodexAppServer({
     return rpc(method, params, options);
   }
 
+  async function waitForEaselTools(threadId, { signal, timeoutMs = 15_000 } = {}) {
+    await initialize();
+    if (!await getMcpConnection?.()) return;
+    const expectedGeneration = generation;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (signal?.aborted || generation !== expectedGeneration || closing) throw abortError();
+      const inventory = await rpc('mcpServerStatus/list', { threadId, serverName: 'easel', detail: 'toolsAndAuthOnly', limit: 1 }, { signal, timeoutMs: Math.max(1, deadline - Date.now()) });
+      const server = inventory.data?.find((entry) => entry.name === 'easel');
+      if (server?.toolsError || ['failed', 'authenticationRequired', 'cancelled', 'disabled'].includes(server?.runtimeStatus)) {
+        throw new Error(`Codex could not connect to Easel tools: ${server.toolsError || server.runtimeStatus}. Configured Media models remain saved in Easel.`);
+      }
+      const names = Object.entries(server?.tools || {}).map(([key, tool]) => tool.name || key);
+      if ((!server?.runtimeStatus || server.runtimeStatus === 'connected') && ['list_models', 'list_canvas_files'].every((name) => names.some((entry) => entry === name || entry.endsWith(`__${name}`)))) return;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    throw new Error('Codex did not finish connecting to Easel tools. Retry the message; configured Media models are still available in Easel.');
+  }
+
   async function close({ timeoutMs = 2000 } = {}) {
     if (closePromise) return closePromise;
     closing = true;
@@ -291,6 +313,7 @@ function createCodexAppServer({
     logout: () => request('account/logout', {}),
     listModels: (params = {}) => request('model/list', params),
     startThread: (params = {}) => request('thread/start', params),
+    waitForEaselTools,
     resumeThread: (params) => request('thread/resume', params),
     readThread: (threadId, options = {}) => request('thread/read', { threadId, includeTurns: false, ...options }),
     listThreads: (params = {}) => request('thread/list', { cwd, ...params }),

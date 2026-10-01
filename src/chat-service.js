@@ -51,6 +51,7 @@ function createChatService({
   canvasController,
   presentCanvas,
   onEvent,
+  onStateChanged,
 }) {
   const history = [];
   let busy = false;
@@ -207,6 +208,7 @@ function createChatService({
       return { ok: true, cancelled: true, text: 'Stopped.', chatId, ...(saveWarning ? { saveWarning } : {}) };
     }
     busy = true;
+    onStateChanged?.();
     try {
       // Save the actual prompt through checkpoint, which retains it in memory on disk errors.
       ensureChatId(userMessage.replace(/\s+/g, ' ').slice(0, 120) || 'Attached media', { persist: false });
@@ -252,9 +254,12 @@ function createChatService({
               const submissionMcp = await mcpFactory(launchOptions);
               try {
                 const result = await submissionMcp.callTool(name, args);
-                if (!result.isError && result.structuredContent?.job) await trackJob({ job: result.structuredContent.job,
-                  modelId: result.structuredContent.job.modelId || args.model, mediaType: name === 'generate_video' ? 'video' : 'image',
-                  projectId: submittedProjectId, prompt: args.prompt || '' });
+                if (!result.isError && result.structuredContent?.job) {
+                  const tracked = await trackJob({ job: result.structuredContent.job,
+                    modelId: result.structuredContent.job.modelId || args.model, mediaType: name === 'generate_video' ? 'video' : 'image',
+                    projectId: submittedProjectId, prompt: args.prompt || '' });
+                  if (signal.aborted && !shuttingDown && tracked?.id) mediaJobStore?.update(tracked.id, { autoResume: false });
+                }
                 else if (!result.isError) {
                   const saved = JSON.parse(await handleMcpResult(result, mediaAssetStore, (event) => {
                     if (chatId === turnChatId && !shuttingDown) onEvent?.(event);
@@ -318,6 +323,7 @@ function createChatService({
         finishTurn(turn);
         if (signal.aborted) onEvent?.({ type: 'agent-stopped', chatId, ...(saveWarning ? { saveWarning } : {}) });
       }
+      onStateChanged?.();
       scheduleCanvasInputs();
     }
   }
@@ -399,6 +405,7 @@ function createChatService({
         if (!matchingCanvas(entry)) continue;
         const claimed = inputStore.beginDispatch(entry.id);
         const turn = beginTurn(entry.id);
+        onStateChanged?.();
         onEvent?.({ type: 'canvas-input-resume-start', request: canvasInputSummary(claimed), chatId });
         try {
           turn.controller.signal.throwIfAborted();
@@ -419,6 +426,7 @@ function createChatService({
       }
     } finally {
       drainingInputs = false;
+      onStateChanged?.();
       if (chatId && inputStore.list({ chatId, status: ['answered', 'queued'], limit: 200, raw: true }).some(matchingCanvas)) scheduleCanvasInputs();
     }
   }
@@ -451,12 +459,13 @@ function createChatService({
       for (const entry of completedMediaJobs().reverse()) {
         const sameAgent = entry.approvedAgent && entry.approvedAgent.connectionId === settings.activeConnectionId && entry.approvedAgent.model === settings.litellmModel && entry.approvedAgent.baseUrl === settings.litellmBaseUrl;
         const sameProject = !entry.projectId || !canvasController?.getCurrentCanvasId || canvasController.getCurrentCanvasId() === entry.projectId;
-        if (!enabled || !sameAgent || !sameProject || activeTurn || shuttingDown || inputQueuePaused) continue;
+        if (!enabled || entry.autoResume === false || !sameAgent || !sameProject || activeTurn || shuttingDown || inputQueuePaused) continue;
         deliverMediaNotifications();
         if (history.some((message) => message.mediaJobCompletedId === entry.id)) { mediaJobStore.update(entry.id, { notification: 'responded' }); continue; }
         const turn = beginTurn();
         mediaJobStore.update(entry.id, { notification: 'dispatching' });
-        onEvent?.({ type: 'media-job-resume-start', chatId, jobId: entry.id });
+        onStateChanged?.();
+        onEvent?.({ type: 'media-job-resume-start', chatId, jobId: entry.id, mediaType: entry.mediaType, status: entry.status });
         try {
           const result = await sendMessage('Continue from the completed background media job.', entry.turnOptions || {}, { id: entry.id, kind: 'job' }, turn);
           mediaJobStore.update(entry.id, { notification: result.cancelled ? 'interrupted' : 'responded', ...(result.saveWarning ? { notificationError: result.saveWarning } : {}) });
@@ -466,7 +475,10 @@ function createChatService({
           onEvent?.({ type: 'media-job-resume-end', chatId, jobId: entry.id, error: error.message });
         } finally { finishTurn(turn); }
       }
-    } finally { drainingMedia = false; }
+    } finally {
+      drainingMedia = false;
+      onStateChanged?.();
+    }
   }
 
   async function notifyMediaJob(job) {
@@ -539,6 +551,7 @@ function createChatService({
     const turn = beginTurn(entry.id);
     inputQueuePaused = false;
     drainingInputs = true;
+    onStateChanged?.();
     onEvent?.({ type: 'canvas-input-resume-start', request: canvasInputSummary(claimed), chatId });
     (async () => {
       turn.controller.signal.throwIfAborted();
@@ -555,6 +568,7 @@ function createChatService({
       drainingInputs = false;
       finishTurn(turn);
       if (turn.controller.signal.aborted) onEvent?.({ type: 'agent-stopped', chatId, canvasInputRequestId: entry.id, ...(turn.saveWarning ? { saveWarning: turn.saveWarning } : {}) });
+      onStateChanged?.();
       scheduleCanvasInputs();
     });
     return { ok: true, request: canvasInputSummary(inputStore.get(entry.id)) };

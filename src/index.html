@@ -39,7 +39,7 @@
       .studio { --left-column-width: 360px; width: 100%; height: 100%; min-width: 0; min-height: 0; display: grid; grid-template-columns: 44px minmax(280px, var(--left-column-width)) 1px minmax(300px, 1fr); grid-template-rows: 48px minmax(0, 1fr); }
       .topbar { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; gap: 20px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--paper); }
       .brand { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 0 0 auto; }
-      .brand-mark { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 8px 8px 8px 2px; background: var(--green); color: var(--paper); font: 600 19px/1 var(--display); }
+      .brand-mark { width: 26px; height: 26px; display: block; flex-shrink: 0; color: var(--green); }
       .brand h1 { margin: 0; font: 600 19px/1.05 var(--display); letter-spacing: -.025em; }
       .topbar-actions, .button-row { display: flex; align-items: center; gap: 6px; }
       .button { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; border-radius: 8px; padding: 7px 11px; color: var(--ink); background: transparent; font-size: 12px; font-weight: 600; transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease; }
@@ -65,6 +65,8 @@
       .activity-button[aria-pressed="true"]::after { position: absolute; left: -4px; width: 2px; height: 20px; background: var(--green); content: ""; }
       .activity-button svg { width: 19px; height: 19px; }
       .chat-unread { position: absolute; top: 0; right: -1px; min-width: 17px; height: 17px; display: grid; place-items: center; border-radius: 9px; padding: 0 4px; color: white; background: var(--coral); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; pointer-events: none; }
+      .media-generating { position: absolute; bottom: 0; right: 0; width: 15px; height: 15px; display: grid; place-items: center; border-radius: 50%; color: var(--green); background: var(--paper-deep); pointer-events: none; }
+      .media-generating::after { width: 9px; height: 9px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: media-job-turn 1s linear infinite; content: ""; }
       .studio[data-sidebar="closed"] { grid-template-columns: 44px 0 0 minmax(0, 1fr); }
       .studio[data-sidebar="closed"] .left-column, .studio[data-sidebar="closed"] .workbench-splitter { display: none; }
       .left-column { position: relative; grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
@@ -79,6 +81,11 @@
       .fold-button { width: 28px; height: 28px; flex: 0 0 auto; display: grid; place-items: center; border: 0; border-radius: 6px; color: #58675f; background: transparent; }
       .fold-button:hover { color: var(--green-deep); background: var(--green-wash); }
       .fold-button svg { width: 14px; height: 14px; transition: transform 150ms ease; }
+      .icon-button { width: 30px; min-height: 30px; flex: 0 0 auto; display: inline-grid; place-items: center; border: 0; border-radius: 5px; padding: 7px; color: var(--muted); background: transparent; }
+      .icon-button svg { width: 16px; height: 16px; }
+      .icon-button:hover:not(:disabled) { color: var(--green-deep); background: var(--green-wash); }
+      .icon-button[data-state="copied"] { color: var(--green); }
+      .icon-button[data-state="error"] { color: #9d3727; }
       h2 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: -.01em; }
       .library-content { padding: 12px; }
       .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 16px 10px; align-content: start; }
@@ -156,8 +163,7 @@
       .message-media-badge, .project-thumbnail-new { position: absolute; top: 7px; left: 7px; border-radius: 3px; padding: 3px 5px; color: var(--paper); background: var(--green-deep); font-size: 10px; font-weight: 600; pointer-events: none; }
       .message-media-play { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); min-height: 34px; border: 0; border-radius: 5px; padding: 7px 12px; color: var(--paper); background: var(--green-deep); font-size: 12px; font-weight: 600; }
       .message-media-play:hover:not(:disabled) { background: var(--green); }
-      .message-media-actions { display: flex; flex-wrap: wrap; gap: 4px 12px; }
-      .message-media-actions .button { min-height: 28px; padding: 3px 0; font-size: 11px; }
+      .message-media-actions { display: flex; flex-wrap: wrap; gap: 4px; }
       .message-media-error { margin: 5px 0 0; color: #9d3727; font-size: 11px; }
       .skill-compatibility-note { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.4; }
       .unavailable-skills { padding: 10px 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
@@ -172,8 +178,6 @@
       .message-attachment audio { display: block; width: min(290px, 100%); height: 38px; }
       .message-attachment figcaption { overflow: hidden; border-top: 1px solid #77917e; padding: 5px 7px; color: #e5eee6; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
       .message-actions { align-self: flex-start; margin-top: -14px; margin-bottom: -8px; }
-      .message-actions button { min-height: 26px; border: 0; border-radius: 5px; padding: 3px 6px; color: #58675f; background: transparent; font-size: 11px; font-weight: 600; }
-      .message-actions button:hover { color: var(--green); background: var(--green-wash); }
       .canvas-input-note { align-self: stretch; padding: 11px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }
       .canvas-input-note strong { display: block; margin-bottom: 4px; color: var(--green-deep); font-weight: 600; }
       .canvas-input-note p { margin: 0; }
@@ -225,17 +229,18 @@
       #send[data-action="stop"] { min-width: 70px; color: #963c2c; background: #f4e7e0; }
       #send[data-action="stop"]:hover:not(:disabled) { color: #7c2d20; background: #ead3c8; }
       .canvas-panel { grid-column: 4; grid-row: 2; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--paper); }
-      .canvas-toolbar { min-height: var(--panel-header-height); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
-      .canvas-heading { display: flex; flex: 1 1 140px; align-items: center; gap: 9px; min-width: 0; }
-      .canvas-heading h2 { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-      .canvas-state { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; white-space: nowrap; }
-      .canvas-state .state-dot { width: 6px; height: 6px; }
-      .canvas-toolbar-actions { display: flex; flex-wrap: wrap; gap: 2px; margin-left: auto; }
-      .canvas-toolbar-actions .button { white-space: nowrap; }
-      .canvas-tabs { min-height: 38px; flex: 0 0 auto; display: flex; align-items: stretch; gap: 4px; overflow-x: auto; padding: 0; background: var(--paper); }
+      .canvas-tabs { min-height: var(--panel-header-height); flex: 0 0 auto; display: flex; align-items: stretch; overflow-x: auto; padding: 0; border-bottom: 1px solid var(--line); background: var(--paper); }
+      .canvas-tab-list { display: flex; align-items: stretch; gap: 4px; flex: 0 0 auto; }
       .canvas-tab { min-width: 0; max-width: 240px; flex: 0 0 auto; display: flex; align-items: stretch; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; }
       .canvas-tab[data-active="true"] { border-bottom-color: var(--green); color: var(--green-deep); }
-      .canvas-tab-select { min-width: 0; overflow: hidden; border: 0; padding: 9px 8px; color: inherit; background: transparent; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+      .canvas-tab-select { min-width: 0; display: flex; align-items: center; gap: 7px; border: 0; padding: 9px 8px; color: inherit; background: transparent; font-size: 12px; font-weight: 600; }
+      .canvas-tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .canvas-tab-status { width: 6px; height: 6px; }
+      .canvas-tab-add { flex: 0 0 40px; display: grid; place-items: center; border: 0; border-radius: 0; color: var(--muted); background: transparent; }
+      .canvas-tab-add:hover:not(:disabled) { color: var(--green); background: var(--green-wash); }
+      .canvas-tab-add svg { width: 16px; height: 16px; }
+      .section-head-actions { display: flex; align-items: center; gap: 2px; }
+      .project-file-device svg { width: 16px; height: 16px; }
       .canvas-tab-close { width: 28px; flex: 0 0 auto; display: grid; place-items: center; border: 0; border-radius: 4px; color: var(--muted); background: transparent; }
       .canvas-tab-close svg { width: 12px; height: 12px; }
       .canvas-tab-close:hover { color: #953c2b; background: #f4e9e4; }
@@ -372,6 +377,8 @@
       .new-canvas-kits-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #405249; font-size: 12px; }
       .new-canvas-kits p, #new-canvas-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
       #new-canvas-kits { color: var(--ink); }
+      .new-project-kit-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 18px; }
+      .new-project-kit-picker .project-kit-option { min-height: 38px; }
       #new-canvas-status:empty { display: none; }
       .skills-layout { display: grid; grid-template-columns: minmax(260px, .9fr) minmax(300px, 1.1fr); min-height: 390px; }
       .skills-inventory { border-right: 1px solid #e0e5dd; padding: 15px; }
@@ -465,7 +472,7 @@
       .project-media-heading .delete-control { width: 28px; height: 28px; padding: 5px; }
       .media-in-project { display: inline-flex; align-items: center; gap: 3px; min-height: 26px; color: var(--green); font-size: 11px; }
       .media-in-project svg { order: -1; width: 13px; height: 13px; }
-      .project-media-actions { display: flex; flex-wrap: wrap; gap: 0 5px; }
+      .project-media-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
       .project-media-actions .button { min-height: 26px; padding: 3px 0; font-size: 11px; text-align: left; }
       .project-media-actions .button:hover:not(:disabled) { color: var(--green); background: transparent; text-decoration: underline; text-underline-offset: 3px; }
       .image-viewer { position: absolute; inset: 0; display: flex; flex-direction: column; min-height: 0; background: var(--paper-deep); }
@@ -505,8 +512,6 @@
         .topbar-actions { gap: 4px; }
         .left-column { height: 560px; }
         .canvas-panel { min-height: 390px; }
-        .canvas-toolbar { padding-inline: 9px; }
-        .canvas-toolbar-actions .button { padding-inline: 5px; font-size: 11px; }
         .settings-shell { grid-template-columns: 1fr; }
         .settings-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid var(--line); padding: 7px; }
         .endpoint-form-grid { grid-template-columns: 1fr; }
@@ -529,7 +534,7 @@
   <body>
     <main class="studio">
       <header class="topbar">
-        <div class="brand"><div class="brand-mark" aria-hidden="true">E</div><h1>Easel Studio</h1></div>
+        <div class="brand"><svg class="brand-mark" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M10 2v2M5 4h10v8H5ZM4 12h12M7 12l-3 6M13 12l3 6M10 12v4"/></svg><h1>Easel Studio</h1></div>
         <div class="project-switcher"><label for="project-select">Project</label><select id="project-select" aria-label="Current project"><option value="">Select a project</option></select><button id="project-rename" class="button quiet small" type="button" disabled>Rename</button><button id="project-delete" class="delete-control" type="button" aria-label="Delete project" aria-haspopup="dialog" title="Delete project" disabled><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 5.5h13M7.5 5.5v-2h5v2M5 5.5l.8 11h8.4l.8-11M8 8.5v5M12 8.5v5"/></svg></button><button id="project-new" class="button quiet small" type="button">New project</button></div>
         <div class="topbar-actions">
           <button id="connections-open" class="button connection-button" type="button"><span id="connection-dot" class="connection-dot needs-setup" aria-hidden="true"></span>Credentials</button>
@@ -549,6 +554,7 @@
         <button id="nav-media" class="activity-button" type="button" aria-label="Show media" title="Media" aria-pressed="false" aria-expanded="false" aria-controls="media-drawer">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3.5h15.5v15M3.5 6.5h14v14h-14Z"/><path d="m4 17 4.5-4.5 3.5 3.5 2-2 3.5 3.5"/><circle cx="8" cy="10.5" r="1.3"/></svg>
           <span id="media-unread" class="chat-unread" aria-hidden="true" hidden></span>
+          <span id="media-generating" class="media-generating" aria-hidden="true" hidden></span>
         </button>
         <span class="activity-spacer"></span>
         <button id="settings-open" class="activity-button" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-pressed="false">
@@ -557,7 +563,7 @@
       </nav>
       <section class="left-column" aria-label="Chat, project files, and media">
         <section id="project-drawer" class="panel library" aria-labelledby="library-title" hidden>
-          <div class="section-head"><h2 id="library-title">Project files</h2><button id="library-collapse" class="fold-button" type="button" aria-label="Close project files" title="Close drawer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+          <div class="section-head"><h2 id="library-title">Project files</h2><div class="section-head-actions"><button id="canvas-undo" class="fold-button" type="button" aria-label="Undo canvas changes" title="Undo canvas changes" disabled><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h8a5 5 0 0 1 0 10M3 8l4-4M3 8l4 4"/></svg></button><button id="export-current" class="fold-button" type="button" aria-label="Download project ZIP" title="Download project ZIP" disabled><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 2v10m-4-4 4 4 4-4M3 13v4h14v-4"/></svg></button><button id="library-collapse" class="fold-button" type="button" aria-label="Close project files" title="Close drawer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div></div>
           <div id="library-panel-content" class="library-panel-content">
             <div class="library-content project-documents" id="canvases-content"><div class="drawer-section-head"><h3>Canvases</h3><button id="drawer-new-document" class="button quiet small" type="button">New HTML</button></div><div id="canvases-list" class="canvas-list" aria-label="Project HTML documents"></div><p id="canvases-empty" class="empty-library">Select a project to browse its documents.</p><details class="project-files-details"><summary>Source files</summary><div id="project-source-files"></div></details></div>
             <section class="library-content project-kits" aria-labelledby="project-kits-title"><div class="drawer-section-head"><h3 id="project-kits-title">Canvas kits</h3></div><div id="project-kit-list" aria-label="Kits shared by project canvases"></div><p id="project-kit-status" role="status" aria-live="polite">Select a project to choose its kits.</p></section>
@@ -571,14 +577,14 @@
           </div>
         </section>
         <section id="chat-history-panel" class="panel chat-history" aria-labelledby="chat-history-title" hidden>
-          <div class="section-head"><h2 id="chat-history-title">History</h2><button id="history-new-chat" class="button quiet small" type="button">New chat</button></div>
+          <div class="section-head"><h2 id="chat-history-title">History</h2><button id="history-new-chat" class="icon-button" type="button" data-action-icon="newChat" aria-label="New chat" title="New chat"></button></div>
           <p id="chat-history-status" role="status" aria-live="polite"></p><div id="chat-history-list" class="chat-history-list" aria-label="Saved conversations"></div>
           <p class="chat-history-note">Chats are saved on this device. Opening a chat leaves your current project in place.</p>
         </section>
         <section id="conversation-panel" class="panel conversation" aria-label="Conversation">
           <div class="conversation-head">
             <div class="conversation-title"><h2>Chat</h2></div>
-            <div class="conversation-actions"><button id="new-chat" class="button quiet small" type="button" title="Start a new chat">New chat</button><button id="chat-hide" class="fold-button" type="button" aria-label="Hide conversation" title="Hide conversation"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+            <div class="conversation-actions"><button id="new-chat" class="icon-button" type="button" data-action-icon="newChat" aria-label="New chat" title="New chat"></button><button id="chat-hide" class="fold-button" type="button" aria-label="Hide conversation" title="Hide conversation"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
           </div>
           <div id="conversation-content" class="conversation-content">
           <div id="messages" aria-live="polite">
@@ -619,11 +625,8 @@
       </section>
       <div id="workbench-splitter" class="workbench-splitter" role="separator" aria-label="Resize sidebar and canvas panels" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="55" aria-valuenow="36" tabindex="0"></div>
       <section class="panel canvas-panel" aria-label="HTML canvas workspace">
-        <div id="open-canvas-tabs" class="canvas-tabs" role="group" aria-label="Open project files and images" hidden></div>
-        <div class="canvas-toolbar">
-          <div class="canvas-heading"><h2 id="canvas-title">Canvas</h2><span class="canvas-state"><span id="canvas-state-dot" class="state-dot" aria-hidden="true"></span><span id="canvas-state">Ready</span></span></div>
-          <div class="canvas-toolbar-actions"><button id="new-canvas-open" class="button quiet small" type="button">New HTML</button><button id="canvas-files-open" class="button quiet small" type="button" aria-haspopup="dialog" disabled>Files</button><button id="canvas-devices-open" class="button quiet small" type="button" title="Camera and microphone access" disabled>Devices</button><button id="canvas-undo" class="button quiet small" type="button" disabled>Undo</button><button id="export-current" class="button quiet small" type="button" disabled>Export project</button></div>
-        </div>
+        <h2 id="canvas-title" hidden>Canvas</h2>
+        <div class="canvas-tabs"><div id="open-canvas-tabs" class="canvas-tab-list" role="group" aria-label="Open project files and images"></div><button id="new-canvas-open" class="canvas-tab-add" type="button" aria-label="New HTML canvas" title="New HTML canvas"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button></div>
         <div id="canvas-host" class="canvas-host">
           <div id="canvas-empty" class="canvas-empty" aria-labelledby="canvas-start-title">
             <div class="canvas-start-heading"><h3 id="canvas-start-title">Your next idea goes here</h3><p>Describe what you want to make. We can shape it together.</p></div>
@@ -634,7 +637,7 @@
               <button class="canvas-starter" type="button" data-starter="image"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="1"/><path d="m4 14 4-5 4 4 2-2 3 3"/><circle cx="13.5" cy="6.5" r="1"/></svg>An image study</button>
             </div></div>
           </div>
-          <section id="image-viewer" class="image-viewer" aria-label="Full media preview" data-zoom="fit" hidden><div class="image-viewer-stage"><img id="image-viewer-image" alt="" /><video id="media-viewer-video" controls preload="metadata" playsinline hidden></video><audio id="media-viewer-audio" controls preload="metadata" hidden></audio></div><div class="image-viewer-footer"><span id="image-viewer-info" role="status"></span><div class="button-row"><button id="image-size-toggle" class="button quiet small" type="button">Actual size</button><button id="image-use-chat" class="button quiet small" type="button">Use in chat</button></div></div></section>
+          <section id="image-viewer" class="image-viewer" aria-label="Full media preview" data-zoom="fit" hidden><div class="image-viewer-stage"><img id="image-viewer-image" alt="" /><video id="media-viewer-video" controls preload="metadata" playsinline hidden></video><audio id="media-viewer-audio" controls preload="metadata" hidden></audio></div><div class="image-viewer-footer"><span id="image-viewer-info" role="status"></span><div class="button-row"><button id="image-size-toggle" class="button quiet small" type="button">Actual size</button><button id="image-download" class="icon-button" type="button" data-action-icon="download" aria-label="Download" title="Download"></button><button id="image-use-chat" class="icon-button" type="button" data-action-icon="useInChat" aria-label="Use in chat" title="Use in chat"></button></div></div></section>
         </div>
       </section>
     </main>
@@ -731,10 +734,10 @@
       <form id="new-canvas-form" class="settings-form">
         <label class="field" for="new-canvas-name"><span id="new-item-name-label">Project name</span><input id="new-canvas-name" name="title" type="text" maxlength="120" autocomplete="off" placeholder="e.g. Spring campaign" required /></label>
         <div class="new-canvas-kits">
-          <div class="new-canvas-kits-head"><strong>Project kits</strong></div>
-          <p id="new-canvas-kits"></p>
+          <div class="new-canvas-kits-head"><strong id="new-canvas-kits-label">Project kits</strong></div>
+          <div id="new-canvas-kits" role="group" aria-labelledby="new-canvas-kits-label"></div>
           <p id="new-canvas-audio-hint"></p>
-          <p>Choose kits under Project files > Canvas kits. Every HTML canvas in the project shares them.</p>
+          <p>Shared by every HTML canvas. Change the selection later under Project files > Canvas kits. Install more in Settings > Kits.</p>
         </div>
         <p id="new-canvas-status" role="status" aria-live="polite"></p>
         <div class="new-canvas-actions"><button id="new-canvas-submit" class="button primary" type="submit">Create empty canvas</button></div>
@@ -753,6 +756,8 @@
       </div>
     </dialog>
     <script src="../node_modules/markdown-it/dist/browser/markdown-it.umd.min.js"></script>
+    <script src="./ui-icons.js"></script>
+    <script src="./media-tool-results.js"></script>
     <script src="./connection-settings.js"></script>
     <script src="./project-workspace.js"></script>
     <script src="./themed-dropdown.js"></script>
