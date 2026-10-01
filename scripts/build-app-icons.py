@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 import sys
 
 from PIL import Image, ImageOps
@@ -6,9 +7,15 @@ from PIL import Image, ImageOps
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
-SOURCE = Path(sys.argv[1]) if len(sys.argv) > 1 else BUILD / "icon.png"
+SOURCE = Path(sys.argv[1]) if len(sys.argv) > 1 else BUILD / "icon.svg"
 
-with Image.open(SOURCE) as image:
+if SOURCE.suffix.lower() == ".svg":
+    raster_source = BUILD / "icon.png"
+    subprocess.run(["node", str(ROOT / "scripts" / "render-app-icon.cjs"), str(SOURCE), str(raster_source)], check=True)
+else:
+    raster_source = SOURCE
+
+with Image.open(raster_source) as image:
     artwork = ImageOps.contain(image.convert("RGBA"), (1024, 1024), Image.Resampling.LANCZOS)
 
 icon = Image.new("RGBA", (1024, 1024))
