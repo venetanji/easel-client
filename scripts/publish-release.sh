@@ -30,6 +30,10 @@ else
     --generate-notes
     --verify-tag
   )
+  notes_file="docs/releases/$RELEASE_TAG.md"
+  if [[ -f "$notes_file" ]]; then
+    create_args+=(--notes-file "$notes_file")
+  fi
   if [[ "$RELEASE_TAG" == *-* ]]; then
     create_args+=(--prerelease)
   fi

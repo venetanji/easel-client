@@ -160,4 +160,17 @@ npm run dist:mac
 npm run dist:linux
 ```
 
-The test workflow installs Chromium and verifies a real offline screenshot. Desktop PR checks build unsigned Windows, macOS, and Linux packages and upload only the package files (not unpacked app trees) as Actions artifacts for review. Pushing a `v*` tag publishes the desktop packages as separate GitHub Release assets after all three builds pass; prerelease suffixes such as `-rc.1` create a prerelease. Tag builds must use the current `package.json` version, optionally followed by a prerelease suffix. The workflow does not sign or notarize builds.
+The test workflow installs Chromium and verifies a real offline screenshot. Desktop PR checks build unsigned Windows, macOS, and Linux packages and upload only the package files (not unpacked app trees) as Actions artifacts for review. The workflow does not sign or notarize builds.
+
+### Publish a release
+
+Push a version tag on the merged release commit:
+
+```sh
+git tag -a v0.0.1 -m "Easel Studio 0.0.1"
+git push origin v0.0.1
+```
+
+The **Desktop Builds** workflow builds all three platforms and creates a GitHub Release with separate Windows EXE/ZIP, macOS DMG/ZIP, and Linux AppImage/DEB downloads. The release job runs only after every platform succeeds. It generates a changelog and prepends `docs/releases/<tag>.md` when that file exists. Publishing a `v*` release from the GitHub UI also runs the build and attaches its packages; reruns replace matching assets on the existing release.
+
+Tags must match the current `package.json` version, optionally followed by a prerelease suffix such as `v0.0.1-rc.1`. Those suffixes mark the release as a prerelease. Manual **Run workflow** builds upload Actions artifacts without publishing a release. Runs for the same ref are serialized so an in-progress release build can finish. Headless MCP tarballs remain available in the Actions artifacts.
