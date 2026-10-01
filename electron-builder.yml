@@ -12,15 +12,20 @@ asar: true
 asarUnpack:
   - packages/media-mcp/dist/**/*
   - packages/media-mcp/package.json
+extraResources:
+  - from: build/icon.png
+    to: app-icon.png
 extraMetadata:
   main: src/main.js
 npmRebuild: false
 publish: null
 win:
+  icon: build/icon.ico
   target:
     - nsis
     - zip
 mac:
+  icon: build/icon.icns
   identity: "-"
   hardenedRuntime: false
   notarize: false
@@ -35,12 +40,15 @@ mac:
 dmg:
   sign: false
 linux:
+  icon: build/icons
   target:
     - AppImage
     - deb
   category: Graphics
   maintainer: "Giovanni Lion <giovanni.lion@gmail.com>"
 nsis:
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

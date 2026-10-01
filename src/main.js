@@ -1195,11 +1195,14 @@ function registerIpcHandlers() {
 async function createWindow() {
   await CHAT.cancelShutdown({ schedule: false });
   await MCP_SERVER.start();
+  const appIcon = app.isPackaged ? path.join(process.resourcesPath, 'app-icon.png') : path.join(__dirname, '..', 'build', 'icon.png');
+  if (process.platform === 'darwin') app.dock?.setIcon(appIcon);
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 900,
     minWidth: 960,
     minHeight: 720,
+    icon: appIcon,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
