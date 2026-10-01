@@ -26,6 +26,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   const mediaList = document.getElementById('media-list');
   const allMediaList = document.getElementById('all-media-list');
   const mediaUnreadBadge = document.getElementById('media-unread');
+  const mediaGenerationIndicator = document.getElementById('media-generating');
   const projectKitList = document.getElementById('project-kit-list');
   const projectKitStatus = document.getElementById('project-kit-status');
   const documentsList = document.getElementById('canvases-list');
@@ -123,14 +124,23 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     svg.append(path);
     return svg;
   }
+  function updateMediaActivity(unread = [...mediaNotices.values()].filter((notice) => !notice.acknowledged).length) {
+    const active = new Set([...assets, ...libraryAssets]
+      .filter((asset) => asset.kind === 'job' && ['queued', 'generating', 'downloading'].includes(asset.job?.status))
+      .map((asset) => asset.job.id)).size;
+    if (mediaGenerationIndicator) mediaGenerationIndicator.hidden = active === 0;
+    const open = !mediaDrawer.hidden;
+    const progress = active ? `, ${active} media ${active === 1 ? 'job' : 'jobs'} in progress` : '';
+    mediaDrawerToggle.setAttribute('aria-label', `${open ? 'Hide' : 'Show'} media${unread ? `, ${unread} new ${unread === 1 ? 'asset' : 'assets'}` : ''}${progress}`);
+    mediaDrawerToggle.title = `Media${progress}`;
+  }
   function updateMediaNotices() {
     const unread = [...mediaNotices.values()].filter((notice) => !notice.acknowledged).length;
     if (mediaUnreadBadge) {
       mediaUnreadBadge.hidden = unread === 0;
       mediaUnreadBadge.textContent = unread > 99 ? '99+' : String(unread);
     }
-    const open = !mediaDrawer.hidden;
-    mediaDrawerToggle.setAttribute('aria-label', `${open ? 'Hide' : 'Show'} media${unread ? `, ${unread} new ${unread === 1 ? 'asset' : 'assets'}` : ''}`);
+    updateMediaActivity(unread);
     try { storage?.setItem(mediaNoticeStorageKey, JSON.stringify([...mediaNotices.values()].slice(-256))); } catch {}
     try { storage?.setItem(mediaSeenStorageKey, JSON.stringify([...knownMedia].slice(-1024))); } catch {}
     const newest = [...mediaNotices.values()].at(-1)?.assetId;
@@ -371,6 +381,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       const card = [...list.children].find((item) => item.dataset.jobId === job.id);
       if (card) updateJobCard(card, updated);
     }
+    updateMediaActivity();
     return true;
   }
   async function addToProject(asset) {
