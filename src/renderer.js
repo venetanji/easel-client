@@ -1407,7 +1407,7 @@ function wireRenderer({ document, client }) {
         return row;
       }));
       const kitCount = project.manifest?.kits?.length || 0;
-      const assetCount = project.manifest?.assets?.length || 0;
+      const assetCount = project.contributions?.mediaAssets ?? project.manifest?.assets?.length ?? 0;
       setStatus(canvasFilesSummary, files.length
         ? `${files.length} source file${files.length === 1 ? '' : 's'}. ${kitCount} kit${kitCount === 1 ? '' : 's'} and ${assetCount} media asset${assetCount === 1 ? '' : 's'} are stored separately.`
         : 'No saved source files are available for this canvas.');
@@ -2557,7 +2557,7 @@ function wireRenderer({ document, client }) {
       workspace.assetsChanged(event).catch((error) => setStatus(statusElement, error.message, true));
       return;
     }
-    if (event.type === 'media' && !event.generated) {
+    if (event.type === 'media' && !event.generated && !event.captured) {
       refreshAssets();
       setStatus(statusElement, `${event.name || 'Media capture'} saved to the library.`);
       return;

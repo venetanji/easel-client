@@ -39,7 +39,7 @@ function fixture() {
     'project-select', 'nav-explorer', 'nav-media', 'project-drawer', 'media-drawer', 'media-collapse', 'media-list', 'all-media-list', 'all-media-empty', 'all-media-count', 'canvases-list', 'open-canvas-tabs', 'image-viewer',
     'image-viewer-image', 'media-viewer-video', 'media-viewer-audio', 'image-viewer-info', 'image-size-toggle', 'media-empty',
     'project-image-count', 'canvases-empty', 'project-rename', 'project-delete', 'project-source-files', 'image-use-chat', 'image-download', 'library-collapse',
-    'project-new', 'drawer-new-document',
+    'project-new', 'drawer-new-document', 'export-current',
     'media-unread', 'project-kit-list', 'project-kit-status',
   ];
   const nodes = new Map(ids.map((id) => [id, element('div', id)]));
@@ -144,7 +144,7 @@ test('file trash controls are accessible and cancellation keeps source and tabs'
   const state = fixture();
   await state.workspace.openProject(state.projectId);
   const documents = state.nodes.get('canvases-list');
-  const trash = documents.children[1].children[1];
+  const trash = documents.children[1].querySelector('.delete-control');
   assert.equal(trash.attributes['aria-label'], 'Delete extra.html');
   assert.equal(trash.attributes['aria-haspopup'], 'dialog');
   assert.equal(trash.children[0].attributes['aria-hidden'], 'true');
@@ -161,7 +161,7 @@ test('confirmed document deletion removes its tab and selects host replacement m
   await state.workspace.openProject(state.projectId);
   await state.workspace.openDocument('extra.html');
   state.confirm(true);
-  await state.nodes.get('canvases-list').children[1].children[1].listeners.click();
+  await state.nodes.get('canvases-list').children[1].querySelector('.delete-control').listeners.click();
   assert.equal(state.nodes.get('canvases-list').children.length, 1);
   assert.equal(state.selections.at(-1).documentPath, 'index.html');
   const tabs = JSON.parse(state.stored.get('easel-studio.project-tabs.v1'));
@@ -392,7 +392,7 @@ test('deleting the last canvas handles project deletion and surfaces media clean
     state.projectAssets.splice(0, state.projectAssets.length);
     return { deleted: true, projectDeleted: true, deletedAssetIds: ['e'.repeat(32)], mediaWarnings: ['One saved asset could not be deleted.'] };
   };
-  await state.nodes.get('canvases-list').children[0].children[1].listeners.click();
+  await state.nodes.get('canvases-list').children[0].querySelector('.delete-control').listeners.click();
   assert.equal(state.workspace.getProjectId(), '');
   assert.equal(state.nodes.get('open-canvas-tabs').hidden, true);
   assert.match(state.statuses.at(-1)[0], /1 unshared media asset deleted/);
