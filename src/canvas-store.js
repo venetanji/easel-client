@@ -258,6 +258,10 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
 
   function commitProject(id, project) {
     validateProject(project);
+    for (const document of projectDocuments(project)) {
+      const source = assembleProject(project, { documentPath: document.path, validateOnly: true });
+      buildCanvasSnapshotDocument(source, { maxBytes: Infinity });
+    }
     const html = assemble(project, id, project.title);
     const record = { ...project };
     delete record.updatedAt;
@@ -488,8 +492,9 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     const project = loadProject(id);
     checkRevisions(project, name, args);
     project.files[name] = extractAssets(args.content, project.manifest.assets);
+    const syntax = validateJavaScriptFiles(project, [name]);
     const saved = commitProject(id, project);
-    return { ...saved, path: name, revision: digest(project.files[name]), bytes: Buffer.byteLength(project.files[name], 'utf8'), effects: { source: 'persisted', runtime: 'unchanged until reload' } };
+    return { ...saved, path: name, revision: digest(project.files[name]), bytes: Buffer.byteLength(project.files[name], 'utf8'), syntax, effects: { source: 'persisted', runtime: 'unchanged until reload' } };
   }
 
   function patchFile(id, args = {}) {

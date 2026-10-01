@@ -15,6 +15,7 @@ const {
   appendMediaPreviewMessage,
   canAutoPreviewMedia,
   renderInstalledKitCatalog,
+  renderNewProjectKits,
   renderSkillList,
   skillCompatibility,
 } = require('../src/renderer');
@@ -65,6 +66,31 @@ const fields = () => ({
   litellmApiKey: element('input'),
   clearEaselApiKey: element('input'),
   clearLiteLLMApiKey: element('input'),
+});
+
+test('new projects offer installed kits and report an explicit empty selection', () => {
+  const list = element();
+  const changes = [];
+  const catalog = [
+    { id: 'canvas-2d', name: 'Canvas 2D', installed: true },
+    { id: 'tone', name: 'Tone.js', description: 'Interactive audio', installed: true },
+    { id: 'p5', name: 'p5.js', installed: true },
+    { id: 'three', name: 'Three.js', installed: false },
+  ];
+  const inputs = renderNewProjectKits({ createElement: element }, list, catalog, ['canvas-2d', 'tone'], (kits) => changes.push(kits));
+  assert.deepEqual(inputs.map((input) => input.value), ['canvas-2d', 'tone', 'p5']);
+  assert.deepEqual(inputs.map((input) => input.checked), [true, true, false]);
+  assert.equal(list.children[1].title, 'Interactive audio');
+  assert.equal(list.children[2].tagName, 'label');
+  assert.equal(list.children[2].children[1].textContent, 'p5.js');
+  inputs[2].checked = true;
+  inputs[2].listeners.change();
+  assert.deepEqual(changes.at(-1), ['canvas-2d', 'tone', 'p5']);
+  inputs.forEach((input) => { input.checked = false; });
+  inputs[0].listeners.change();
+  assert.deepEqual(changes.at(-1), []);
+  assert.deepEqual(renderNewProjectKits({ createElement: element }, list, [], [], () => {}), []);
+  assert.equal(list.children.length, 0);
 });
 
 test('saves endpoint settings, clears entered secrets, and only receives public flags back', async () => {

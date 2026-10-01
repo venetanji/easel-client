@@ -57,6 +57,28 @@ The model still read starter files for the new sketch. The source-list tool and
 p5 skill now distinguish existing edits from creation and point new sketches
 directly to `present_canvas`.
 
+## Smaller Model Observation
+
+A manual Built-in run with `qwen-plus` requested rotating planets using p5 in
+a project without the p5 kit. It created an empty document, then tried to
+present another document at the same path. The collision response incorrectly
+gave image-attachment advice. It subsequently wrote a CDN p5 script, which was
+rejected with generic source-edit guidance. The model also claimed to enable
+p5 without changing the kit selection. A later request ended with `terminated`;
+that transport failure does not establish the model's task capability.
+
+Creation receipts now report the actual enabled kits. Tool descriptions explain
+that document creation inherits project kits and that a complete new sketch
+can use `present_canvas` directly. Collision corrections distinguish creating
+a new path from writing the existing document. Offline-reference corrections
+explain removing CDN URLs and asking the user to enable the missing kit under
+Project files > Canvas kits, then waiting for confirmation. Source edits now
+preflight every HTML document before committing, so a rejected reference cannot
+remain in a secondary canvas and block kit selection. New projects offer installed
+kits as checkboxes; additional documents inherit their project's selection.
+These follow-up changes have automated regression coverage;
+the manual model run happened before they were applied.
+
 ## Regression Coverage
 
 Automated checks cover instruction length and backend-specific media routes,

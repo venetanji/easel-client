@@ -40,6 +40,21 @@ test('shares the tool allowlist and validates requests before dispatch', async (
   assert.match(invalid.content[0].text, /unsupported|unexpected|not allowed/i);
 });
 
+test('external canvas failures return targeted path and offline-kit guidance', async () => {
+  const f = fixture({
+    presentCanvas: async () => { throw new Error('This document path already exists. Choose a new path.'); },
+    canvasController: { async writeCanvasFile() { throw new Error('Only relative local project references are supported: https://cdn.example/p5.min.js'); } },
+  });
+  const collision = await f.host.callTool('present_canvas', { html: '<!doctype html><html><head></head><body></body></html>' });
+  assert.equal(collision.isError, true);
+  assert.match(collision.structuredContent.guidance, /write_canvas_file/);
+  assert.doesNotMatch(collision.structuredContent.guidance, /assets:\[/);
+  const offline = await f.host.callTool('write_canvas_file', { path: 'index.html', content: '<script src="https://cdn.example/p5.min.js"></script>' });
+  assert.equal(offline.isError, true);
+  assert.match(offline.structuredContent.guidance, /Project files > Canvas kits/);
+  assert.match(offline.structuredContent.guidance, /wait for confirmation/);
+});
+
 test('saves and attaches synchronous images once and returns one image observation', async () => {
   const f = fixture();
   const result = await f.host.callTool('generate_image', { prompt: 'light study' });

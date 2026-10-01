@@ -43,7 +43,7 @@ const PRESENT_CANVAS_TOOL = Object.freeze({
   type: 'function',
   function: {
     name: 'present_canvas',
-    description: 'Create and open a new authored HTML document inside the active named project, with optional generated image assets and selected offline kits. Existing project documents are preserved.',
+    description: 'Create and open a complete new HTML document inside the active project. Existing documents are preserved. Inherits enabled project kits; does not enable additional libraries. Use local kit globals, never CDN scripts. No preceding create_canvas call is needed.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -75,7 +75,7 @@ const CANVAS_TOOLS = Object.freeze([
     type: 'function',
     function: {
       name: 'create_canvas',
-      description: 'Add and open a named empty HTML canvas in the active project. Creates a project if none is selected. Existing project files and media are shared.',
+      description: 'Add and open a named empty HTML canvas in the active project. Creates a project if none is selected. Existing project kits, files and media are shared; this does not enable another kit. For a complete new sketch use present_canvas directly.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -207,6 +207,10 @@ function argumentExample(schema, key = '', depth = 0) {
   return examples[key] ?? (schema?.type === 'string' ? `<${key}>` : {});
 }
 
+function isOfflineReferenceFailure(error) {
+  return /Only relative local project references are supported:\s*(?:https?:|\/\/)|(?:external URLs|external script URLs)/i.test(error);
+}
+
 function toolCorrection(name, descriptor, error, code) {
   const schema = descriptor?.function?.parameters;
   if (name === 'generate_video' && validationFailure(error, code, name) && /reference|inputReferenceAssetId|projectId/i.test(error)) return {
@@ -214,7 +218,17 @@ function toolCorrection(name, descriptor, error, code) {
     example: { model: schema?.properties?.model?.enum?.[0] || 'MODEL_ID_FROM_list_models', prompt: 'A cat blinking in warm morning light.', seconds: 4 },
     exampleNote: 'Use an enabled video model ID. Reference images are optional; this example generates from text only.',
   };
-  if (name === 'present_canvas') return {
+  if (isOfflineReferenceFailure(error) && (name === 'present_canvas' || PROJECT_CANVAS_TOOLS.some((tool) => tool.function.name === name))) return {
+    correction: 'The canvas runs offline. Remove external script/link/import URLs. Use the bundled library global without a CDN script. If p5, Three.js, Tone.js or another required kit is missing, ask the user to enable it under Project files > Canvas kits, then wait for confirmation before continuing. Images must use attached media references. Relative script/link paths refer only to authored project files.',
+    exampleNote: 'Enabled kits are reported in creation receipts and list_canvas_files. Do not claim a kit is enabled or retry the same URL.',
+  };
+  if (name === 'present_canvas' && /document path already exists|dependency conflicts with an existing file/i.test(error)) return {
+    correction: 'present_canvas creates a NEW document. Choose an unused path or omit path to allocate one automatically. To fill an empty document already returned by create_canvas, use write_canvas_file on that documentPath instead; do not create it again. The existing files are preserved.',
+    example: { html: '<!doctype html><html><head><title>New sketch</title></head><body></body></html>', title: 'New sketch' },
+    alternate: { tool: 'write_canvas_file' },
+    exampleNote: 'For an existing document, use its returned documentPath and revision.',
+  };
+  if (name === 'present_canvas' && /asset|assets|image references?/i.test(error)) return {
     correction: "Use assets:[{name:'texture',assetId:'...'}]. Replace ... with a complete 32-character asset ID returned by an image tool; use that same asset://ID in HTML. Assets must be an array of these objects, without image data or keys named after assets.",
     example: { html: '<!doctype html><html><head></head><body><img src="asset://ASSET_ID_FROM_TOOL_RESULT"></body></html>', assets: [{ name: 'texture', assetId: 'ASSET_ID_FROM_TOOL_RESULT' }] },
     exampleNote: 'Replace ASSET_ID_FROM_TOOL_RESULT with a real ID returned by a tool. For a canvas without images, omit assets.',
@@ -436,7 +450,9 @@ async function executeEaselTool(name, args, {
     const selectedKits = [...new Set(Array.isArray(kits) ? kits.filter((kit) => ALLOWED_RUNTIME_KITS.has(kit)) : [])];
     const created = await canvasController.createEmpty(args.title.trim(), selectedKits);
     onEvent?.({ type: 'canvas', title: created.title, canvasId: created.id, projectId: created.id, projectTitle: created.projectTitle || created.title, documentPath: created.documentPath, documentTitle: created.documentTitle });
-    content = JSON.stringify({ ok: true, message: 'HTML canvas created and opened in the project.', projectId: created.id, canvasId: created.id, title: created.title, documentPath: created.documentPath, documentTitle: created.documentTitle });
+    const enabledKits = Array.isArray(created.kits) ? created.kits : selectedKits;
+    content = JSON.stringify({ ok: true, message: 'HTML canvas created and opened in the project.', projectId: created.id, canvasId: created.id, title: created.title, documentPath: created.documentPath, documentTitle: created.documentTitle, kits: enabledKits,
+      kitGuidance: 'Use only these enabled kit globals. If a required kit is missing, ask the user to enable it under Project files > Canvas kits before continuing. Do not add CDN scripts.' });
   } else if (name === 'present_canvas') {
     try {
       const html = args.html;
@@ -453,12 +469,13 @@ async function executeEaselTool(name, args, {
       const selectedKits = [...new Set(Array.isArray(kits) ? kits.filter((kit) => ALLOWED_RUNTIME_KITS.has(kit)) : [])];
       const saved = await presentCanvas({ html: canvasHtml, title: args.title || 'Easel Canvas', ...(args.path ? { path: args.path } : {}), assets, kits: selectedKits });
       onEvent?.({ type: 'canvas', title: saved?.title || args.title || 'Easel Canvas', canvasId: saved?.id || '', projectId: saved?.id || '', projectTitle: saved?.projectTitle || saved?.title, documentPath: saved?.documentPath, documentTitle: saved?.documentTitle });
-      content = JSON.stringify({ ok: true, message: 'Project document saved and opened. Inline scripts and styles may be extracted; use the returned file paths and revisions for edits.', projectId: saved?.id || '', canvasId: saved?.id || '', documentPath: saved?.documentPath, documentTitle: saved?.documentTitle, files: saved?.files, projectRevision: saved?.projectRevision });
+      content = JSON.stringify({ ok: true, message: 'Project document saved and opened. Inline scripts and styles may be extracted; use the returned file paths and revisions for edits.', projectId: saved?.id || '', canvasId: saved?.id || '', documentPath: saved?.documentPath, documentTitle: saved?.documentTitle, files: saved?.files, projectRevision: saved?.projectRevision, kits: Array.isArray(saved?.kits) ? saved.kits : selectedKits });
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Canvas could not be opened.';
       content = JSON.stringify({
         ok: false,
-        error: error instanceof Error ? error.message : 'Canvas could not be opened.',
-        guidance: "Correct the canvas HTML or asset references. Use assets:[{name:'texture',assetId:'...'}], replacing ... with the full 32-character ID returned by an image tool, and reference that same asset://ID in HTML.",
+        error: message,
+        guidance: toolCorrection(name, PRESENT_CANVAS_TOOL, message).correction,
       });
     }
   } else if (name === 'inspect_canvas') {
@@ -487,7 +504,8 @@ async function executeEaselTool(name, args, {
       const result = await canvasController[method](args, { signal });
       content = typeof result === 'string' ? result : JSON.stringify(result);
     } catch (error) {
-      content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Canvas project tool failed.', guidance: name === 'delete_canvas_file' ? 'Inspect the current files and revisions. Remove reported references before retrying. Deleting the last HTML offers project deletion. Deletion requires user confirmation and accepts no reload options.' : 'List the current project and read the affected file before retrying. A failed reload can leave a source edit saved; reload:false changes persisted files only.' });
+      const message = error instanceof Error ? error.message : 'Canvas project tool failed.';
+      content = JSON.stringify({ ok: false, error: message, guidance: isOfflineReferenceFailure(message) ? toolCorrection(name, undefined, message).correction : name === 'delete_canvas_file' ? 'Inspect the current files and revisions. Remove reported references before retrying. Deleting the last HTML offers project deletion. Deletion requires user confirmation and accepts no reload options.' : 'List the current project and read the affected file before retrying. A failed reload can leave a source edit saved; reload:false changes persisted files only.' });
     }
   } else if (SOURCE_CANVAS_TOOLS.some((tool) => tool.function.name === name)) {
     try {

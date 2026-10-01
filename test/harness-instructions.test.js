@@ -29,3 +29,9 @@ test('source discovery distinguishes existing edits from new sketches', () => {
   assert.match(listing.description, /For a new sketch use present_canvas directly/);
   assert.equal(listing.parameters.properties.includeAssets.default, false);
 });
+
+test('missing kits require user enablement before the agent continues', () => {
+  assert.match(COMMON_INSTRUCTIONS, /creating a document does not enable its kit/);
+  assert.match(COMMON_INSTRUCTIONS, /tell the user to enable it under Project files > Canvas kits, then end the turn until they confirm/);
+  assert.match(COMMON_INSTRUCTIONS, /Uninstalled kits need installation in Settings > Kits first/);
+});

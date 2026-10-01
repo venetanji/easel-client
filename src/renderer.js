@@ -439,6 +439,27 @@ function renderInstalledKitCatalog(document, listElement, catalog) {
   }));
 }
 
+function renderNewProjectKits(document, listElement, catalog, selectedKits, onChange) {
+  const inputs = [];
+  const rows = catalog.filter((kit) => kit.installed).map((kit) => {
+    const row = document.createElement('label');
+    row.className = 'project-kit-option';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = kit.id;
+    input.checked = selectedKits.includes(kit.id);
+    input.addEventListener('change', () => onChange?.(inputs.filter((item) => item.checked).map((item) => item.value)));
+    const name = document.createElement('span');
+    name.textContent = kit.name;
+    if (kit.description) row.title = kit.description;
+    row.append(input, name);
+    inputs.push(input);
+    return row;
+  });
+  listElement.replaceChildren(...rows);
+  return inputs;
+}
+
 function skillCompatibility(skill, installedSkills) {
   const installed = installedSkills.find((item) => `pack-${item.id}` === skill?.id || item.name.trim().toLowerCase() === skill?.name?.trim().toLowerCase());
   if (!installed && !skill?.id?.startsWith('pack-')) return { supported: true, reason: 'Custom instructions; compatibility has not been reviewed.' };
@@ -1082,6 +1103,8 @@ function wireRenderer({ document, client }) {
   const notifiedCanvasInputs = new Set();
   let activeUndoAvailable = false;
   let creationKind = 'document';
+  let newProjectKitInputs = null;
+  let newProjectKitRequest = 0;
   let modelSaving = false;
   let credentialsSaving = false;
   let chatBusy = true;
@@ -2361,7 +2384,7 @@ function wireRenderer({ document, client }) {
       setStatus(skillStatus, error?.message || 'Could not save this skill.', true);
     }
   });
-  function openNewCanvasDialog(kind = 'document', name = '') {
+  async function openNewCanvasDialog(kind = 'document', name = '') {
     if (chatBusy || canvasResumeBusy) return;
     creationKind = kind === 'document' && !activeCanvasId ? 'project' : kind;
     const rename = creationKind === 'rename';
@@ -2373,23 +2396,49 @@ function wireRenderer({ document, client }) {
     newCanvasName.placeholder = creationKind === 'document' ? 'e.g. Audio study' : 'e.g. Spring campaign';
     newCanvasDialog.querySelector('.new-canvas-kits').hidden = rename;
     setStatus(newCanvasStatus, '');
-    const catalog = workspace.getKitCatalog();
-    const kits = creationKind === 'project' ? DEFAULT_RUNTIME_KITS.filter((id) => !catalog.length || catalog.some((kit) => kit.id === id && kit.installed)) : workspace.getKits();
-    newCanvasKits.textContent = kits.map((id) => catalog.find((kit) => kit.id === id)?.name || (id === 'canvas-2d' ? 'HTML + Canvas 2D' : id === 'tone' ? 'Tone.js' : id)).join(', ');
-    newCanvasAudioHint.textContent = kits.includes('tone')
-      ? 'Tone.js is included. Audio starts when you click Play in the canvas.'
-      : 'Add Tone.js under Project files > Canvas kits for audio synthesis.';
+    const request = ++newProjectKitRequest;
+    newProjectKitInputs = null;
+    newCanvasSubmit.disabled = creationKind === 'project';
+    newCanvasKits.classList.toggle('new-project-kit-picker', creationKind === 'project');
+    const audioHint = (kits) => {
+      newCanvasAudioHint.textContent = kits.includes('tone')
+        ? 'Audio starts when you click Play in the canvas.' : '';
+    };
+    if (creationKind === 'project') {
+      newCanvasKits.textContent = 'Loading available kits...';
+      audioHint([]);
+    } else if (!rename) {
+      const catalog = workspace.getKitCatalog();
+      const kits = workspace.getKits();
+      newCanvasKits.textContent = kits.map((id) => catalog.find((kit) => kit.id === id)?.name || id).join(', ') || 'No kits enabled.';
+      audioHint(kits);
+    }
     openDialog(newCanvasDialog, newCanvasName);
+    if (creationKind !== 'project') return;
+    try {
+      const catalog = await client.getAvailableKits();
+      if (request !== newProjectKitRequest) return;
+      newProjectKitInputs = renderNewProjectKits(document, newCanvasKits, catalog, DEFAULT_RUNTIME_KITS, audioHint);
+      if (!newProjectKitInputs.length) newCanvasKits.textContent = 'No kits available. Install kits in Settings > Kits.';
+      audioHint(newProjectKitInputs.filter((input) => input.checked).map((input) => input.value));
+      newCanvasSubmit.disabled = false;
+    } catch (error) {
+      if (request !== newProjectKitRequest) return;
+      newCanvasKits.textContent = 'Kits could not be loaded.';
+      setStatus(newCanvasStatus, `${error?.message || 'Could not load available kits.'} Close and reopen this dialog to try again.`, true);
+    }
   }
   document.getElementById('new-canvas-open').addEventListener('click', () => openNewCanvasDialog('document'));
   document.getElementById('new-canvas-close').addEventListener('click', () => newCanvasDialog.close());
-  newCanvasDialog.addEventListener('close', updateCanvasBounds);
+  newCanvasDialog.addEventListener('close', () => { ++newProjectKitRequest; newProjectKitInputs = null; updateCanvasBounds(); });
   newCanvasForm.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (creationKind === 'project' && newProjectKitInputs === null) return;
     newCanvasSubmit.disabled = true;
     newCanvasSubmit.textContent = creationKind === 'rename' ? 'Saving...' : 'Creating...';
     try {
-      const canvas = await workspace.create(creationKind, newCanvasName.value.trim());
+      const kits = creationKind === 'project' ? newProjectKitInputs.filter((input) => input.checked).map((input) => input.value) : undefined;
+      const canvas = await workspace.create(creationKind, newCanvasName.value.trim(), kits);
       newCanvasDialog.close();
       newCanvasName.value = '';
       setStatus(statusElement, creationKind === 'rename' ? 'Project renamed.' : `Created ${canvas.documentTitle || canvas.title}.`);
@@ -2677,6 +2726,7 @@ if (typeof module !== 'undefined') {
     appendReadyMediaCards,
     canAutoPreviewMedia,
     renderInstalledKitCatalog,
+    renderNewProjectKits,
     renderSkillList,
     skillCompatibility,
     addAssetToCanvas,

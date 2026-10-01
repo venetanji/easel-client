@@ -140,8 +140,12 @@ test('validates every surviving document before deleting an unrelated source fil
   t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
   const store = createCanvasStore({ userDataPath });
   const created = store.createEmpty('Validation');
-  store.writeFile(created.id, { path: 'broken.html', content: '<script src="missing.js"></script>' });
   store.writeFile(created.id, { path: 'notes.txt', content: 'An unused source file.' });
+  // Simulate an invalid secondary document persisted by an older client.
+  const filename = path.join(userDataPath, 'canvases', `${created.id}.project.json`);
+  const legacy = JSON.parse(fs.readFileSync(filename, 'utf8'));
+  legacy.files['broken.html'] = '<script src="missing.js"></script>';
+  fs.writeFileSync(filename, JSON.stringify(legacy));
   const before = store.getProject(created.id).projectRevision;
   const inspected = store.inspectDeletion(created.id, { path: 'notes.txt' });
   assert.equal(inspected.ok, false);
@@ -149,6 +153,86 @@ test('validates every surviving document before deleting an unrelated source fil
   assert.match(inspected.reason, /missing\.js/);
   assert.throws(() => store.deleteFile(created.id, { path: 'notes.txt' }), /invalid project documents/);
   assert.equal(store.getProject(created.id).projectRevision, before);
+});
+
+test('rejects invalid secondary HTML references and syntax before persisting source', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-source-preflight-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const store = createCanvasStore({ userDataPath });
+  const project = store.createEmpty('Preflight');
+  store.writeFile(project.id, { path: 'second.html', content: '<main>Original</main>' });
+  const filename = path.join(userDataPath, 'canvases', `${project.id}.project.json`);
+  const original = fs.readFileSync(filename, 'utf8');
+  const before = store.getProject(project.id).projectRevision;
+  for (const [content, error] of [
+    ['<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>', /Only relative local project references/],
+    ['<link rel="stylesheet" href="missing.css">', /missing\.css/],
+    ['<img src="https://example.com/image.png">', /external URLs/],
+    ['<script>return 1;</script>', /invalid JavaScript/],
+  ]) {
+    assert.throws(() => store.writeFile(project.id, { path: 'second.html', content }), error);
+    assert.equal(store.getProject(project.id).projectRevision, before);
+    assert.equal(fs.readFileSync(filename, 'utf8'), original);
+    assert.equal(store.readFile(project.id, { path: 'second.html' }).text, '<main>Original</main>');
+  }
+});
+
+test('batch patches reject invalid secondary documents without saving any edit', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-batch-preflight-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const store = createCanvasStore({ userDataPath });
+  const project = store.save({ title: 'Batch', html: '<main>First</main>' });
+  store.writeFile(project.id, { path: 'second.html', content: '<main>Second</main>' });
+  const before = store.getProject(project.id).projectRevision;
+  for (const [replacement, error] of [
+    ['<script src="https://example.com/library.js"></script>', /Only relative local project references/],
+    ['<script>return 1;</script>', /invalid JavaScript/],
+    ['<script type="module">import "./missing.mjs";</script>', /missing\.mjs/],
+  ]) {
+    assert.throws(() => store.patchFiles(project.id, { expectedProjectRevision: before, edits: [
+      { path: project.documentPath, find: 'First', replace: 'Changed' },
+      { path: 'second.html', find: '<main>Second</main>', replace: replacement },
+    ] }), error);
+    assert.equal(store.getProject(project.id).projectRevision, before);
+    assert.match(store.readFile(project.id, { path: project.documentPath }).text, /First/);
+    assert.equal(store.readFile(project.id, { path: 'second.html' }).text, '<main>Second</main>');
+  }
+});
+
+test('repairs a legacy invalid secondary document and then enables its offline kit', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-kit-repair-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const store = createCanvasStore({ userDataPath, kitBundles: { p5: 'window.p5 = function () {};' } });
+  const project = store.createEmpty('Repair');
+  const filename = path.join(userDataPath, 'canvases', `${project.id}.project.json`);
+  const legacy = JSON.parse(fs.readFileSync(filename, 'utf8'));
+  const bad = '<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>';
+  legacy.files['second.html'] = `<main>Planets</main>${bad}`;
+  fs.writeFileSync(filename, JSON.stringify(legacy));
+  const file = store.readFile(project.id, { path: 'second.html' });
+  store.patchFile(project.id, { path: file.path, find: bad, replace: '', expectedRevision: file.revision, expectedProjectRevision: file.projectRevision });
+  store.updateManifest(project.id, { kits: ['canvas-2d', 'p5'] });
+  assert.deepEqual(store.getProjectKits(project.id).kits, ['canvas-2d', 'p5']);
+  assert.match(store.getDocument(project.id, 'second.html').html, /data-easel-canvas-kit="p5"/);
+  assert.equal(store.readFile(project.id, { path: file.path }).text, '<main>Planets</main>');
+});
+
+test('source preflight resolves dependencies without reading kit or media bytes', () => {
+  const { assembleProject, digest } = require('../src/canvas-project');
+  const assetId = 'a'.repeat(32);
+  const project = { version: 1, files: {
+    'index.html': '<img src="assets/cover.png"><link rel="stylesheet" href="styles.css"><script type="module" src="app.mjs"></script>',
+    'styles.css': '@import "colors.css";main{background:url("assets/cover.png")}',
+    'colors.css': 'main{color:teal}',
+    'app.mjs': 'import { value } from "./value.mjs"; console.log(value);',
+    'value.mjs': 'export const value = 1;',
+  }, manifest: { entry: 'index.html', kits: [{ name: 'p5', digest: digest('bundle') }], assets: [
+    { id: assetId, digest: digest('media'), path: 'assets/cover.png', mimeType: 'image/png', bytes: 5 },
+  ] } };
+  const options = { validateOnly: true, readKit() { assert.fail('Kit bytes are unnecessary for source validation.'); }, readAsset() { assert.fail('Media bytes are unnecessary for source validation.'); } };
+  assert.match(assembleProject(project, options), /blob:easel-preflight/);
+  delete project.files['value.mjs'];
+  assert.throws(() => assembleProject(project, options), /value\.mjs/);
 });
 
 test('checks file and project revisions after deletion confirmation', (t) => {

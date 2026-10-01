@@ -375,6 +375,8 @@
       .new-canvas-kits-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #405249; font-size: 12px; }
       .new-canvas-kits p, #new-canvas-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
       #new-canvas-kits { color: var(--ink); }
+      .new-project-kit-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 18px; }
+      .new-project-kit-picker .project-kit-option { min-height: 38px; }
       #new-canvas-status:empty { display: none; }
       .skills-layout { display: grid; grid-template-columns: minmax(260px, .9fr) minmax(300px, 1.1fr); min-height: 390px; }
       .skills-inventory { border-right: 1px solid #e0e5dd; padding: 15px; }
@@ -729,10 +731,10 @@
       <form id="new-canvas-form" class="settings-form">
         <label class="field" for="new-canvas-name"><span id="new-item-name-label">Project name</span><input id="new-canvas-name" name="title" type="text" maxlength="120" autocomplete="off" placeholder="e.g. Spring campaign" required /></label>
         <div class="new-canvas-kits">
-          <div class="new-canvas-kits-head"><strong>Project kits</strong></div>
-          <p id="new-canvas-kits"></p>
+          <div class="new-canvas-kits-head"><strong id="new-canvas-kits-label">Project kits</strong></div>
+          <div id="new-canvas-kits" role="group" aria-labelledby="new-canvas-kits-label"></div>
           <p id="new-canvas-audio-hint"></p>
-          <p>Choose kits under Project files > Canvas kits. Every HTML canvas in the project shares them.</p>
+          <p>Shared by every HTML canvas. Change the selection later under Project files > Canvas kits. Install more in Settings > Kits.</p>
         </div>
         <p id="new-canvas-status" role="status" aria-live="polite"></p>
         <div class="new-canvas-actions"><button id="new-canvas-submit" class="button primary" type="submit">Create empty canvas</button></div>
