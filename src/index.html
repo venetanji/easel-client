@@ -23,6 +23,7 @@
         --coral: #b84e38;
         --gold: #ad7930;
         --display: Georgia, "Iowan Old Style", serif;
+        --panel-header-height: 49px;
       }
       * { box-sizing: border-box; }
       html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
@@ -72,7 +73,7 @@
       .workbench-splitter:hover::before, .workbench-splitter:focus-visible::before, .workbench-splitter.is-dragging::before { background: var(--green); }
       .panel { min-width: 0; min-height: 0; background: var(--paper); }
       .library, .media-drawer { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; overflow: hidden; background: var(--paper); animation: drawer-reveal 180ms cubic-bezier(.16, 1, .3, 1); }
-      .section-head { min-height: 44px; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
+      .section-head { min-height: var(--panel-header-height); display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
       .section-head h2 { flex: 0 0 auto; }
       .library-panel-content { min-height: 0; display: flex; flex: 1; flex-direction: column; overflow: auto; }
       .fold-button { width: 28px; height: 28px; flex: 0 0 auto; display: grid; place-items: center; border: 0; border-radius: 6px; color: #58675f; background: transparent; }
@@ -100,12 +101,11 @@
       .kit-availability small { margin-top: 4px; color: #5e6c63; font-size: 12px; line-height: 1.4; }
       .kit-status { min-height: 18px; margin: 10px 19px 16px; color: var(--muted); font-size: 12px; }
       .conversation { width: 100%; display: flex; flex-direction: column; overflow: hidden; }
-      .conversation-head { min-height: 49px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px 0 14px; border-bottom: 1px solid #e5e7df; }
+      .conversation-head { min-height: var(--panel-header-height); display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px 0 14px; border-bottom: 1px solid #e5e7df; }
       .conversation-actions { display: flex; align-items: center; gap: 4px; }
       .conversation-title { display: grid; gap: 3px; min-width: 0; }
       .conversation-actions { flex-shrink: 0; }
       .chat-history { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; min-height: 0; background: var(--paper); }
-      .chat-history .section-head { min-height: 49px; }
       .chat-history .section-head h2 { font: 600 20px/1.15 var(--display); letter-spacing: -.02em; }
       .chat-history-list { flex: 1; min-height: 0; overflow: auto; padding: 8px 12px; }
       .chat-history-row { display: block; width: 100%; min-height: 66px; border: 0; border-radius: 6px; padding: 11px 10px; color: var(--ink); background: transparent; text-align: left; }
@@ -225,14 +225,14 @@
       #send[data-action="stop"] { min-width: 70px; color: #963c2c; background: #f4e7e0; }
       #send[data-action="stop"]:hover:not(:disabled) { color: #7c2d20; background: #ead3c8; }
       .canvas-panel { grid-column: 4; grid-row: 2; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--paper); }
-      .canvas-toolbar { min-height: 46px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
+      .canvas-toolbar { min-height: var(--panel-header-height); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
       .canvas-heading { display: flex; flex: 1 1 140px; align-items: center; gap: 9px; min-width: 0; }
       .canvas-heading h2 { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
       .canvas-state { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; white-space: nowrap; }
       .canvas-state .state-dot { width: 6px; height: 6px; }
       .canvas-toolbar-actions { display: flex; flex-wrap: wrap; gap: 2px; margin-left: auto; }
       .canvas-toolbar-actions .button { white-space: nowrap; }
-      .canvas-tabs { min-height: 38px; flex: 0 0 auto; display: flex; align-items: stretch; gap: 4px; overflow-x: auto; padding: 0 10px; background: var(--paper); }
+      .canvas-tabs { min-height: 38px; flex: 0 0 auto; display: flex; align-items: stretch; gap: 4px; overflow-x: auto; padding: 0; background: var(--paper); }
       .canvas-tab { min-width: 0; max-width: 240px; flex: 0 0 auto; display: flex; align-items: stretch; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; }
       .canvas-tab[data-active="true"] { border-bottom-color: var(--green); color: var(--green-deep); }
       .canvas-tab-select { min-width: 0; overflow: hidden; border: 0; padding: 9px 8px; color: inherit; background: transparent; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
@@ -326,7 +326,6 @@
       .composer-external { padding: 16px 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
       .composer-external strong { display: block; color: var(--green-deep); font-size: 13px; }
       .composer-external p { margin: 5px 0 8px; }
-      .composer-external .button { padding-left: 0; }
       .endpoint-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 13px 0; border-top: 1px solid #e1e6dc; }
       .endpoint-info { flex: 1 1 220px; min-width: 0; }
       .endpoint-name { color: var(--ink); font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
