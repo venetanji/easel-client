@@ -39,6 +39,10 @@ private keys and passwords outside this repository.
 - The notarization key is decoded into a private temporary file and removed on
   completion. The workflow uses API key authentication, not Apple ID passwords.
 
+Electron Builder is pinned to `26.16.1`. Version `26.15.3` passed the certificate
+password to the temporary keychain's access-control command, causing signing to
+fail even with a valid certificate. The pinned version fixes that password mixup.
+
 Run **Desktop Builds > Run workflow** on the signing branch to build signed
 artifacts without publishing a release. Once merged, future version tags use
 the same signing path. Existing releases are not retroactively signed; their
