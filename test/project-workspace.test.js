@@ -414,7 +414,7 @@ test('All media adds a reference to the project with one click and shows an atta
   assert.equal(updated.querySelector('.media-in-project').textContent, 'In project');
   assert.equal(updated.querySelector('.media-in-project').children[0].tagName, 'svg');
   assert.equal(updated.querySelectorAll('button').some((entry) => entry.textContent === 'Add to project'), false);
-  assert.equal(updated.querySelectorAll('button').some((entry) => entry.textContent === 'Use in chat'), true);
+  assert.equal(updated.querySelectorAll('button').some((entry) => entry.getAttribute('aria-label') === 'Use in chat'), true);
 });
 
 test('shared library media cannot be deleted and a missing project disables Add to project', async () => {

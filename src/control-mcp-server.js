@@ -192,7 +192,7 @@ function createControlMcpServer({
         allowedHosts: [`127.0.0.1:${boundPort}`, `localhost:${boundPort}`],
         allowedOrigins: [`http://127.0.0.1:${boundPort}`, `http://localhost:${boundPort}`],
       });
-      entry.mcp = serverFactory({ name: 'easel-control', version: '0.0.1' }, { capabilities: { tools: { listChanged: true }, resources: { subscribe: true } }, instructions: toolHost.instructions || 'Control the open Easel application using its tools. Credentials remain private; destructive changes require native user confirmation. Read easel://events for the current event cursor and use the event tools for durable history.' });
+      entry.mcp = serverFactory({ name: 'easel-control', version: require('../package.json').version }, { capabilities: { tools: { listChanged: true }, resources: { subscribe: true } }, instructions: toolHost.instructions || 'Control the open Easel application using its tools. Credentials remain private; destructive changes require native user confirmation. Read easel://events for the current event cursor and use the event tools for durable history.' });
       entry.mcp.onclose = () => { void releaseSession(entry, 'transport-closed'); };
       entry.mcp.onerror = (error) => emit('error', { sessionId: id, message: safeError(error) });
       entry.mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: await toolHost.listTools() }));

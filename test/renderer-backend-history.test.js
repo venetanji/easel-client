@@ -49,7 +49,7 @@ async function fixture(t, { deferInitial = false } = {}) {
   const nodes = new Map();
   const get = (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
   const document = {
-    getElementById: get, createElement: element, createTextNode: (text) => { const node = element(); node.textContent = text; return node; },
+    getElementById: get, createElement: element, createElementNS: (_namespace, tag) => element(tag), createTextNode: (text) => { const node = element(); node.textContent = text; return node; },
     querySelector: (selector) => selector === 'dialog[open]' ? null : get(selector), querySelectorAll: () => [],
     addEventListener() {}, removeEventListener() {}, hasFocus: () => true,
   };

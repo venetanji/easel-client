@@ -1,3 +1,6 @@
+const RendererActionIcons = typeof module !== 'undefined' ? require('./ui-icons') : EaselUiIcons;
+const RendererMediaResults = typeof module !== 'undefined' ? require('./media-tool-results') : { producedMediaAssets };
+
 function setStatus(element, message, isError = false) {
   element.textContent = message;
   element.classList.toggle('error', isError);
@@ -254,7 +257,7 @@ function renderAssistantAssetLinks(document, content, text, assetPreviews, pendi
   const resolvedAssetIds = [];
   for (const match of text.matchAll(assetLinks)) {
     const assetId = match[2].toLowerCase();
-    const isValidAssetId = /^[a-f0-9]{32}$/.test(assetId);
+    const isValidAssetId = /^(?:[a-f0-9]{32}|[a-f0-9]{64})$/.test(assetId);
     const preview = isValidAssetId ? assetPreviews.get(assetId) : null;
     content.append(document.createTextNode(text.slice(cursor, match.index)));
     const label = match[1].trim() || 'Generated image';
@@ -366,15 +369,16 @@ function appendMediaPreviewMessage(document, messagesElement, event, onAddToCanv
   if (options.onOpen || options.onDownload || options.onUse) {
     const actions = document.createElement('div');
     actions.className = 'message-media-actions';
-    for (const [text, action] of [['Open in viewer', options.onOpen], ['Download', options.onDownload], ['Use in chat', options.onUse]]) {
+    for (const [text, icon, action] of [['Open in viewer', 'open', options.onOpen], ['Download', 'download', options.onDownload], ['Use in chat', 'useInChat', options.onUse]]) {
       if (!action) continue;
-      const button = createButton(document, text, 'button quiet small', async () => {
+      const button = createButton(document, '', 'icon-button', async () => {
         button.disabled = true;
         error.hidden = true;
         try { await action(event); }
         catch (failure) { error.textContent = failure.message || 'This action failed. Try again.'; error.hidden = false; }
         finally { button.disabled = false; }
       });
+      RendererActionIcons.setActionIcon(document, button, icon, text);
       actions.append(button);
     }
     message.append(actions);
@@ -382,6 +386,9 @@ function appendMediaPreviewMessage(document, messagesElement, event, onAddToCanv
   message.append(error);
   messagesElement.append(message);
   if (shouldFollow) messagesElement.scrollTop = messagesElement.scrollHeight;
+  if (kind === 'image' && !inline && !poster && options.loadAsset) {
+    load().catch((failure) => { if (!disposed) { error.textContent = failure.message || 'The image could not load. Try opening it in the viewer.'; error.hidden = false; } });
+  }
   return { image, caption, message, addButton: add, load,
     dispose() {
       disposed = true;
@@ -395,7 +402,7 @@ function appendReadyMediaCards({ document, messagesElement, event, assetPreviews
   const assets = event.assets || event.result?.assets || event.job?.assets || [];
   for (const asset of assets) {
     const assetId = asset.assetId || asset.id;
-    if (!/^[a-f0-9]{32}$/i.test(assetId || '') || !['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm', 'audio/wav', 'audio/mpeg'].includes(asset.mimeType) || assetPreviews.has(assetId)) continue;
+    if (!/^(?:[a-f0-9]{32}|[a-f0-9]{64})$/i.test(assetId || '') || !['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm', 'audio/wav', 'audio/mpeg'].includes(asset.mimeType) || assetPreviews.has(assetId)) continue;
     const media = { ...asset, assetId, projectId: event.projectId || event.job?.projectId || asset.projectId, name: asset.name || event.job?.name || `Generated ${event.job?.mediaType || 'media'}` };
     const newMedia = typeof options.newMedia === 'function' ? options.newMedia(assetId) : options.newMedia !== false;
     const preview = appendMediaPreviewMessage(document, messagesElement, media, null, { ...options, newMedia });
@@ -522,16 +529,34 @@ function appendTextMessage(document, messagesElement, role, text, options = {}) 
   if (role === 'assistant' && typeof options.copyText === 'function') {
     const actions = document.createElement('div');
     actions.className = 'message-actions';
-    const copy = createButton(document, 'Copy', '', async () => {
+    const feedback = document.createElement('span');
+    feedback.className = 'sr-only';
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+    let reset;
+    const copy = createButton(document, '', 'icon-button', async () => {
+      clearTimeout(reset);
+      copy.disabled = true;
+      feedback.textContent = '';
       try {
         await options.copyText(text);
-        copy.textContent = 'Copied';
+        copy.dataset.state = 'copied';
+        RendererActionIcons.setActionIcon(document, copy, 'check', 'Response copied');
+        feedback.textContent = 'Response copied.';
       } catch {
-        copy.textContent = 'Copy failed';
+        copy.dataset.state = 'error';
+        RendererActionIcons.setActionIcon(document, copy, 'warning', 'Copy failed. Click to retry');
+        feedback.textContent = 'Could not copy the response. Try again.';
+      } finally {
+        copy.disabled = false;
+        reset = setTimeout(() => {
+          delete copy.dataset.state;
+          RendererActionIcons.setActionIcon(document, copy, 'copy', 'Copy response');
+        }, 2000);
       }
     });
-    copy.setAttribute('aria-label', 'Copy response');
-    actions.append(copy);
+    RendererActionIcons.setActionIcon(document, copy, 'copy', 'Copy response');
+    actions.append(copy, feedback);
     messagesElement.append(actions);
   }
   if (shouldFollow) messagesElement.scrollTop = messagesElement.scrollHeight;
@@ -715,7 +740,7 @@ function renderAgentEvent({ document, messagesElement, imagesElement, event, sta
     setStatus(statusElement, '');
     return;
   }
-  if (event.type === 'image' || (event.type === 'media' && event.generated)) {
+  if (event.type === 'image' || (event.type === 'media' && (event.generated || event.captured))) {
     if (event.data !== undefined && (typeof event.data !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(event.data))) return;
     if (!['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm', 'audio/wav', 'audio/mpeg'].includes(event.mimeType)) return;
     if (messagesElement && assetPreviews instanceof Map && /^[a-f0-9]{32}$/i.test(event.assetId || '')) {
@@ -955,6 +980,9 @@ function canvasInputDisplayText(message, request) {
 }
 
 function wireRenderer({ document, client }) {
+  for (const button of document.querySelectorAll('[data-action-icon]')) {
+    RendererActionIcons.setActionIcon(document, button, button.dataset.actionIcon, button.getAttribute('aria-label'));
+  }
   const settingsDialog = document.getElementById('settings-dialog');
   const settingsSections = [
     { id: 'agent', tab: document.getElementById('settings-tab-agent'), section: document.getElementById('settings-agent') },
@@ -965,8 +993,6 @@ function wireRenderer({ document, client }) {
   ];
   const newCanvasDialog = document.getElementById('new-canvas-dialog');
   const canvasFilesDialog = document.getElementById('canvas-files-dialog');
-  const canvasFilesButton = document.getElementById('canvas-files-open');
-  const canvasDevicesButton = document.getElementById('canvas-devices-open');
   const canvasFilesList = document.getElementById('canvas-files-list');
   const canvasFilesSummary = document.getElementById('canvas-files-summary');
   const canvasFilePath = document.getElementById('canvas-file-path');
@@ -1011,8 +1037,6 @@ function wireRenderer({ document, client }) {
   const canvasHost = document.getElementById('canvas-host');
   const canvasEmpty = document.getElementById('canvas-empty');
   const canvasTitle = document.getElementById('canvas-title');
-  const canvasState = document.getElementById('canvas-state');
-  const canvasStateDot = document.getElementById('canvas-state-dot');
   const exportCurrentButton = document.getElementById('export-current');
   const undoCanvasButton = document.getElementById('canvas-undo');
   const modelSelect = document.getElementById('chat-model');
@@ -1085,6 +1109,7 @@ function wireRenderer({ document, client }) {
     },
     onCreate: openNewCanvasDialog,
     onFiles: openCanvasFiles,
+    onDevices: openCanvasDevices,
     onBusy: updateSendState,
     onDrawerChange: (open) => {
       if (open) {
@@ -1433,7 +1458,6 @@ function wireRenderer({ document, client }) {
     }
   }
 
-  canvasFilesButton?.addEventListener('click', () => openCanvasFiles());
   document.getElementById('canvas-files-close')?.addEventListener('click', () => canvasFilesDialog.close());
   canvasFilesDialog?.addEventListener('close', () => {
     fileReadVersion += 1;
@@ -1450,23 +1474,23 @@ function wireRenderer({ document, client }) {
     if (!currentFilePage || fileReading || currentFilePage.nextOffset === null) return;
     readCanvasFilePage(currentFilePage.path, currentFilePage.nextOffset, [...currentFilePage.offsets, currentFilePage.nextOffset]);
   });
-  canvasDevicesButton?.addEventListener('click', async () => {
-    if (!activeCanvasId || nativeDialogOpen || typeof client.manageCanvasDevices !== 'function') return;
-    const canvasId = activeCanvasId;
+  async function openCanvasDevices(documentPath, button) {
+    if (!activeCanvasId || nativeDialogOpen || chatBusy || canvasResumeBusy || agentControlUi?.getState()?.busy || typeof client.manageCanvasDevices !== 'function') return;
     nativeDialogOpen = true;
-    canvasDevicesButton.disabled = true;
+    if (button) button.disabled = true;
     updateCanvasBounds();
     try {
-      const permissions = await client.manageCanvasDevices(canvasId);
+      if (activePreviewKind !== 'document' || documentPath !== activeDocumentPath) await workspace.openDocument(documentPath);
+      const permissions = await client.manageCanvasDevices(activeCanvasId);
       setStatus(statusElement, `Camera ${permissions?.camera ? 'allowed' : 'not allowed'}; microphone ${permissions?.microphone ? 'allowed' : 'not allowed'}.`);
     } catch (error) {
       setStatus(statusElement, error?.message || 'Could not manage canvas devices. Try again.', true);
     } finally {
       nativeDialogOpen = false;
-      canvasDevicesButton.disabled = !activeCanvasId || activePreviewKind !== 'document';
+      workspace.updateBusy();
       updateCanvasBounds();
     }
-  });
+  }
 
   function updateSendState() {
     const control = agentControlUi?.getState();
@@ -1883,7 +1907,8 @@ function wireRenderer({ document, client }) {
         try {
           const result = message.mediaJobResult || JSON.parse(message.content);
           if (message.mediaJobResult && result.status !== 'ready') appendTextMessage(document, messagesElement, 'assistant', `Generation failed: ${result.error || 'The service reported a failure.'}`, { copyText });
-          const assets = (result.assets || []).map((asset) => ({ ...asset, ...(images.get(asset.assetId) || generatedMedia.get(asset.assetId) || {}) }));
+          const assets = RendererMediaResults.producedMediaAssets(result, message.mediaJobResult ? undefined : message.name)
+            .map((asset) => ({ ...asset, ...(images.get(asset.assetId) || generatedMedia.get(asset.assetId) || {}) }));
           if (message.mediaJobResult) {
             workspace.announceMediaReady({ job: result, assets });
             notifiedMediaJobs.add(message.mediaJobId);
@@ -2011,13 +2036,7 @@ function wireRenderer({ document, client }) {
     starterDocument = activePreviewKind === 'document' && canvas?.starterDocument === true;
     activeUndoAvailable = canvas?.undoAvailable === true;
     canvasTitle.textContent = canvas?.documentTitle || canvas?.title || 'Project';
-    const mediaPreview = ['image', 'video', 'audio'].includes(activePreviewKind);
-    canvasState.textContent = mediaPreview ? activePreviewKind[0].toUpperCase() + activePreviewKind.slice(1) : starterDocument ? 'Ready' : activePreviewKind === 'document' ? 'HTML' : activeCanvasId ? 'Project' : 'Ready';
-    canvasStateDot.classList.toggle('ready', Boolean(activeCanvasId));
-    exportCurrentButton.textContent = mediaPreview ? `Download ${activePreviewKind}` : 'Export project';
-    exportCurrentButton.disabled = !activeCanvasId && !mediaPreview;
-    canvasFilesButton.disabled = !activeCanvasId;
-    canvasDevicesButton.disabled = activePreviewKind !== 'document' || nativeDialogOpen;
+    exportCurrentButton.disabled = !activeCanvasId;
     canvasEmpty.hidden = activePreviewKind !== 'empty' && !starterDocument;
     if (canvasEmpty.hidden) dockComposer(false);
     else if (!starterSubmitted && !agentRunning && !canvasResumeBusy) showStarterComposer();
@@ -2370,11 +2389,11 @@ function wireRenderer({ document, client }) {
     nativeDialogOpen = true;
     exportCurrentButton.disabled = true;
     updateCanvasBounds();
-    try { await workspace.exportCurrent(); }
+    try { await workspace.exportCurrent({ projectOnly: true }); }
     catch (error) { setStatus(statusElement, error?.message || 'Could not export. Try again.', true); }
     finally {
       nativeDialogOpen = false;
-      exportCurrentButton.disabled = !activeCanvasId && !['image', 'video', 'audio'].includes(activePreviewKind);
+      updateSendState();
       updateCanvasBounds();
     }
   });
@@ -2431,6 +2450,12 @@ function wireRenderer({ document, client }) {
   const unsubscribe = client.onAgentEvent((event) => {
     if (event.type === 'agent-control') {
       const previous = agentControlUi.getState()?.backend;
+      if (event.state?.busy === false) {
+        canvasResumeRequests.clear();
+        canvasResumeBusy = false;
+        stopPending = false;
+        if (!chatBusy) activityElement.hidden = true;
+      }
       agentControlUi.applyState(event.state);
       if (previous && previous !== event.state?.backend && event.reason === 'backend-switch') restoreBackendChat(event.state.backend);
       return;
@@ -2492,7 +2517,10 @@ function wireRenderer({ document, client }) {
       const key = `media:${event.jobId}`;
       if (event.type === 'media-job-resume-start') {
         canvasResumeRequests.add(key);
-        activityLabel.textContent = 'Continuing with your generated media...';
+        const mediaLabel = event.mediaType === 'image' ? 'Image' : event.mediaType === 'video' ? 'Video' : 'Media';
+        activityLabel.textContent = event.status === 'failed'
+          ? `${mediaLabel} generation failed. Preparing the agent's reply...`
+          : `${mediaLabel} saved. Preparing the agent's reply...`;
         activityElement.hidden = false;
       } else {
         canvasResumeRequests.delete(key);
@@ -2516,8 +2544,13 @@ function wireRenderer({ document, client }) {
       return;
     }
     if (event.type === 'agent-stopped') {
+      if (activeChatId && event.chatId && event.chatId !== activeChatId) return;
+      stopPending = false;
+      canvasResumeRequests.clear();
+      canvasResumeBusy = false;
       activityElement.hidden = true;
       setStatus(statusElement, event.saveWarning || (event.canvasInputRequestId ? 'Stopped. Your canvas response is saved; use Retry response to continue.' : 'Stopped. Completed edits are kept.'), Boolean(event.saveWarning));
+      updateSendState();
       return;
     }
     if (event.type === 'project-assets') {

@@ -401,7 +401,7 @@ test('a late video read cannot attach bytes after its chat preview is disposed',
 });
 
 test('compact media cards keep actions independent from lazy playback and surface retrieval errors', async () => {
-  const document = { createElement: (tag) => element(tag) };
+  const document = { createElement: (tag) => element(tag), createElementNS: (_namespace, tag) => element(tag) };
   const messages = element();
   const actions = [];
   const asset = { assetId: 'a'.repeat(32), mimeType: 'video/mp4', name: 'Video.mp4' };

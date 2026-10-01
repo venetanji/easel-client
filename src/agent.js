@@ -56,7 +56,8 @@ const SYSTEM_PROMPT = [
   'Persist canvas changes through file/source tools. execute_canvas_javascript affects the live runtime only; Save, reopening and export use persisted project files and do not implicitly adopt runtime DOM. add_image_to_canvas explicitly attaches an asset and inserts an image into authored source and the live view without copying other runtime DOM. Use execute_canvas_javascript for inspection and temporary experiments. adopt_canvas_runtime_dom explicitly adopts a DOM snapshot when requested, with limitations for modules, renderers, audio and runtime variables; prefer targeted file edits.',
   'get_canvas_state and set_canvas_state manage opt-in persistent JSON in state.json, separate from live renderer state and durable user answers. It loads as window.__easelProjectState; runtime variables are not automatically saved. For legacy combined HTML inspection, get_canvas_source with section:scripts or section:app excludes bundled kits, and apply_canvas_patch edits stored source. Never retrieve document.outerHTML and megabytes of bundled libraries for routine edits.',
   'Register canvas apps with window.EaselCanvas.registerApp({ id, root, renderer, scene, camera, audio, dispose, getState, restoreState }). The dispose callback must stop renderer-owned loops and dispose geometry/materials/audio nodes. State hooks exchange JSON scene state across managed reloads. Do not claim unregistered legacy resources were all disposed.',
-  'After changes, use validate_canvas for the actual open document and capture_live_canvas to see its current pixels. capture_canvas_screenshot renders supplied HTML and is not a picture of the open scene. Audio requires a real user gesture; never claim sound was heard from state checks alone.',
+  'After visual changes, use capture_live_canvas to see the actual open document; its result already includes validation. Use validate_canvas alone when pixels are unnecessary. Live captures support at most 8 frames. capture_canvas_screenshot renders supplied HTML and is not a picture of the open scene. Audio requires a real user gesture; never claim sound was heard from state checks alone.',
+  'For source work, use list_canvas_files with includeAssets:false to omit the media manifest. Read relevant files with maxBytes at most 24000. present_canvas returns the actual saved source paths and revisions; use those instead of guessing extracted script/style names. Apply related replacements together with apply_canvas_file_patches against one project revision, then reload and validate once.',
   'Use create_canvas to add a named empty HTML canvas to the active project; it starts a project when none is selected. Canvas documents share the project files and media. Generated media is attached to this project automatically. Attach other saved images with attach_canvas_asset or attach_canvas_assets, edit source files, and reload. add_image_to_canvas inserts one saved image into authored source and the live view; it leaves sourcePendingReload true until the updated asset map is loaded.',
   'When referencing an image in canvas HTML or JavaScript, including a WebGL texture Image.src, use asset:// followed by the exact asset ID and include that asset in the assets array. The host embeds attached assets as local data URLs.',
   'When composing generated images, use only complete 32-character asset IDs returned by image tools. Copy each ID exactly into the assets array; never invent, shorten, or use a placeholder ID.',
@@ -473,7 +474,7 @@ async function executeEaselTool(name, args, {
       const selectedKits = [...new Set(Array.isArray(kits) ? kits.filter((kit) => ALLOWED_RUNTIME_KITS.has(kit)) : [])];
       const saved = await presentCanvas({ html: canvasHtml, title: args.title || 'Easel Canvas', ...(args.path ? { path: args.path } : {}), assets, kits: selectedKits });
       onEvent?.({ type: 'canvas', title: saved?.title || args.title || 'Easel Canvas', canvasId: saved?.id || '', projectId: saved?.id || '', projectTitle: saved?.projectTitle || saved?.title, documentPath: saved?.documentPath, documentTitle: saved?.documentTitle });
-      content = JSON.stringify({ ok: true, message: 'Project document saved and opened.', projectId: saved?.id || '', canvasId: saved?.id || '', documentPath: saved?.documentPath, documentTitle: saved?.documentTitle });
+      content = JSON.stringify({ ok: true, message: 'Project document saved and opened. Inline scripts and styles may be extracted; use the returned file paths and revisions for edits.', projectId: saved?.id || '', canvasId: saved?.id || '', documentPath: saved?.documentPath, documentTitle: saved?.documentTitle, files: saved?.files, projectRevision: saved?.projectRevision });
     } catch (error) {
       content = JSON.stringify({
         ok: false,
@@ -519,10 +520,12 @@ async function executeEaselTool(name, args, {
       if (name === 'capture_live_canvas') {
         const { data, ...metadata } = result;
         liveCaptures.push(result);
+        onEvent?.({ type: 'image', assetId: result.assetId, mimeType: result.mimeType, data, name: 'Live canvas capture.png', width: result.width, height: result.height, projectId: result.canvasId, chatId: context.chatId, generated: false });
         content = JSON.stringify({ ok: true, ...metadata, message: 'PNG captured from the current live canvas. The image is provided separately for visual inspection.' });
       } else if (name === 'record_canvas_video' || name === 'get_video_frames') {
         const { frames: videoFrames, data, thumbnail, ...metadata } = result;
         for (const frame of videoFrames || []) liveCaptures.push({ ...frame, mimeType: 'image/jpeg', assetId: result.assetId, observation: `Recorded canvas asset://${result.assetId} at ${frame.timestamp.toFixed(2)} seconds. Silent video sampled as still frames.` });
+        if (name === 'record_canvas_video') onEvent?.({ type: 'media', assetId: result.assetId, mimeType: result.mimeType, name: result.name || 'Canvas recording', width: result.width, height: result.height, duration: result.duration, thumbnail, projectId: result.canvasId, chatId: context.chatId, captured: true });
         content = JSON.stringify({ ok: true, ...metadata, sampledFrames: (videoFrames || []).map(({ timestamp }) => ({ timestamp })), message: 'Video references are reusable; sampled stills are provided separately for visual inspection.' });
       } else content = typeof result === 'string' ? result : JSON.stringify(result);
     } catch (error) {
@@ -566,7 +569,9 @@ async function executeEaselTool(name, args, {
         return result;
       }), signal);
       throwIfAborted(signal);
-      content = await handleMcpResult(result, mediaAssetStore, onEvent, { generated: MEDIA_OUTPUT_TOOLS.has(name), projectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets });
+      content = name === 'list_models' && !result.isError && Array.isArray(result.structuredContent?.models)
+        ? JSON.stringify({ models: result.structuredContent.models })
+        : await handleMcpResult(result, mediaAssetStore, onEvent, { generated: MEDIA_OUTPUT_TOOLS.has(name), projectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets });
       if (awaitingMediaJob) content = JSON.stringify({ ...JSON.parse(content), monitoredJob: awaitingMediaJob, guidance: 'The host polls, downloads and saves this job across restarts. End the turn; do not poll or resubmit.' });
     }
   }

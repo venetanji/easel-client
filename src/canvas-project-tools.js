@@ -19,6 +19,7 @@ const PROJECT_CANVAS_TOOLS = Object.freeze([
     directory: { type: 'string', maxLength: 180, description: 'Optional relative directory filter.' },
     offset: { type: 'integer', minimum: 0, default: 0 },
     limit: { type: 'integer', minimum: 1, maximum: 100, default: 100 },
+    includeAssets: { type: 'boolean', default: true, description: 'Use false for source work to omit the media manifest. Media counts and file revisions remain available; list_canvas_assets returns asset details separately.' },
   }),
   tool('read_canvas_file', 'Read one saved canvas source file as bounded, exact patchable UTF-8 text. Kit binaries and media bytes live outside source; asset placeholders are exact patch targets. Use nextOffset for more content.', {
     path: PATH,

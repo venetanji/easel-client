@@ -36,6 +36,7 @@ const { createAssetStore } = require('./asset-store');
 const { createCanvasStore } = require('./canvas-store');
 const { createCanvasView } = require('./canvas-view');
 const { createCanvasHistory } = require('./canvas-history');
+const { producedMediaAssets } = require('./media-tool-results');
 const { createChatService, defaultMcpLaunchOptions } = require('./chat-service');
 const { createMediaMcpClient } = require('./media-mcp-client');
 const { createAgentControl } = require('./agent-control');
@@ -335,7 +336,11 @@ const presentToolCanvas = (artifact) => withCanvas(async (controller) => {
     await saveCanvasBeforeSwitch(controller);
     const id = controller.getCurrentCanvasId();
     const before = id ? CANVASES.get(id).html : '';
-    try { return await controller.present(artifact); }
+    try {
+      const saved = await controller.present(artifact);
+      const source = CANVASES.listFiles(saved.id, { includeAssets: false });
+      return { ...saved, files: source.files, projectRevision: source.projectRevision };
+    }
     finally { if (id && CANVASES.get(id).html !== before) CANVAS_HISTORY.record(id, before); }
   });
 const CANVAS_CONTROLLER = {
@@ -483,12 +488,13 @@ const BUILTIN_CHAT = createChatService({
   presentCanvas: presentToolCanvas,
   canvasController: CANVAS_CONTROLLER,
   onEvent: emitAgentEvent,
+  onStateChanged: () => emitControlState(),
 });
 
 const CODEX_CWD = path.join(app.getPath('userData'), 'codex-workspace');
 fs.mkdirSync(CODEX_CWD, { recursive: true, mode: 0o700 });
 const CODEX_SERVER = createCodexAppServer({ cwd: CODEX_CWD,
-  getMcpConnection: () => AGENT_CONTROL.getBackend() === 'codex' ? MCP_SERVER?.getConnectionInfo() : undefined,
+  getMcpConnection: () => MCP_SERVER?.getConnectionInfo(),
 });
 const CODEX_CHAT = createCodexChatService({
   appServer: CODEX_SERVER, cwd: CODEX_CWD, chatStore: CHAT_STORE.forBackend('codex'),
@@ -647,8 +653,7 @@ async function hydrateCodexChat(snapshot) {
     if (message.role !== 'tool') continue;
     try {
       const output = JSON.parse(message.content);
-      const values = [output, output.structuredContent, ...(output.content || []).filter((block) => block.type === 'text').map((block) => { try { return JSON.parse(block.text); } catch { return null; } })];
-      for (const value of values.filter(Boolean)) for (const asset of [...(value.assets || []), ...(value.assetId ? [{ assetId: value.assetId }] : [])]) if (!references.has(asset.assetId)) references.set(asset.assetId, asset);
+      for (const asset of producedMediaAssets(output, message.name)) if (!references.has(asset.assetId)) references.set(asset.assetId, asset);
     } catch {}
   }
   let bytes = 0;
@@ -802,7 +807,7 @@ function registerIpcHandlers() {
   });
   ipcMain.handle(IPC_CHANNELS.LIST_CANVAS_FILES, (event, id) => {
     assertTrustedSender(event, mainWindow);
-    return CANVASES.listFiles(validateOpaqueId(id, 'Canvas ID'));
+    return CANVASES.listFiles(validateOpaqueId(id, 'Canvas ID'), { includeAssets: false });
   });
   ipcMain.handle(IPC_CHANNELS.READ_CANVAS_FILE, (event, id, input) => {
     assertTrustedSender(event, mainWindow);

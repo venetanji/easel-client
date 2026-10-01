@@ -95,7 +95,7 @@ function createAgentRouter({ builtin, codex, control, chatStore, inputStore, med
     mediaJobStore.update(entry.id, { notification: 'dispatching' });
     emit({ type: 'media-job-notification', chatId: entry.chatId, projectId: entry.projectId, jobId: entry.id, assets: entry.assets, job: entry,
       text: entry.status === 'ready' ? `Your ${entry.mediaType} is ready.` : `${entry.mediaType} generation failed.` });
-    emit({ type: 'media-job-resume-start', chatId: entry.chatId, jobId: entry.id });
+    emit({ type: 'media-job-resume-start', chatId: entry.chatId, jobId: entry.id, mediaType: entry.mediaType, status: entry.status });
     try {
       const response = await codex.continueConversation(entry.chatId,
         `Background ${entry.mediaType} job ${entry.status === 'ready' ? 'is ready' : 'failed'}. This is an automatic host notification, not a new user request.\n${JSON.stringify(resultData)}\nContinue the original request using the saved output when useful. Do not generate a replacement or retrieve the output again. Edit only the listed project.`,
@@ -122,6 +122,7 @@ function createAgentRouter({ builtin, codex, control, chatStore, inputStore, med
         for (const entry of mediaJobStore.list({ raw: true })) {
           if (selected() !== 'codex' || paused || shuttingDown || restorePending) break;
           if (backendOf(entry) !== 'codex' || !['ready', 'failed'].includes(entry.status)
+            || entry.autoResume === false
             || !['pending', 'delivered'].includes(entry.notification) || !validCodexDestination(entry)
             || (entry.projectId && entry.projectId !== canvasController.getCurrentCanvasId())) continue;
           await resumeJob(entry);
@@ -245,6 +246,13 @@ function createAgentRouter({ builtin, codex, control, chatStore, inputStore, med
   function stopAgent() {
     paused = true;
     const result = selected() === 'external' ? { ok: true, active: control.isToolBusy(), stopping: control.isToolBusy() } : service().stopAgent();
+    if (!shuttingDown && getActiveChatId()) {
+      try {
+        for (const job of mediaJobStore.list({ chatId: getActiveChatId(), raw: true })) {
+          if (['pending', 'delivered', 'dispatching'].includes(job.notification)) mediaJobStore.update(job.id, { autoResume: false });
+        }
+      } catch (error) { emit({ type: 'error', message: `The agent stopped, but its background reply pause could not be saved: ${error.message}` }); }
+    }
     if (selected() === 'external') Promise.resolve(disconnectControllers('The user stopped this agent run. Accepted media jobs remain saved.')).catch(() => {});
     return result;
   }
