@@ -9,6 +9,7 @@ function element(tagName = 'div', id = '') {
     get textContent() { return text + this.children.map((child) => child.textContent || '').join(''); },
     set textContent(value) { text = String(value); this.children = []; },
     setAttribute(name, value) { this.attributes[name] = String(value); if (name === 'class') this.className = String(value); },
+    getAttribute(name) { return this.attributes[name] ?? null; },
     removeAttribute(name) { delete this.attributes[name]; delete this[name]; },
     append(...children) { this.children.push(...children); },
     replaceChildren(...children) { text = ''; this.children = [...children]; },
@@ -37,7 +38,7 @@ function fixture() {
   const ids = [
     'project-select', 'nav-explorer', 'nav-media', 'project-drawer', 'media-drawer', 'media-collapse', 'media-list', 'all-media-list', 'all-media-empty', 'all-media-count', 'canvases-list', 'open-canvas-tabs', 'image-viewer',
     'image-viewer-image', 'media-viewer-video', 'media-viewer-audio', 'image-viewer-info', 'image-size-toggle', 'media-empty',
-    'project-image-count', 'canvases-empty', 'project-rename', 'project-delete', 'project-source-files', 'image-use-chat', 'library-collapse',
+    'project-image-count', 'canvases-empty', 'project-rename', 'project-delete', 'project-source-files', 'image-use-chat', 'image-download', 'library-collapse',
     'project-new', 'drawer-new-document',
     'media-unread', 'project-kit-list', 'project-kit-status',
   ];
