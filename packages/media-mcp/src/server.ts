@@ -163,7 +163,7 @@ export function registerMediaTools(
   if (!videoModels || videoModels.length) {
     const model = videoModels ? z.enum(videoModels.map((model) => model.id)) : GenerateVideoInput.shape.model;
     if (easel.generateVideo) server.registerTool('generate_video', {
-      description: 'Submit one video generation job using a video Media model. Optional inputReference is a PNG/JPEG/WebP upload; omit it for text-only video. Defaults: 4 seconds, 1280x720. Easel durations are integers from 1 to 12 seconds; other endpoint limits depend on the model. Returns a job ID, not video bytes. The Easel client saves and monitors accepted jobs across restarts. Never resubmit a pending job. Stopping local work does not cancel an accepted server job.',
+      description: 'Submit one video job using a video Media model. Optional inputReference is a PNG/JPEG/WebP upload; omit it for text-only video. Omit size unless requested; the endpoint chooses its default. Do not copy a reference image size into video size. Duration defaults to 4 seconds; Easel accepts integers 1-12. Returns a job ID; the Easel host monitors it, saves the output, and adds a playable chat preview. End the turn after acceptance; do not poll or resubmit. Stop does not cancel an accepted server job.',
       inputSchema: GenerateVideoInput.extend({ model }).strict(),
     }, async (input, extra) => videoToolResult({ job: await easel.generateVideo!({ ...input, signal: extra?.signal }) }, input.model));
     if (easel.getVideo) server.registerTool('get_video', {

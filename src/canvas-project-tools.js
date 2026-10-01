@@ -15,11 +15,11 @@ const PROJECT_CANVAS_TOOLS = Object.freeze([
   tool('list_canvas_documents', 'List authored HTML documents in the active named project, with paths, titles and revisions. Documents share project files and media; path is document identity. The contract reports the current open documentPath.', {}),
   tool('open_canvas_document', 'Open an existing authored HTML document by its project path. This changes the live view with lifecycle cleanup, without changing the project default entry or source. Use list_canvas_documents first.', { path: PATH }, ['path']),
   tool('create_canvas_document', 'Create and open an empty authored HTML document inside the active project. Every HTML document inherits the persisted project kit selection, source files and attached media. Use update_canvas_project to change kits for all documents; present_canvas creates a complete new document.', { title: { type: 'string', minLength: 1, maxLength: 120 }, path: PATH }, ['title']),
-  tool('list_canvas_files', 'List the open canvas project source paths, byte/line counts, file revisions, entry, kit dependencies and media references. Does not retrieve source, bundled libraries or binary assets. Start here for efficient context.', {
+  tool('list_canvas_files', 'List source paths, byte/line counts, revisions, entry and kits for edits to an existing sketch. Does not retrieve source, bundled libraries or binary assets. For a new sketch use present_canvas directly; no starter-file reads are needed.', {
     directory: { type: 'string', maxLength: 180, description: 'Optional relative directory filter.' },
     offset: { type: 'integer', minimum: 0, default: 0 },
     limit: { type: 'integer', minimum: 1, maximum: 100, default: 100 },
-    includeAssets: { type: 'boolean', default: true, description: 'Use false for source work to omit the media manifest. Media counts and file revisions remain available; list_canvas_assets returns asset details separately.' },
+    includeAssets: { type: 'boolean', default: false, description: 'false omits the media manifest for source work. Use true when asset metadata is needed, or list_canvas_assets separately.' },
   }),
   tool('read_canvas_file', 'Read one saved canvas source file as bounded, exact patchable UTF-8 text. Kit binaries and media bytes live outside source; asset placeholders are exact patch targets. Use nextOffset for more content.', {
     path: PATH,

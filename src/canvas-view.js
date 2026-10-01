@@ -382,6 +382,10 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     return canvasStore.get(currentCanvasId, { documentPath: currentDocumentPath || undefined });
   }
 
+  function compactCanvasContract() {
+    return { projectId: currentCanvasId, documentPath: currentDocumentPath, runtimeGeneration, sourcePendingReload };
+  }
+
   async function getCanvasSource(args = {}) {
     if (!['stored', 'live'].includes(args.origin || 'stored')) throw new Error('Source origin must be stored or live.');
     const saved = requireSavedCanvas();
@@ -439,7 +443,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
   function readProject(method, args = {}) {
     if (!currentCanvasId || !canvasStore) throw new Error('Select a project before reading source files.');
     const result = canvasStore[method](currentCanvasId, args);
-    return { ...result, contract: { ...canvasContract(), ...(result.contract ? { project: result.contract } : {}) } };
+    return { ...result, contract: compactCanvasContract() };
   }
 
   async function mutateProject(method, args = {}) {
@@ -484,7 +488,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     return {
       ...mutationIdentity(updated), ok: true, effects: { source: 'saved', runtime: args.reload ? 'replaced' : 'unchanged' }, cleanup,
       validation,
-      contract: canvasContract(),
+      contract: compactCanvasContract(),
     };
   }
 
@@ -717,7 +721,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     assertCaptureRuntime(identity, signal);
     const validation = await validateCanvas();
     const persisted = await persistCapture(assetStore, { data, mimeType: 'image/png' }, identity, signal);
-    return { ...persisted, mimeType: 'image/png', data, ...size, canvasId: identity.canvasId, documentPath: identity.documentPath, runtimeGeneration: identity.runtimeGeneration, live: true, readiness, validation, scope: { source: 'current canvas view viewport', includesDOMOverlays: true, includesAppUI: false, includesAudio: false }, contract: canvasContract() };
+    return { ...persisted, mimeType: 'image/png', data, ...size, canvasId: identity.canvasId, documentPath: identity.documentPath, runtimeGeneration: identity.runtimeGeneration, live: true, readiness, validation, scope: { source: 'current canvas view viewport', includesDOMOverlays: true, includesAppUI: false, includesAudio: false }, contract: compactCanvasContract() };
   }
 
   async function isEmpty() {
@@ -834,10 +838,10 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     getCurrentCanvasId: () => currentCanvasId,
     getCurrentDocumentPath: () => currentDocumentPath,
     installProjectAssets,
-    listCanvasDocuments: () => ({ ...canvasStore.listDocuments(currentCanvasId), contract: canvasContract() }),
+    listCanvasDocuments: () => ({ ...canvasStore.listDocuments(currentCanvasId), contract: compactCanvasContract() }),
     openCanvasDocument: ({ path }) => openSaved(currentCanvasId, path),
     markSourcePendingReload: () => { sourcePendingReload = true; },
-    listCanvasFiles: (args) => readProject('listFiles', args),
+    listCanvasFiles: (args = {}) => readProject('listFiles', { includeAssets: false, ...args }),
     readCanvasFile: (args) => readProject('readFile', args),
     writeCanvasFile: (args) => mutateProject('writeFile', args),
     patchCanvasFile: (args) => mutateProject('patchFile', args),

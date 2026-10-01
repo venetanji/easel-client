@@ -1,4 +1,5 @@
-const { executeEaselTool, handleMcpResult, toOpenAITools, validateToolArguments, toolCorrection, SYSTEM_PROMPT } = require('./agent');
+const { executeEaselTool, handleMcpResult, toOpenAITools, validateToolArguments, toolCorrection } = require('./agent');
+const { EXTERNAL_INSTRUCTIONS } = require('./harness-instructions');
 const { MEDIA_OUTPUT_TOOLS } = require('./media-reference-tools');
 const { throwIfAborted } = require('./turn-abort');
 
@@ -107,7 +108,7 @@ function createEaselToolHost({ canvasController, presentCanvas, assetStore, medi
                   if (event.type === 'image' && event.data) outputObservations.push({ data: event.data, mimeType: event.mimeType });
                   onEvent?.(event);
                 }, { generated: true, projectId: submittedProjectId, kits, attachGeneratedAssets: canvasController.attachGeneratedAssets }));
-                return { content: (response.content || []).filter((item) => item.type === 'text'), structuredContent: saved };
+                return { content: [], structuredContent: saved };
               }
               return response;
             });
@@ -138,7 +139,7 @@ function createEaselToolHost({ canvasController, presentCanvas, assetStore, medi
     }
   }
   return {
-    instructions: SYSTEM_PROMPT + ' External controllers read get_control_events for media completions and saved canvas answers. Easel persists all jobs independently; do not resubmit pending generation. Use only Easel tools for project edits; application and OS credentials are not exposed.',
+    instructions: EXTERNAL_INSTRUCTIONS,
     listTools,
     invalidateTools,
     isBusy: () => submissions.size > 0 || clients.size > 0,

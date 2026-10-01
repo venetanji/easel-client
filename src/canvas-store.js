@@ -379,7 +379,11 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     assemble(project, id, title.trim(), { documentPath: name });
     validateJavaScriptFiles({ ...project, manifest: { ...project.manifest, entry: name } }, Object.keys(document.files));
     const ignoredDocumentKits = requestedKits.filter((kit) => !project.manifest.kits.some((selected) => selected.name === kit));
-    return { ...commitProject(id, project), documentPath: name, documentTitle: title.trim(), documents: projectDocuments(project), dependencyPaths: Object.keys(document.files).filter((filename) => filename !== name), kits: project.manifest.kits.map((kit) => kit.name), ...(ignoredDocumentKits.length ? { ignoredDocumentKits, kitGuidance: 'HTML documents inherit the project kit selection. Use update_canvas_project with kits to change dependencies for every document.' } : {}), atomic: true };
+    const files = Object.entries(document.files).map(([filename, content]) => ({
+      path: filename, bytes: Buffer.byteLength(content, 'utf8'), lines: content.split('\n').length,
+      revision: digest(content), kind: filename === name ? 'entry' : path.posix.extname(filename).slice(1),
+    }));
+    return { ...commitProject(id, project), documentPath: name, documentTitle: title.trim(), files, documents: projectDocuments(project), dependencyPaths: Object.keys(document.files).filter((filename) => filename !== name), kits: project.manifest.kits.map((kit) => kit.name), ...(ignoredDocumentKits.length ? { ignoredDocumentKits, kitGuidance: 'HTML documents inherit the project kit selection. Use update_canvas_project with kits to change dependencies for every document.' } : {}), atomic: true };
   }
 
   function update(id, snapshotHtml, { documentPath, restoreMetadata = false } = {}) {

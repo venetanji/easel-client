@@ -6,6 +6,20 @@ const path = require('node:path');
 const zlib = require('node:zlib');
 const { createCanvasStore } = require('../src/canvas-store');
 
+test('new canvas metadata names only its newly authored source files with patchable revisions', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-canvas-metadata-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const store = createCanvasStore({ userDataPath });
+  const project = store.createProject({ title: 'Multiple documents' });
+  const created = store.createDocument(project.id, { title: 'Sketch', path: 'sketch.html', html: '<main>Sketch</main><style>main{color:teal}</style><script>const count = 1;</script>' });
+  assert.deepEqual(created.files.map((file) => file.path).sort(), ['sketch.app.js', 'sketch.html', 'sketch.styles.css']);
+  for (const file of created.files) {
+    assert.equal(file.revision, store.readFile(project.id, { path: file.path }).revision);
+    assert.equal(file.bytes, store.readFile(project.id, { path: file.path }).totalBytes);
+  }
+  assert.ok(store.listFiles(project.id).files.some((file) => file.path === 'index.html'));
+});
+
 test('saves self-contained canvas HTML and lists it by title', (t) => {
   const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-canvases-'));
   t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));

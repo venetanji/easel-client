@@ -98,7 +98,7 @@ function createAgentRouter({ builtin, codex, control, chatStore, inputStore, med
     emit({ type: 'media-job-resume-start', chatId: entry.chatId, jobId: entry.id, mediaType: entry.mediaType, status: entry.status });
     try {
       const response = await codex.continueConversation(entry.chatId,
-        `Background ${entry.mediaType} job ${entry.status === 'ready' ? 'is ready' : 'failed'}. This is an automatic host notification, not a new user request.\n${JSON.stringify(resultData)}\nContinue the original request using the saved output when useful. Do not generate a replacement or retrieve the output again. Edit only the listed project.`,
+        `Background ${entry.mediaType} job ${entry.status === 'ready' ? 'is ready' : 'failed'}. This is an automatic host notification, not a new user request.\n${JSON.stringify(resultData)}\nThe host already saved the output and added its preview to chat. Continue the original request if work remains; otherwise acknowledge completion briefly without a View/Watch link. Do not generate a replacement or retrieve the output again. Edit only the listed project.`,
         { ...entry.turnOptions, mediaJobId: entry.id, mediaJobResult: resultData });
       mediaJobStore.update(entry.id, { notification: response.cancelled || paused || shuttingDown || response.saveWarning ? 'interrupted' : 'responded',
         ...(response.saveWarning ? { notificationError: response.saveWarning } : {}) });

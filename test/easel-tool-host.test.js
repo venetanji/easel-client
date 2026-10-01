@@ -66,6 +66,30 @@ test('registers queued video once with the accepted project and origin', async (
   assert.equal(result.structuredContent.monitoredJob.id, 'local-job');
 });
 
+test('queued jobs return compact host monitoring guidance without nested standalone polling prose', async () => {
+  const f = fixture();
+  const job = { id: 'remote-video', status: 'queued', modelId: 'video-model' };
+  f.setResponse({ content: [{ type: 'text', text: JSON.stringify({ job, guidance: 'Retrieve with get_video later.' }) }], structuredContent: { job } });
+  const result = await f.host.callTool('generate_video', { prompt: 'moving light', model: 'video-model' });
+  assert.deepEqual(result.structuredContent.job, job);
+  assert.deepEqual(result.structuredContent.text, []);
+  assert.equal(result.structuredContent.monitoredJob.id, 'local-job');
+  assert.equal(result.structuredContent.monitoredJob.origin, undefined);
+  assert.equal(result.structuredContent.monitoredJob.turnOptions, undefined);
+  assert.match(result.structuredContent.guidance, /End the turn; do not poll, retrieve, or resubmit/);
+  assert.doesNotMatch(JSON.stringify(result), /Retrieve with get_video later/);
+  assert.ok(JSON.stringify(result).length < 1500);
+});
+
+test('synchronous generation preserves provider notes once without serializing them inside more JSON', async () => {
+  const f = fixture();
+  f.setResponse({ content: [{ type: 'text', text: 'Provider note.' }, { type: 'image', data: 'YWJj', mimeType: 'image/png' }] });
+  const result = await f.host.callTool('generate_image', { prompt: 'light study' });
+  assert.deepEqual(result.structuredContent.text, ['Provider note.']);
+  assert.equal(f.saved.length, 1);
+  assert.equal(f.attached.length, 1);
+});
+
 test('canceled queued video submission retains its detached receipt and remains busy until saved', async () => {
   const f = fixture(); await f.host.listTools();
   let respond;

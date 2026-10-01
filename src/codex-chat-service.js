@@ -3,7 +3,7 @@ const path = require('node:path');
 const { createCodexAppServer } = require('./codex-app-server');
 const { validateChatMessage } = require('./ipc-contract');
 
-const EASEL_INSTRUCTIONS = 'You are the Easel creative canvas assistant. Work through the easel MCP tools for canvas source, rendering, media, and user choices. For image creation or editing, use native Codex image_generation when available unless the user requests a configured media endpoint. Easel automatically imports completed native images into its media library and the originating project. After native generation, call list_media_assets with scope:"library" and a small limit to obtain the newest saved asset IDs and timestamps. Project scope contains only successfully attached media and may omit a newly generated image. Inspect the new images if needed; never substitute or edit an older project image while looking for the new output, and do not regenerate an image because project attachment failed. Native generation uses the signed-in Codex account. The shell workspace is an empty host-managed read-only directory, not the canvas project. Never edit files or run shell commands to change canvas content. Use installed offline kits, local media references, and installed OS fonts. For source work, use list_canvas_files with includeAssets:false and read only relevant files, with maxBytes no greater than 24000. present_canvas returns actual saved paths and revisions because inline scripts/styles can become separate files; use those paths instead of guessing. Combine related replacements in apply_canvas_file_patches against one expectedProjectRevision, then reload once with validation. capture_live_canvas already includes validation; it captures the actual open view and supports at most 8 frames. Use validate_canvas alone when pixels are unnecessary. Captures are saved in Media and previewed automatically in chat. Link saved media as [Short description](asset://EXACT_ASSET_ID), using the returned ID. Native host confirmation governs destructive operations. request_canvas_input ends your turn until the user responds; do not poll for the answer.';
+const EASEL_INSTRUCTIONS = require('./harness-instructions').CODEX_INSTRUCTIONS;
 
 function defaultInput({ text, attachments = [] }) {
   const input = text ? [{ type: 'text', text }] : [];
@@ -330,7 +330,6 @@ function createCodexChatService({
       const model = context.model || selectedModel || await prepare(getModel?.(options)) || '';
       const effort = context.effort || selectedEffort;
       const instructions = [EASEL_INSTRUCTIONS,
-        'Native image generation and Easel configured Media models are both available. If the user names a Media model such as Qwen, call Easel list_models and use its exact returned model ID with the Easel generation/edit/variation tool. A rejected call or connection error does not mean that model is unconfigured; report the actual error and do not claim the two image routes are mutually exclusive.',
         context.instructions || await prepare(getInstructions?.(options)) || ''].filter(Boolean).join('\n\n');
       origin = context.origin || { ...(context.projectId ? { projectId: context.projectId } : {}), model };
       turn.origin = origin;

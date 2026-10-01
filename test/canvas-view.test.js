@@ -48,6 +48,33 @@ function createFakeViewDependencies() {
   return { state, WebContentsView, session };
 }
 
+test('routine source queries have compact runtime identity and omit media unless requested', async () => {
+  const fake = createFakeViewDependencies();
+  let requestedAssets;
+  const id = 'c'.repeat(32);
+  const canvas = await createCanvasView({
+    WebContentsView: fake.WebContentsView, sessionFactory: async () => ({ session: fake.session }),
+    canvasStore: {
+      save: () => ({ id, title: 'Compact queries' }),
+      get: () => ({ id, title: 'Compact queries', html: '<main>Test</main>' }),
+      listFiles: (_id, args) => { requestedAssets = args.includeAssets; return { files: [], contract: { source: 'Long source contract' } }; },
+      readFile: () => ({ path: 'app.js', text: '', revision: 'a'.repeat(64) }),
+    },
+  });
+  await canvas.present({ title: 'Compact queries', html: '<main>Test</main>', assets: [] });
+  const listed = canvas.listCanvasFiles({});
+  assert.equal(requestedAssets, false);
+  assert.equal(listed.contract.projectId, id);
+  assert.equal(listed.contract.sandbox, undefined);
+  assert.equal(listed.contract.project, undefined);
+  canvas.listCanvasFiles({ includeAssets: true });
+  assert.equal(requestedAssets, true);
+  const read = canvas.readCanvasFile({ path: 'app.js' });
+  assert.ok(JSON.stringify(read).length < 500);
+  assert.equal(read.contract.sourcePendingReload, false);
+  assert.equal(canvas.getContract().sandbox.network, false);
+});
+
 test('closes a deleted project without trying to save its removed source', async () => {
   const fake = createFakeViewDependencies();
   let deleted = false;

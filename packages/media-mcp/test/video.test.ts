@@ -14,7 +14,7 @@ test('submits text-only video with multipart fields and no reference file', asyn
     const form = init?.body as FormData;
     assert.equal(form.get('prompt'), 'A cat');
     assert.equal(form.get('seconds'), '4');
-    assert.equal(form.get('size'), '1280x720');
+    assert.equal(form.has('size'), false);
     assert.equal(form.has('input_reference'), false);
     return Response.json({ id, status: 'queued', progress: 0 });
   } });
@@ -28,6 +28,17 @@ test('uploads a validated image reference using the endpoint field name', async 
     assert.deepEqual(Buffer.from(await reference.arrayBuffer()), Buffer.from(png, 'base64'));
     return Response.json({ id, status: 'queued' });
   } });
+});
+
+test('sends explicit video dimensions without deriving them from the reference image', async () => {
+  await generateVideo({ prompt: 'Animate this', model: 'ltx-2.5', size: '512x320', seconds: 2,
+    inputReference: { data: png, mimeType: 'image/png' }, fetchImpl: async (_url, init) => {
+      const form = init?.body as FormData;
+      assert.equal(form.get('size'), '512x320');
+      assert.equal(form.get('seconds'), '2');
+      assert.equal((form.get('input_reference') as File).type, 'image/png');
+      return Response.json({ id, status: 'queued' });
+    } });
 });
 
 test('a pending job returns its status without downloading or resubmitting', async () => {

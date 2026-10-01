@@ -47,7 +47,7 @@ const { createAgentRouter } = require('./agent-router');
 const { createCodexAppServer, resolveCodexExecutable } = require('./codex-app-server');
 const { createCodexChatService, defaultInput } = require('./codex-chat-service');
 const { decodeCodexImage } = require('./codex-image-output');
-const { handleMcpResult } = require('./agent');
+const { handleMcpResult, formatRuntimeKitInstructions } = require('./agent');
 const { createChatStore } = require('./chat-store');
 const { createCanvasInputStore } = require('./canvas-input-store');
 const { renderCanvasInputScript, dismissCanvasInputScript } = require('./canvas-input-runtime');
@@ -339,7 +339,7 @@ const presentToolCanvas = (artifact) => withCanvas(async (controller) => {
     try {
       const saved = await controller.present(artifact);
       const source = CANVASES.listFiles(saved.id, { includeAssets: false });
-      return { ...saved, files: source.files, projectRevision: source.projectRevision };
+      return { ...saved, files: saved.files || source.files, projectRevision: source.projectRevision };
     }
     finally { if (id && CANVASES.get(id).html !== before) CANVAS_HISTORY.record(id, before); }
   });
@@ -505,7 +505,8 @@ const CODEX_CHAT = createCodexChatService({
     const model = CODEX_CHAT.getState().model;
     if (!model) throw new Error('Choose an available Codex model in chat before sending.');
     return { model, kits: projectKits, origin: { model, projectId: canvasView?.getCurrentCanvasId() || '' },
-      instructions: [TOOL_HOST.instructions, `Enabled offline kits: ${projectKits.join(', ') || 'none'}.`,
+      instructions: [`Active project view: ${JSON.stringify({ projectId: canvasView?.getCurrentCanvasId() || '', documentPath: canvasView?.getCurrentDocumentPath() || '' })}`,
+        formatRuntimeKitInstructions(projectKits) || 'Enabled offline kits: none.',
         ...skills.map((skill) => `Skill: ${skill.name}\n${skill.instructions}`)].join('\n\n') };
   },
   hydrateChat: hydrateCodexChat,
