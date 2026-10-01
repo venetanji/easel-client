@@ -4,8 +4,9 @@ const { spawn } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
 
 const MCP_TOKEN_ENV = 'EASEL_CODEX_MCP_TOKEN';
-const MAX_LINE_BYTES = 32 * 1024 * 1024;
-const DISABLED_CODEX_FEATURES = ['shell_tool', 'unified_exec', 'code_mode', 'code_mode_host', 'apps', 'plugins', 'remote_plugin', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'in_app_browser', 'in_app_local_automation', 'image_generation', 'multi_agent', 'hooks', 'workspace_dependencies', 'view_image', 'skill_search', 'skill_mcp_dependency_install'];
+// A 32 MiB image occupies more space when encoded in a protocol message.
+const MAX_LINE_BYTES = 64 * 1024 * 1024;
+const DISABLED_CODEX_FEATURES = ['shell_tool', 'unified_exec', 'code_mode', 'code_mode_host', 'apps', 'plugins', 'remote_plugin', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'in_app_browser', 'in_app_local_automation', 'multi_agent', 'hooks', 'workspace_dependencies', 'view_image', 'skill_search', 'skill_mcp_dependency_install'];
 
 function abortError() {
   const error = new Error('Codex request stopped.');
@@ -58,6 +59,7 @@ function resolveCodexExecutable({ executable, env = process.env, platform = proc
 function launchOptions({ cwd, connection, executable, env = process.env }) {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw new Error('Codex needs a dedicated absolute Easel working directory.');
   const args = ['app-server', '--listen', 'stdio://', '-c', 'model_provider="openai"', '-c', 'sandbox_mode="read-only"', '-c', 'approval_policy="on-request"', '-c', 'web_search="disabled"'];
+  args.push('--enable', 'image_generation');
   for (const feature of DISABLED_CODEX_FEATURES) args.push('--disable', feature);
   const childEnv = { ...env };
   // Embedded Codex uses managed ChatGPT auth, independent of the host's API setup.

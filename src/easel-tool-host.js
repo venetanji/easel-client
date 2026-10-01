@@ -12,7 +12,7 @@ const WORKSPACE_TOOLS = [
 
 function createEaselToolHost({ canvasController, presentCanvas, assetStore, mediaAssetStore = assetStore,
   createMediaClient, getKits = () => [], getOrigin = () => ({}), registerMediaJob, workspace,
-  eventStore, control, onEvent, onWaiting } = {}) {
+  eventStore, control, onEvent, onWaiting, beforeTool } = {}) {
   let descriptors = new Map();
   let descriptorList;
   let discovery;
@@ -61,6 +61,8 @@ function createEaselToolHost({ canvasController, presentCanvas, assetStore, medi
     try {
       if (!descriptor) throw new Error(`Unknown or unavailable Easel tool: ${name}`);
       validateToolArguments(args, descriptor.inputSchema);
+      throwIfAborted(signal);
+      await beforeTool?.();
       throwIfAborted(signal);
       let result;
       const origin = await getOrigin(sessionId);

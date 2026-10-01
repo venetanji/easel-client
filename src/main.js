@@ -45,6 +45,8 @@ const { createEaselToolHost } = require('./easel-tool-host');
 const { createAgentRouter } = require('./agent-router');
 const { createCodexAppServer, resolveCodexExecutable } = require('./codex-app-server');
 const { createCodexChatService, defaultInput } = require('./codex-chat-service');
+const { decodeCodexImage } = require('./codex-image-output');
+const { handleMcpResult } = require('./agent');
 const { createChatStore } = require('./chat-store');
 const { createCanvasInputStore } = require('./canvas-input-store');
 const { renderCanvasInputScript, dismissCanvasInputScript } = require('./canvas-input-runtime');
@@ -495,11 +497,21 @@ const CODEX_CHAT = createCodexChatService({
     const skills = options.skills || [];
     const model = CODEX_CHAT.getState().model;
     if (!model) throw new Error('Choose an available Codex model in chat before sending.');
-    return { model, origin: { model, projectId: canvasView?.getCurrentCanvasId() || '' },
+    return { model, kits: projectKits, origin: { model, projectId: canvasView?.getCurrentCanvasId() || '' },
       instructions: [TOOL_HOST.instructions, `Enabled offline kits: ${projectKits.join(', ') || 'none'}.`,
         ...skills.map((skill) => `Skill: ${skill.name}\n${skill.instructions}`)].join('\n\n') };
   },
   hydrateChat: hydrateCodexChat,
+  getImageGenerationContext: () => ({ origin: { projectId: canvasView?.getCurrentCanvasId() || '' }, kits: CANVAS_CONTROLLER.getCurrentKits() || [] }),
+  importGeneratedImage: async ({ item, origin, kits }) => {
+    const image = decodeCodexImage(item, { cwd: CODEX_CWD });
+    if (nativeImage.createFromBuffer(Buffer.from(image.data, 'base64')).isEmpty()) throw new Error('Codex returned an image that could not be decoded.');
+    const events = [];
+    const output = JSON.parse(await handleMcpResult({ content: [{ type: 'image', ...image }] }, MEDIA_ASSETS, (event) => events.push(event), {
+      generated: true, projectId: origin.projectId || '', kits, attachGeneratedAssets: CANVAS_CONTROLLER.attachGeneratedAssets,
+    }));
+    return { output, events };
+  },
   prepareInput: async ({ text, attachments, options }) => {
     const input = defaultInput({ text, attachments });
     if (!options.attachmentRefs?.length && attachments.length) {
@@ -539,6 +551,7 @@ TOOL_HOST = createEaselToolHost({
   },
   getKits: () => CANVAS_CONTROLLER.getCurrentKits() || (CANVAS_KIT_BUNDLES.tone ? ['tone'] : []),
   getOrigin: () => CHAT.getToolOrigin(),
+  beforeTool: () => AGENT_CONTROL.getBackend() === 'codex' ? CODEX_CHAT.waitForMediaImports() : undefined,
   registerMediaJob: registerTrackedMediaJob, control: AGENT_CONTROL,
   eventStore: { read: (...args) => CONTROL_EVENTS.read(...args) },
   onEvent: emitAgentEvent,
@@ -634,7 +647,7 @@ async function hydrateCodexChat(snapshot) {
     if (message.role !== 'tool') continue;
     try {
       const output = JSON.parse(message.content);
-      const values = [output.structuredContent, ...(output.content || []).filter((block) => block.type === 'text').map((block) => { try { return JSON.parse(block.text); } catch { return null; } })];
+      const values = [output, output.structuredContent, ...(output.content || []).filter((block) => block.type === 'text').map((block) => { try { return JSON.parse(block.text); } catch { return null; } })];
       for (const value of values.filter(Boolean)) for (const asset of [...(value.assets || []), ...(value.assetId ? [{ assetId: value.assetId }] : [])]) if (!references.has(asset.assetId)) references.set(asset.assetId, asset);
     } catch {}
   }

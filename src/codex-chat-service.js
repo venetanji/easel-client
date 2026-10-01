@@ -3,7 +3,7 @@ const path = require('node:path');
 const { createCodexAppServer } = require('./codex-app-server');
 const { validateChatMessage } = require('./ipc-contract');
 
-const EASEL_INSTRUCTIONS = 'You are the Easel creative canvas assistant. Work through the easel MCP tools for canvas source, rendering, media, and user choices. The shell workspace is an empty host-managed read-only directory, not the canvas project. Never edit files or run shell commands to change canvas content. Use installed offline kits, local media references, and installed OS fonts. Inspect relevant source files in bounded chunks and validate the actual canvas after edits. Native host confirmation governs destructive operations. request_canvas_input ends your turn until the user responds; do not poll for the answer.';
+const EASEL_INSTRUCTIONS = 'You are the Easel creative canvas assistant. Work through the easel MCP tools for canvas source, rendering, media, and user choices. For image creation or editing, use native Codex image_generation when available unless the user requests a configured media endpoint. Easel automatically imports completed native images into its media library and the originating project. After generation, call list_media_assets to obtain the saved asset IDs for canvas attachments and references; do not regenerate an image because project attachment failed. Native generation uses the signed-in Codex account. The shell workspace is an empty host-managed read-only directory, not the canvas project. Never edit files or run shell commands to change canvas content. Use installed offline kits, local media references, and installed OS fonts. Inspect relevant source files in bounded chunks and validate the actual canvas after edits. Native host confirmation governs destructive operations. request_canvas_input ends your turn until the user responds; do not poll for the answer.';
 
 function defaultInput({ text, attachments = [] }) {
   const input = text ? [{ type: 'text', text }] : [];
@@ -78,6 +78,8 @@ function createCodexChatService({
   onEvent,
   onServerRequest,
   onTurnReady,
+  importGeneratedImage,
+  getImageGenerationContext,
   prepareInput = defaultInput,
   hydrateChat,
   turnTimeoutMs = 15 * 60_000,
@@ -144,16 +146,22 @@ function createCodexChatService({
   }
 
   function finish(turn, error, result) {
-    if (turn.settled) return;
-    turn.settled = true;
+    if (turn.settled || turn.finishing) return;
+    turn.finishing = true;
     clearTimeout(turn.timer);
     clearTimeout(turn.stopTimer);
-    save();
-    if (error) turn.reject(error); else turn.resolve(result);
+    const settle = () => {
+      turn.settled = true;
+      save();
+      if (error) turn.reject(error); else turn.resolve(result);
+    };
+    // Keep the conversation owned until every emitted image has been saved.
+    if (turn.imageImports.length) Promise.allSettled(turn.imageImports).then(settle);
+    else settle();
   }
 
   async function interrupt(turn) {
-    if (!turn || turn.settled || !turn.threadId || !turn.turnId || turn.interruptSent) return;
+    if (!turn || turn.settled || turn.finishing || !turn.threadId || !turn.turnId || turn.interruptSent) return;
     turn.interruptSent = true;
     clearTimeout(turn.stopTimer);
     turn.stopTimer = setTimeout(() => {
@@ -184,6 +192,31 @@ function createCodexChatService({
     return message;
   }
 
+  function importImage(turn, item) {
+    if (turn.completedItems.has(item.id)) return;
+    turn.completedItems.add(item.id);
+    const message = { role: 'tool', name: 'image_generation', content: JSON.stringify({ status: 'saving', source: 'codex' }), codexItemId: item.id, codexTurnId: turn.turnId };
+    history.push(message);
+    save();
+    const importing = Promise.resolve().then(async () => {
+      if (typeof importGeneratedImage !== 'function') throw new Error('The Codex image importer is unavailable.');
+      const context = turn.imageContexts.get(item.id) || { origin: turn.origin, kits: turn.kits };
+      const { output, events = [] } = await importGeneratedImage({ item, ...context });
+      if (!output?.assets?.length) throw new Error('Codex generated an image, but it could not be saved in Media. Do not generate a replacement.');
+      message.content = JSON.stringify({ ...output, source: 'codex' });
+      save();
+      for (const event of events) emit(event);
+      emit({ type: 'tool-end', name: 'image_generation', itemId: item.id, status: 'completed' });
+    }).catch((error) => {
+      const detail = String(error.message || error).slice(0, 500);
+      message.content = JSON.stringify({ ok: false, status: 'failed', source: 'codex', error: detail });
+      save();
+      emit({ type: 'tool-end', name: 'image_generation', itemId: item.id, status: 'failed' });
+      emit({ type: 'error', message: detail });
+    });
+    turn.imageImports.push(importing);
+  }
+
   function handleNotification({ method, params = {} }) {
     if (method === 'account/updated') {
       Promise.resolve(server.readAccount()).then((result) => { account = result.account || null; requiresOpenaiAuth = result.requiresOpenaiAuth; emit({ type: 'codex-state', state: getState() }); }).catch((error) => { lastError = error.message; });
@@ -200,7 +233,7 @@ function createCodexChatService({
       return;
     }
     const turn = active;
-    if (!turn || turn.settled || params.threadId !== turn.threadId) return;
+    if (!turn || turn.settled || turn.finishing || params.threadId !== turn.threadId) return;
     if (method === 'turn/started') {
       if (turn.phase !== 'starting-turn' || (turn.turnId && turn.turnId !== params.turn?.id)) return;
       turn.turnId = params.turn?.id || '';
@@ -218,8 +251,12 @@ function createCodexChatService({
       message.content += params.delta;
       emit({ type: 'token', text: params.delta, itemId: params.itemId });
       scheduleSave();
-    } else if (method === 'item/started' && params.item?.type === 'mcpToolCall') {
-      emit({ type: 'tool-start', name: params.item.tool, itemId: params.item.id });
+    } else if (method === 'item/started' && ['mcpToolCall', 'imageGeneration'].includes(params.item?.type)) {
+      if (params.item.type === 'imageGeneration') {
+        const context = getImageGenerationContext?.() || {};
+        turn.imageContexts.set(params.item.id, { origin: { ...turn.origin, ...context.origin }, kits: context.kits || turn.kits });
+      }
+      emit({ type: 'tool-start', name: params.item.type === 'imageGeneration' ? 'image_generation' : params.item.tool, itemId: params.item.id });
     } else if (method === 'item/completed') {
       const item = params.item;
       if (item?.type === 'agentMessage') {
@@ -230,6 +267,8 @@ function createCodexChatService({
         if (!turn.completedItems.has(item.id)) emit({ type: 'assistant', text: message.content, itemId: item.id, phase: message.phase });
         turn.completedItems.add(item.id);
         save();
+      } else if (item?.type === 'imageGeneration') {
+        importImage(turn, item);
       } else if (item?.type === 'mcpToolCall') {
         if (!history.some((entry) => entry.codexItemId === item.id && entry.role === 'tool')) {
           history.push({ role: 'tool', name: item.tool, content: compactToolResult(item), codexItemId: item.id, codexTurnId: turn.turnId });
@@ -246,7 +285,7 @@ function createCodexChatService({
       else finish(turn, new Error(params.error?.message || 'Codex turn failed.'));
     } else if (method === 'turn/completed') {
       for (const item of params.turn?.items || []) {
-        if (item.type === 'agentMessage' && !turn.completedItems.has(item.id)) handleNotification({ method: 'item/completed', params: { threadId: turn.threadId, turnId: turn.turnId, item } });
+        if (['agentMessage', 'imageGeneration'].includes(item.type) && !turn.completedItems.has(item.id)) handleNotification({ method: 'item/completed', params: { threadId: turn.threadId, turnId: turn.turnId, item } });
       }
       if (params.turn?.status === 'failed') finish(turn, new Error(params.turn.error?.message || 'Codex turn failed.'));
       else finish(turn, null, params.turn);
@@ -279,7 +318,7 @@ function createCodexChatService({
     const stopped = new Promise((complete) => { cancelPreparation = complete; });
     // Completion may arrive before turn/start's response; attach a rejection observer immediately.
     done.catch(() => {});
-    const turn = { resolve, reject, done, finished, cancelPreparation, options, phase: 'preparing', threadId: '', turnId: '', stopping: false, settled: false, completedItems: new Set(), earlyEvents: [] };
+    const turn = { resolve, reject, done, finished, cancelPreparation, options, phase: 'preparing', threadId: '', turnId: '', stopping: false, settled: false, completedItems: new Set(), earlyEvents: [], imageImports: [], imageContexts: new Map() };
     const prepare = (operation) => Promise.race([operation, stopped.then(() => { throw stoppedError(); })]);
     active = turn;
     try {
@@ -289,6 +328,7 @@ function createCodexChatService({
       const instructions = [EASEL_INSTRUCTIONS, context.instructions || await prepare(getInstructions?.(options)) || ''].filter(Boolean).join('\n\n');
       origin = context.origin || { ...(context.projectId ? { projectId: context.projectId } : {}), model };
       turn.origin = origin;
+      turn.kits = context.kits || options.kits || [];
       if (turn.stopping) return { ok: true, cancelled: true, text: 'Stopped.', chatId };
       const protocolInput = await prepare(prepareInput({ text, attachments, options, context }));
       if (!Array.isArray(protocolInput) || !protocolInput.length) throw new Error('Codex message input is empty.');
@@ -530,6 +570,7 @@ function createCodexChatService({
     continueConversation,
     hasThread,
     isBusy: () => Boolean(active),
+    waitForMediaImports: () => Promise.allSettled(active?.imageImports || []),
     getCurrentChat,
     getActiveChatId: () => chatId,
     getCurrentThreadId: () => threadId,
