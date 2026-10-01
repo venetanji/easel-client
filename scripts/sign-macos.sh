@@ -31,7 +31,7 @@ trap 'rm -f "$APPLE_API_KEY" "$notary_result"; rmdir "$signing_dir"' EXIT
 
 # electron-builder expects a key file path and chooses Apple ID auth first.
 unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
-printf '%s' "$ASC_API_KEY_P8" | base64 -d > "$APPLE_API_KEY"
+printf '%s' "$ASC_API_KEY_P8" | base64 --decode > "$APPLE_API_KEY"
 
 npm run dist:mac -- \
   --config.forceCodeSigning=true \
