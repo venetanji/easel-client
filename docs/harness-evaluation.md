@@ -79,6 +79,16 @@ kits as checkboxes; additional documents inherit their project's selection.
 These follow-up changes have automated regression coverage;
 the manual model run happened before they were applied.
 
+A subsequent cube-texturing session ended three replies with an announced reload
+or capture, without recording the corresponding tool call. The source patches
+explicitly reported unchanged runtime. It also replaced a valid asset placeholder
+with a relative path inside JavaScript, where local media paths are not rewritten.
+The saved history confirms that those operations were not executed; it does not
+retain the raw provider stream to distinguish model output from proxy conversion.
+Instructions now require the next needed tool before a final reply and explicitly
+limit local media paths to HTML/CSS. JavaScript uses the asset resolver or a returned
+placeholder. These are instructions, not a guarantee that a weaker model follows them.
+
 ## Regression Coverage
 
 Automated checks cover instruction length and backend-specific media routes,

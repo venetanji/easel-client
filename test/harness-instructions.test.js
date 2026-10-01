@@ -35,3 +35,10 @@ test('missing kits require user enablement before the agent continues', () => {
   assert.match(COMMON_INSTRUCTIONS, /tell the user to enable it under Project files > Canvas kits, then end the turn until they confirm/);
   assert.match(COMMON_INSTRUCTIONS, /Uninstalled kits need installation in Settings > Kits first/);
 });
+
+test('tools run before the final reply and JavaScript media resolves offline', () => {
+  assert.match(COMMON_INSTRUCTIONS, /Execute the next needed tool in this turn/);
+  assert.match(COMMON_INSTRUCTIONS, /do not end with a promise to reload, capture, read, or patch/);
+  assert.match(COMMON_INSTRUCTIONS, /End when done, blocked, or waiting for a job\/user response/);
+  assert.match(COMMON_INSTRUCTIONS, /In JavaScript use getUrl\(id\) or the returned \{\{asset:id\}\} placeholder; assets\/ paths resolve in HTML\/CSS only/);
+});
