@@ -1,0 +1,41 @@
+appId: org.ait4x.easelclient
+directories:
+  output: release
+files:
+  - src/**/*
+  - canvas-kits/*.js
+  - packages/media-mcp/dist/**/*
+  - packages/media-mcp/package.json
+  - .agents/skills/**/*
+  - package.json
+asar: true
+asarUnpack:
+  - packages/media-mcp/dist/**/*
+  - packages/media-mcp/package.json
+extraMetadata:
+  main: src/main.js
+npmRebuild: false
+publish: null
+win:
+  target:
+    - nsis
+    - zip
+mac:
+  extendInfo:
+    NSCameraUsageDescription: Easel canvases can use your camera when you allow access.
+    NSMicrophoneUsageDescription: Easel canvases can use your microphone when you allow access.
+  target:
+    - dmg
+    - zip
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Graphics
+  maintainer: "Giovanni Lion <giovanni.lion@gmail.com>"
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+productName: Easel Studio

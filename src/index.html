@@ -1,0 +1,762 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; img-src 'self' data: blob:; media-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'" />
+    <title>Easel Studio</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+        color: #202d27;
+        background: #e6ede5;
+        --paper: #fbfaf6;
+        --paper-deep: #f3f2eb;
+        --line: #d4d9d0;
+        --muted: #58675f;
+        --ink: #202d27;
+        --green: #174d3a;
+        --green-deep: #12392d;
+        --green-wash: #e7eee7;
+        --coral: #b84e38;
+        --gold: #ad7930;
+        --display: Georgia, "Iowan Old Style", serif;
+        --panel-header-height: 49px;
+      }
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      body { background: #e6ede5; }
+      button, input, textarea, select { font: inherit; letter-spacing: 0; }
+      button { cursor: pointer; }
+      button:disabled { cursor: not-allowed; opacity: .58; }
+      button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
+      ::selection { color: white; background: #356b52; }
+      * { scrollbar-color: #aab8ac transparent; scrollbar-width: thin; }
+      *::-webkit-scrollbar { width: 9px; height: 9px; }
+      *::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 8px; background: #aab8ac; background-clip: padding-box; }
+      .studio { --left-column-width: 360px; width: 100%; height: 100%; min-width: 0; min-height: 0; display: grid; grid-template-columns: 44px minmax(280px, var(--left-column-width)) 1px minmax(300px, 1fr); grid-template-rows: 48px minmax(0, 1fr); }
+      .topbar { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; gap: 20px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--paper); }
+      .brand { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 0 0 auto; }
+      .brand-mark { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 8px 8px 8px 2px; background: var(--green); color: var(--paper); font: 600 19px/1 var(--display); }
+      .brand h1 { margin: 0; font: 600 19px/1.05 var(--display); letter-spacing: -.025em; }
+      .topbar-actions, .button-row { display: flex; align-items: center; gap: 6px; }
+      .button { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; border-radius: 8px; padding: 7px 11px; color: var(--ink); background: transparent; font-size: 12px; font-weight: 600; transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease; }
+      .button:hover:not(:disabled) { background: #e9eee8; }
+      .button.outline { border-color: #c8d0c8; background: var(--paper); }
+      .button.outline:hover:not(:disabled) { border-color: #9eafa2; background: #f1f4ef; }
+      .button.primary { color: white; background: var(--green); }
+      .button.primary:hover:not(:disabled) { background: #103e2e; }
+      .button.accent { color: white; background: var(--coral); }
+      .button.accent:hover:not(:disabled) { background: #963c2c; }
+      .button.small { min-height: 30px; padding: 5px 9px; font-size: 11px; }
+      .button.quiet { color: var(--muted); }
+      .connection-button { border-color: #c8d0c8; background: var(--paper); }
+      .connection-dot, .state-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #8b938d; }
+      .connection-dot.ready, .state-dot.ready { background: #3d7a54; }
+      .connection-dot.needs-setup { background: var(--gold); }
+      .active-count { min-width: 19px; min-height: 19px; display: inline-grid; place-items: center; border-radius: 6px; padding: 0 5px; color: var(--green-deep); background: var(--green-wash); font-size: 11px; font-variant-numeric: tabular-nums; }
+      .activity-bar { grid-column: 1; grid-row: 2; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 7px 4px; border-right: 1px solid var(--line); background: var(--paper-deep); }
+      .activity-spacer { flex: 1; }
+      .activity-button { position: relative; width: 34px; height: 36px; display: grid; place-items: center; border: 0; border-radius: 5px; color: var(--muted); background: transparent; }
+      .activity-button:hover, .activity-button:focus-visible { color: var(--green-deep); background: var(--green-wash); }
+      .activity-button[aria-pressed="true"] { color: var(--green-deep); background: var(--green-wash); }
+      .activity-button[aria-pressed="true"]::after { position: absolute; left: -4px; width: 2px; height: 20px; background: var(--green); content: ""; }
+      .activity-button svg { width: 19px; height: 19px; }
+      .chat-unread { position: absolute; top: 0; right: -1px; min-width: 17px; height: 17px; display: grid; place-items: center; border-radius: 9px; padding: 0 4px; color: white; background: var(--coral); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; pointer-events: none; }
+      .studio[data-sidebar="closed"] { grid-template-columns: 44px 0 0 minmax(0, 1fr); }
+      .studio[data-sidebar="closed"] .left-column, .studio[data-sidebar="closed"] .workbench-splitter { display: none; }
+      .left-column { position: relative; grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
+      .workbench-splitter { position: relative; z-index: 5; grid-column: 3; grid-row: 2; width: 9px; margin-left: -4px; cursor: col-resize; touch-action: none; }
+      .workbench-splitter::before { position: absolute; inset: 0 4px; background: var(--line); content: ""; transition: background-color 120ms ease; }
+      .workbench-splitter:hover::before, .workbench-splitter:focus-visible::before, .workbench-splitter.is-dragging::before { background: var(--green); }
+      .panel { min-width: 0; min-height: 0; background: var(--paper); }
+      .library, .media-drawer { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; overflow: hidden; background: var(--paper); animation: drawer-reveal 180ms cubic-bezier(.16, 1, .3, 1); }
+      .section-head { min-height: var(--panel-header-height); display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
+      .section-head h2 { flex: 0 0 auto; }
+      .library-panel-content { min-height: 0; display: flex; flex: 1; flex-direction: column; overflow: auto; }
+      .fold-button { width: 28px; height: 28px; flex: 0 0 auto; display: grid; place-items: center; border: 0; border-radius: 6px; color: #58675f; background: transparent; }
+      .fold-button:hover { color: var(--green-deep); background: var(--green-wash); }
+      .fold-button svg { width: 14px; height: 14px; transition: transform 150ms ease; }
+      h2 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: -.01em; }
+      .library-content { padding: 12px; }
+      .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 16px 10px; align-content: start; }
+      .canvas-list { display: grid; align-content: start; }
+      .empty-library { margin: 8px 4px; color: #56665d; font-size: 12px; line-height: 1.5; }
+      .runtime-intro { margin: 2px 2px 11px; }
+      .runtime-intro h3 { margin: 0; color: #2d4136; font: 600 17px/1.1 var(--display); }
+      .runtime-intro p { margin: 5px 0 0; color: #53635a; font-size: 12px; line-height: 1.45; }
+      .runtime-list { display: grid; gap: 7px; }
+      .runtime-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; border: 1px solid #dce2da; border-radius: 8px; padding: 9px; background: #fffefa; }
+      .runtime-card h3 { margin: 0 0 3px; color: #2d4136; font-size: 12px; font-weight: 700; }
+      .runtime-card p { margin: 0; color: #637168; font-size: 12px; line-height: 1.4; }
+      .runtime-badge { align-self: start; border-radius: 99px; padding: 4px 6px; color: #7e6338; background: #f6efdf; font-size: 11px; font-weight: 700; white-space: nowrap; }
+      .runtime-badge.active { color: #28543a; background: #e6efe6; }
+      .runtime-footnote { margin: 10px 2px 2px; color: #65736b; font-size: 12px; line-height: 1.45; }
+      .kit-list { display: grid; gap: 0; padding: 14px 19px 4px; }
+      .kit-availability { min-height: 62px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 11px; border-bottom: 1px solid #e3e7df; padding: 9px 2px; }
+      .kit-availability strong, .kit-availability small { display: block; }
+      .kit-availability strong { color: #2e4438; font-size: 12px; }
+      .kit-availability small { margin-top: 4px; color: #5e6c63; font-size: 12px; line-height: 1.4; }
+      .kit-status { min-height: 18px; margin: 10px 19px 16px; color: var(--muted); font-size: 12px; }
+      .conversation { width: 100%; display: flex; flex-direction: column; overflow: hidden; }
+      .conversation-head { min-height: var(--panel-header-height); display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px 0 14px; border-bottom: 1px solid #e5e7df; }
+      .conversation-actions { display: flex; align-items: center; gap: 4px; }
+      .conversation-title { display: grid; gap: 3px; min-width: 0; }
+      .conversation-actions { flex-shrink: 0; }
+      .chat-history { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; min-height: 0; background: var(--paper); }
+      .chat-history .section-head h2 { font: 600 20px/1.15 var(--display); letter-spacing: -.02em; }
+      .chat-history-list { flex: 1; min-height: 0; overflow: auto; padding: 8px 12px; }
+      .chat-history-row { display: block; width: 100%; min-height: 66px; border: 0; border-radius: 6px; padding: 11px 10px; color: var(--ink); background: transparent; text-align: left; }
+      .chat-history-row + .chat-history-row { margin-top: 2px; }
+      .chat-history-row strong { display: block; overflow: hidden; font-size: 12px; font-weight: 600; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+      .chat-history-row time { display: block; margin-top: 5px; font-variant-numeric: tabular-nums; }
+      .chat-history-row:hover:not(:disabled), .chat-history-list [aria-current="true"] { color: var(--green); background: var(--green-wash); }
+      .chat-history-list time, #chat-history-status { color: var(--muted); font-size: 11px; }
+      #chat-history-status { margin: 12px 20px 0; line-height: 1.5; }
+      #chat-history-status:empty { display: none; }
+      .chat-history-note { flex: 0 0 auto; margin: 0; border-top: 1px solid var(--line); padding: 12px 20px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+      .conversation-content { min-height: 0; display: flex; flex: 1; flex-direction: column; overflow: hidden; }
+      #messages { flex: 1; min-height: 0; overflow: auto; padding: 14px 12px; display: flex; flex-direction: column; align-items: stretch; gap: 16px; }
+      .message { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; font-size: 12px; }
+      .message.assistant { align-self: stretch; color: #27372f; }
+      .message-welcome { white-space: normal; }
+      .message.assistant:not(.message-welcome)::before, .message.user[data-mode="image"]::before { display: block; margin-bottom: 5px; font: 700 9px/1.2 "Segoe UI", sans-serif; letter-spacing: .08em; }
+      .message.assistant:not(.message-welcome)::before { color: #57675e; content: "EASEL"; }
+      .message.user[data-mode="image"]::before { color: #e8c7ba; content: "IMAGE BRIEF"; }
+      .message.user { align-self: flex-end; max-width: 88%; border-radius: 12px 12px 4px 12px; padding: 9px 12px; color: white; background: var(--green); }
+      .message-author { margin-bottom: 5px; color: #57675e; font-size: 11px; font-weight: 700; }
+      .message-content { max-width: 68ch; }
+      .message-content.markdown { white-space: normal; }
+      .markdown > :first-child { margin-top: 0; }
+      .markdown > :last-child { margin-bottom: 0; }
+      .markdown p { margin: 0 0 10px; }
+      .markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { margin: 18px 0 7px; font-size: 13px; line-height: 1.35; color: var(--green-deep); }
+      .markdown h1 { font-size: 17px; }
+      .markdown h2 { font-size: 15px; }
+      .markdown ul, .markdown ol { margin: 8px 0 12px; padding-left: 21px; }
+      .markdown li { margin: 4px 0; }
+      .markdown li > p { margin-bottom: 5px; }
+      .markdown code { padding: 1px 4px; border-radius: 3px; background: #e8ece3; font: 11px/1.5 Consolas, monospace; }
+      .markdown pre { max-width: 100%; overflow-x: auto; margin: 10px 0 13px; padding: 12px; border-radius: 7px; background: #e8ece3; white-space: pre; }
+      .markdown pre code { padding: 0; background: transparent; }
+      .markdown a { color: var(--green); text-decoration: underline; text-underline-offset: 3px; }
+      .markdown blockquote { margin: 10px 0; padding-left: 12px; border-left: 1px solid #8c9d8d; color: #506257; }
+      .markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 10px 0 13px; }
+      .markdown th, .markdown td { border-bottom: 1px solid var(--line); padding: 7px 9px; text-align: left; }
+      .markdown th { color: var(--green-deep); background: #e8ece3; }
+      .markdown hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
+      .message-asset-preview { width: min(100%, 320px); margin: 0; overflow: hidden; border-radius: 4px; background: var(--paper-deep); }
+      .message-asset-preview img, .message-asset-preview video { display: block; width: 100%; height: 240px; object-fit: contain; background: var(--paper-deep); }
+      .message-asset-preview audio { display: block; width: 100%; height: 42px; }
+      .message-asset-preview figcaption { padding: 7px 0; color: var(--ink); background: var(--paper); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+      .message-media-visual { position: relative; }
+      .message-media-visual video { height: auto; aspect-ratio: 16 / 9; }
+      .message-media-badge, .project-thumbnail-new { position: absolute; top: 7px; left: 7px; border-radius: 3px; padding: 3px 5px; color: var(--paper); background: var(--green-deep); font-size: 10px; font-weight: 600; pointer-events: none; }
+      .message-media-play { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); min-height: 34px; border: 0; border-radius: 5px; padding: 7px 12px; color: var(--paper); background: var(--green-deep); font-size: 12px; font-weight: 600; }
+      .message-media-play:hover:not(:disabled) { background: var(--green); }
+      .message-media-actions { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+      .message-media-actions .button { min-height: 28px; padding: 3px 0; font-size: 11px; }
+      .message-media-error { margin: 5px 0 0; color: #9d3727; font-size: 11px; }
+      .skill-compatibility-note { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.4; }
+      .unavailable-skills { padding: 10px 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+      .unavailable-skills summary { cursor: pointer; }
+      .unavailable-skills p { margin: 8px 0; }
+      .message-asset-add { align-self: flex-start; min-height: 28px; border: 1px solid #d6ded6; border-radius: 6px; padding: 4px 9px; color: var(--green); background: #f4f5ef; font-size: 11px; font-weight: 600; }
+      .message-asset-add:hover:not(:disabled) { border-color: #a8bbab; background: var(--green-wash); }
+      .message-asset-add:disabled { cursor: wait; opacity: .65; }
+      .message-attachments { display: grid; gap: 7px; margin-top: 8px; }
+      .message-attachment { max-width: min(320px, 100%); margin: 0; overflow: hidden; border: 1px solid #77917e; border-radius: 8px; background: #204b38; }
+      .message-attachment img, .message-attachment video { display: block; max-width: 100%; max-height: 210px; object-fit: contain; background: #173b2d; }
+      .message-attachment audio { display: block; width: min(290px, 100%); height: 38px; }
+      .message-attachment figcaption { overflow: hidden; border-top: 1px solid #77917e; padding: 5px 7px; color: #e5eee6; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+      .message-actions { align-self: flex-start; margin-top: -14px; margin-bottom: -8px; }
+      .message-actions button { min-height: 26px; border: 0; border-radius: 5px; padding: 3px 6px; color: #58675f; background: transparent; font-size: 11px; font-weight: 600; }
+      .message-actions button:hover { color: var(--green); background: var(--green-wash); }
+      .canvas-input-note { align-self: stretch; padding: 11px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .canvas-input-note strong { display: block; margin-bottom: 4px; color: var(--green-deep); font-weight: 600; }
+      .canvas-input-note p { margin: 0; }
+      .canvas-input-note .button-row { flex-wrap: wrap; margin-top: 8px; }
+      .canvas-input-note[data-status="failed"] p, .canvas-input-note[data-status="interrupted"] p { color: #963c2c; }
+      .message-attachment.metadata-only { border: 0; background: transparent; }
+      .message-attachment.metadata-only figcaption { border: 0; padding: 0; white-space: normal; }
+      .welcome-copy { max-width: 34ch; }
+      .welcome-copy strong { display: block; margin: 0 0 5px; color: var(--green-deep); font: 600 20px/1.12 var(--display); letter-spacing: -.02em; }
+      .welcome-copy p { margin: 0; color: #53635a; font-size: 12px; line-height: 1.5; }
+      .prompt-suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+      .prompt-suggestion { min-height: 30px; border: 1px solid #d6ded6; border-radius: 7px; padding: 5px 8px; color: #3c5045; background: #f4f5ef; font-size: 11px; text-align: left; }
+      .prompt-suggestion:hover { border-color: #a8bbab; background: #eaf0e9; }
+      .agent-activity { min-height: 34px; display: flex; align-items: center; gap: 8px; margin: 0 13px 6px; border-radius: 7px; padding: 5px 8px; color: #3e5d49; background: #edf2eb; font-size: 12px; }
+      .agent-activity[hidden], [hidden] { display: none !important; }
+      .activity-pulse { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--coral); animation: activity-pulse 1.2s ease-in-out infinite; }
+      @keyframes activity-pulse { 50% { opacity: .42; transform: scale(.78); } }
+      #status { min-height: 0; margin: 0; padding: 0 13px; color: var(--muted); font-size: 12px; }
+      #status:not(:empty) { padding-top: 4px; padding-bottom: 5px; }
+      #status.error, #settings-status.error, #skill-status.error, #kit-status.error, #new-canvas-status.error, #chat-history-status.error { color: #9d3727; }
+      #chat-form { display: grid; gap: 0; border-top: 1px solid var(--line); padding: 0; }
+      .composer { overflow: hidden; background: var(--paper); }
+      .composer:focus-within { background: #fffefa; }
+      .composer-topline { min-height: 38px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 5px 10px; }
+      .composer-options { display: flex; flex: 1 1 100%; align-items: center; gap: 7px; min-width: 0; }
+      .model-picker { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; color: var(--muted); font-size: 11px; }
+      #chat-model, #codex-model { width: 100%; min-width: 0; min-height: 30px; border: 0; border-radius: 5px; padding: 4px 5px; color: var(--green-deep); background: var(--green-wash); font-size: 12px; font-weight: 600; text-overflow: ellipsis; }
+      #prompt-template { max-width: 130px; min-height: 29px; border: 0; border-radius: 5px; padding: 4px; color: var(--muted); background: transparent; font-size: 11px; }
+      #prompt-template:hover { background: var(--green-wash); }
+      #chat-model:disabled, #prompt-template:disabled { opacity: .58; }
+      #attach-media { flex: 0 0 auto; }
+      #attach-media svg { width: 15px; height: 15px; }
+      #composer-skills { flex: 0 0 auto; margin-left: auto; white-space: nowrap; }
+      #message { display: block; width: 100%; min-height: 64px; max-height: 140px; resize: vertical; border: 0; border-radius: 0; padding: 10px 11px 5px; color: var(--ink); background: transparent; line-height: 1.45; font-size: 12px; }
+      #message:focus { outline: none; }
+      .attachment-strip { display: flex; flex-wrap: wrap; gap: 7px; padding: 8px 9px; border-bottom: 1px solid #eceee9; }
+      .attachment-strip[hidden] { display: none; }
+      .attachment-chip { position: relative; width: 76px; height: 66px; display: grid; place-items: center; overflow: hidden; border: 1px solid #d8ded5; border-radius: 7px; background: #f1f2ec; }
+      .attachment-chip img, .attachment-chip video { width: 100%; height: 100%; object-fit: cover; }
+      .attachment-kind { color: #385446; font-size: 10px; font-weight: 750; letter-spacing: .05em; }
+      .attachment-chip-name { position: absolute; right: 0; bottom: 0; left: 0; overflow: hidden; padding: 3px 5px; color: white; background: #183c2fd9; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+      .attachment-remove { position: absolute; top: 2px; right: 2px; min-width: 22px; min-height: 22px; border: 0; border-radius: 5px; color: white; background: #183c2fd9; font-size: 10px; font-weight: 700; }
+      .attachment-remove:hover { background: #913e2e; }
+      #message::placeholder, input::placeholder, textarea::placeholder { color: #65736b; opacity: 1; }
+      .composer-footer { min-height: 37px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px 9px; }
+      .composer-help { min-width: 0; color: #68766e; font-size: 12px; line-height: 1.3; }
+      #send { min-width: 70px; min-height: 31px; }
+      #send svg { width: 13px; height: 13px; }
+      #send[data-action="stop"] { min-width: 70px; color: #963c2c; background: #f4e7e0; }
+      #send[data-action="stop"]:hover:not(:disabled) { color: #7c2d20; background: #ead3c8; }
+      .canvas-panel { grid-column: 4; grid-row: 2; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--paper); }
+      .canvas-toolbar { min-height: var(--panel-header-height); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
+      .canvas-heading { display: flex; flex: 1 1 140px; align-items: center; gap: 9px; min-width: 0; }
+      .canvas-heading h2 { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+      .canvas-state { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+      .canvas-state .state-dot { width: 6px; height: 6px; }
+      .canvas-toolbar-actions { display: flex; flex-wrap: wrap; gap: 2px; margin-left: auto; }
+      .canvas-toolbar-actions .button { white-space: nowrap; }
+      .canvas-tabs { min-height: 38px; flex: 0 0 auto; display: flex; align-items: stretch; gap: 4px; overflow-x: auto; padding: 0; background: var(--paper); }
+      .canvas-tab { min-width: 0; max-width: 240px; flex: 0 0 auto; display: flex; align-items: stretch; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; }
+      .canvas-tab[data-active="true"] { border-bottom-color: var(--green); color: var(--green-deep); }
+      .canvas-tab-select { min-width: 0; overflow: hidden; border: 0; padding: 9px 8px; color: inherit; background: transparent; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+      .canvas-tab-close { width: 28px; flex: 0 0 auto; display: grid; place-items: center; border: 0; border-radius: 4px; color: var(--muted); background: transparent; }
+      .canvas-tab-close svg { width: 12px; height: 12px; }
+      .canvas-tab-close:hover { color: #953c2b; background: #f4e9e4; }
+      .canvas-host { position: relative; flex: 1; min-height: 180px; overflow: hidden; background: #fff; }
+      .canvas-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; overflow: auto; padding: 32px 24px; color: var(--ink); background: radial-gradient(ellipse at 50% 40%, #fffefa, var(--paper) 75%); }
+      .canvas-empty[hidden] { display: none; }
+      .canvas-start-heading { width: min(100%, 600px); text-align: left; }
+      .canvas-start-heading h3 { margin: 0; color: var(--green-deep); font: 500 34px/1.15 var(--display); letter-spacing: -.025em; }
+      .canvas-start-heading p { margin: 10px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+      .canvas-start-composer, .canvas-starters { width: min(100%, 600px); }
+      .canvas-start-composer #chat-form { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; }
+      .canvas-start-composer #chat-form:focus-within { border-color: var(--green); }
+      .canvas-start-composer .composer-topline { padding: 10px 14px 5px; }
+      .canvas-start-composer #message { min-height: 110px; padding: 13px 15px; font-size: 14px; line-height: 1.6; }
+      .canvas-start-composer .composer-footer { padding: 7px 14px 13px; }
+      .canvas-start-composer #status { margin: 9px 0 0; padding: 0; text-align: left; }
+      .canvas-starters > p { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .canvas-starter-list { display: flex; flex-wrap: wrap; gap: 8px; }
+      .canvas-starter { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; border: 0; border-radius: 6px; padding: 8px 11px; color: var(--green-deep); background: var(--green-wash); font-size: 12px; text-align: left; }
+      .canvas-starter:hover:not(:disabled) { background: #d9e5d9; }
+      .canvas-starter svg { width: 16px; height: 16px; flex: 0 0 auto; }
+      .canvas-empty[data-composing="false"] { gap: 20px; }
+      .canvas-empty[data-composing="false"] .canvas-start-heading h3 { font-size: 28px; }
+      .canvas-start-composer:empty { display: none; }
+      dialog { width: min(520px, calc(100% - 28px)); max-height: calc(100% - 28px); overflow: auto; border: 0; border-radius: 13px; padding: 0; color: var(--ink); background: var(--paper); box-shadow: 0 18px 60px #17251f38; }
+      dialog::backdrop { background: #17251f75; }
+      dialog.settings-dialog { width: min(980px, calc(100% - 28px)); height: min(720px, calc(100% - 28px)); max-height: calc(100% - 28px); overflow: hidden; }
+      dialog.settings-dialog[open] { display: flex; flex-direction: column; }
+      .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 17px; border-bottom: 1px solid #e0e5dd; }
+      .dialog-head h2 { font: 600 20px/1.1 var(--display); letter-spacing: -.02em; }
+      .dialog-description { max-width: 58ch; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .settings-dialog .dialog-head { flex: 0 0 auto; }
+      dialog.canvas-files-dialog { width: min(900px, calc(100% - 28px)); height: min(680px, calc(100% - 28px)); overflow: hidden; }
+      dialog.canvas-files-dialog[open] { display: flex; flex-direction: column; }
+      .canvas-files-dialog .dialog-head { flex: 0 0 auto; }
+      .canvas-files-summary { flex: 0 0 auto; margin: 0; padding: 10px 17px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .canvas-files-layout { display: grid; grid-template-columns: minmax(150px, 24%) minmax(0, 1fr); flex: 1 1 auto; min-height: 0; }
+      .canvas-files-list { min-height: 0; overflow: auto; padding: 7px; border-right: 1px solid var(--line); }
+      .canvas-file-row { display: flex; align-items: center; gap: 2px; }
+      .canvas-file-item { display: flex; flex-direction: column; gap: 3px; width: 100%; min-height: 44px; margin: 1px 0; border: 0; border-radius: 6px; padding: 8px; color: var(--ink); background: transparent; text-align: left; }
+      .canvas-file-row .canvas-file-item { flex: 1; min-width: 0; }
+      .canvas-file-item:hover:not(:disabled), .canvas-file-item[aria-current="true"] { color: var(--green-deep); background: var(--green-wash); }
+      .canvas-file-item span { overflow-wrap: anywhere; font: 12px/1.4 Consolas, monospace; }
+      .canvas-file-item small { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+      .canvas-file-view { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--paper-deep); }
+      .canvas-file-heading { flex: 0 0 auto; overflow-wrap: anywhere; margin: 0; padding: 11px 13px; border-bottom: 1px solid var(--line); color: var(--green-deep); font: 600 12px/1.4 Consolas, monospace; }
+      .canvas-file-source { flex: 1 1 auto; min-height: 0; min-width: 0; overflow: auto; margin: 0; padding: 13px; color: var(--ink); font: 12px/1.65 Consolas, monospace; tab-size: 2; white-space: pre; }
+      .canvas-file-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; padding: 9px 13px; border-top: 1px solid var(--line); }
+      .canvas-file-footer p { margin: 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+      .settings-shell { flex: 1; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 164px minmax(0, 1fr); }
+      .settings-nav { display: grid; align-content: start; gap: 4px; border-right: 1px solid #e0e5dd; padding: 12px 8px; background: #f3f3ed; }
+      .settings-tab { min-height: 36px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 7px; padding: 6px 9px; color: #526258; background: transparent; text-align: left; font-size: 12px; font-weight: 650; }
+      .settings-tab:hover { color: var(--green-deep); background: #e8eee6; }
+      .settings-tab[aria-selected="true"] { color: var(--green-deep); background: white; box-shadow: 0 1px 2px #20382918; }
+      .settings-tab svg { width: 16px; height: 16px; flex: 0 0 auto; }
+      .settings-section { min-width: 0; min-height: 0; overflow: auto; }
+      .settings-section-head { padding: 18px 19px 0; }
+      .settings-section-head h3 { margin: 0 0 5px; color: #2d4136; font: 600 18px/1.12 var(--display); }
+      .settings-section-head p { max-width: 62ch; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .settings-form { display: grid; gap: 13px; padding: 16px 17px 18px; }
+      .settings-block { margin: 20px 19px 0; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+      .settings-block:last-child { border-bottom: 0; }
+      .settings-block-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+      .settings-block-head h4, .endpoint-editor h4 { margin: 0; color: #2d4136; font-size: 13px; font-weight: 700; }
+      .settings-block p, .endpoint-detail, .model-catalog p { margin: 5px 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .agent-backends { margin: 15px 19px 0; border: 0; padding: 0; }
+      .agent-backend-option { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: start; gap: 11px; padding: 13px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+      .agent-backend-option input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--green); }
+      .agent-backend-option strong { display: block; color: var(--ink); font-size: 12px; font-weight: 650; }
+      .agent-backend-option small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+      .agent-backend-option:has(input:checked) strong { color: var(--green); }
+      .agent-backend-option:has(input:disabled) { cursor: default; }
+      .agent-detail { margin: 18px 19px; }
+      .agent-detail h4 { margin: 0 0 8px; color: var(--green-deep); font-size: 13px; }
+      .agent-detail p, .agent-control-status { color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .agent-detail p { margin: 7px 0; }
+      .agent-detail .button-row { flex-wrap: wrap; margin-top: 10px; }
+      .agent-connection-url, .agent-setup-command { display: block; max-width: 100%; overflow-wrap: anywhere; color: var(--ink); font: 12px/1.6 Consolas, monospace; }
+      .agent-setup-command { margin: 10px 0; padding: 10px; background: var(--paper-deep); white-space: pre-wrap; }
+      .agent-control-status { min-height: 18px; margin: 10px 19px 18px; }
+      .agent-control-status.error, #agent-codex-error { color: #9d3727; }
+      #agent-mcp-status[data-ready="true"] { color: var(--green); }
+      #agent-mcp-token-field { margin-top: 12px; }
+      #agent-mcp-token { font-family: Consolas, monospace; }
+      #agent-codex-login-panel { margin-top: 15px; border-top: 1px solid var(--line); padding-top: 12px; }
+      #agent-codex-user-code { display: block; margin: 10px 0; color: var(--green-deep); font: 600 24px/1.3 Consolas, monospace; letter-spacing: .04em; }
+      #agent-codex-signout-section { margin-top: 15px; border-top: 1px solid var(--line); padding-top: 12px; }
+      .composer-external { padding: 16px 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .composer-external strong { display: block; color: var(--green-deep); font-size: 13px; }
+      .composer-external p { margin: 5px 0 8px; }
+      .endpoint-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 13px 0; border-top: 1px solid #e1e6dc; }
+      .endpoint-info { flex: 1 1 220px; min-width: 0; }
+      .endpoint-name { color: var(--ink); font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
+      .endpoint-detail { overflow-wrap: anywhere; }
+      .endpoint-editor { margin-top: 12px; border-top: 1px solid var(--line); padding: 16px 0 0; }
+      .endpoint-form-grid { display: grid; grid-template-columns: 1fr 1fr; align-items: start; gap: 13px; }
+      .endpoint-form-grid .endpoint-url { grid-column: 1 / -1; }
+      .field-hint { color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.5; }
+      .settings-block .settings-form { padding: 10px 0 0; }
+      .model-catalog { padding: 10px 19px 20px; }
+      .model-group { margin-top: 14px; }
+      .model-group h4 { margin: 0; color: var(--green-deep); font-size: 13px; overflow-wrap: anywhere; }
+      .model-group-head { padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+      .model-catalog-list { padding: 0; margin: 0; list-style: none; }
+      .model-catalog-list li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #e8ebe3; font-size: 12px; overflow-wrap: anywhere; }
+      .model-enabled { display: grid; place-items: center; min-height: 30px; cursor: pointer; }
+      .model-enabled input { width: 16px; height: 16px; accent-color: var(--green); cursor: pointer; }
+      .model-info { min-width: 0; display: grid; gap: 4px; }
+      .model-name { color: var(--ink); font-weight: 600; }
+      .model-catalog-list li[data-enabled="false"] .model-name { color: var(--muted); font-weight: 400; }
+      .model-controls { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 143px; }
+      .model-capabilities { display: flex; align-items: center; gap: 6px; }
+      .model-capability { display: grid; place-items: center; width: 26px; height: 28px; color: var(--muted); }
+      .model-capability svg { width: 20px; height: 20px; }
+      .model-capability.verified { color: var(--green); }
+      .model-check { min-width: 58px; }
+      .model-list-head { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 12px; padding: 10px 0 4px; color: var(--muted); font-size: 11px; }
+      .model-list-head span:last-child { width: 143px; }
+      .model-unlisted { color: var(--muted); font-size: 11px; }
+      .model-selected { flex: 0 0 auto; color: var(--green); font-size: 11px; font-weight: 650; }
+      #connection-status, #model-catalog-status { min-height: 18px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      #connection-status.error, #model-catalog-status.error, .model-catalog .error { color: #9d3727; }
+      .model-catalog-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 16px 19px 0; }
+      .button.danger { color: #9d3727; }
+      label.field { display: grid; gap: 6px; color: #405249; font-size: 12px; line-height: 1.5; font-weight: 700; }
+      input[type=text], input[type=url], input[type=password], .field textarea { width: 100%; min-height: 36px; border: 1px solid #cbd3cb; border-radius: 7px; padding: 8px 10px; color: var(--ink); background: white; font-size: 12px; }
+      input[type=password] { font-family: "Segoe UI", sans-serif; }
+      .check { display: flex; align-items: center; gap: 7px; color: #46584e; font-size: 12px; }
+      .check input, .skill-enabled input { width: 15px; height: 15px; margin: 0; accent-color: var(--green); }
+      .settings-submit { justify-self: start; }
+      #settings-status, #skill-status { min-height: 18px; margin: 0; color: var(--muted); font-size: 12px; }
+      .new-canvas-actions { display: flex; justify-content: flex-end; gap: 8px; }
+      .new-canvas-kits { display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 13px; }
+      .new-canvas-kits-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #405249; font-size: 12px; }
+      .new-canvas-kits p, #new-canvas-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      #new-canvas-kits { color: var(--ink); }
+      #new-canvas-status:empty { display: none; }
+      .skills-layout { display: grid; grid-template-columns: minmax(260px, .9fr) minmax(300px, 1.1fr); min-height: 390px; }
+      .skills-inventory { border-right: 1px solid #e0e5dd; padding: 15px; }
+      .skills-inventory-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 11px; }
+      .skills-inventory-head strong { color: #405249; font-size: 12px; }
+      #skills-list { display: grid; gap: 6px; }
+      .skill-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 7px; min-height: 43px; border-bottom: 1px solid #e4e8e1; padding: 5px 0; }
+      .skill-row-name { overflow: hidden; color: #2f4338; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+      .skill-enabled { display: flex; align-items: center; }
+      .skills-empty { margin: 10px 0; color: #58675f; font-size: 12px; line-height: 1.5; }
+      .installed-skill-catalog { margin: 12px 17px 0; border: 1px solid #e0e5dd; border-radius: 8px; background: #f8f8f3; }
+      .installed-skill-catalog summary { min-height: 37px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; color: #405249; cursor: pointer; font-size: 12px; font-weight: 650; }
+      .installed-skill-catalog summary small { color: var(--muted); font-size: 11px; font-weight: 500; }
+      .installed-skills-list { max-height: 190px; overflow: auto; border-top: 1px solid #e0e5dd; padding: 2px 10px; }
+      .installed-skill-row { min-height: 36px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; border-bottom: 1px solid #e7eae4; }
+      .installed-skill-row:last-child { border-bottom: 0; }
+      .installed-skill-name { overflow: hidden; color: #34483c; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+      .skill-editor { display: grid; align-content: start; gap: 10px; padding: 15px 17px; }
+      .skill-editor h3 { margin: 0; font: 600 17px/1.1 var(--display); }
+      .skill-editor textarea { min-height: 175px; resize: vertical; font-family: "Segoe UI", sans-serif; line-height: 1.45; }
+      .skill-editor-footer { display: flex; justify-content: space-between; gap: 8px; }
+      .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+      .topbar-actions { margin-left: auto; flex: 0 0 auto; }
+      .project-switcher { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; max-width: 640px; }
+      .project-switcher > label { color: var(--muted); font-size: 11px; margin-right: 3px; }
+      #project-select { flex: 1; min-width: 0; max-width: 320px; min-height: 32px; border: 0; border-radius: 4px; padding: 4px 6px; color: var(--green-deep); background: transparent; font-size: 13px; font-weight: 600; text-overflow: ellipsis; }
+      #project-select:hover { background: var(--green-wash); }
+      .project-switcher .button { flex: 0 0 auto; white-space: nowrap; }
+      .themed-dropdown { display: inline-flex; min-width: 0; max-width: 100%; }
+      .themed-dropdown-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; min-height: 32px; border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; color: var(--ink); background: var(--paper); text-align: left; font-size: 12px; }
+      .themed-dropdown-trigger:hover:not(:disabled), .themed-dropdown-trigger[aria-expanded="true"] { border-color: #9eafa2; background: var(--green-wash); }
+      .themed-dropdown-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .themed-dropdown-trigger svg { flex: 0 0 auto; width: 13px; height: 13px; color: var(--muted); }
+      .themed-dropdown-project-select { flex: 1; max-width: 320px; }
+      .themed-dropdown-chat-model, .themed-dropdown-codex-model { flex: 1; }
+      .themed-dropdown-chat-model .themed-dropdown-trigger, .themed-dropdown-codex-model .themed-dropdown-trigger { min-height: 29px; border: 0; padding: 4px 6px; font-size: 11px; }
+      .themed-dropdown-prompt-template .themed-dropdown-trigger { min-height: 29px; border: 0; padding: 4px 6px; color: var(--muted); background: transparent; font-size: 11px; }
+      .themed-dropdown-prompt-template { max-width: 130px; }
+      .themed-dropdown-popup { position: fixed; z-index: 1000; display: flex; flex-direction: column; overflow: hidden; border-radius: 8px; padding: 5px; color: var(--ink); background: var(--paper); box-shadow: 0 8px 30px #173b2d38; }
+      .themed-dropdown-search { flex: 0 0 auto; width: 100%; min-height: 35px; border: 1px solid var(--line); border-radius: 5px; padding: 7px 9px; margin-bottom: 5px; color: var(--ink); background: var(--paper-deep); font-size: 12px; caret-color: var(--green); }
+      .themed-dropdown-options { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+      .themed-dropdown-group { padding: 10px 9px 5px; color: var(--muted); font-size: 11px; font-weight: 600; }
+      .themed-dropdown-option { min-height: 34px; border-radius: 4px; padding: 8px 9px; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; cursor: pointer; }
+      .themed-dropdown-option[aria-selected="true"] { color: var(--green); font-weight: 650; }
+      .themed-dropdown-option[data-active="true"] { color: var(--green-deep); background: var(--green-wash); }
+      .themed-dropdown-option[aria-disabled="true"] { color: var(--muted); cursor: default; }
+      .themed-dropdown-empty { margin: 10px 9px; color: var(--muted); font-size: 12px; }
+      .drawer-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+      .drawer-section-head h3, .drawer-section-head > label { margin: 0; color: var(--ink); font-size: 12px; font-weight: 650; }
+      .drawer-count { margin-left: 4px; color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+      .project-documents, .project-media-section { flex: 0 0 auto; }
+      .project-media-section + .project-media-section { border-top: 1px solid var(--line); }
+      .project-file-row { display: flex; align-items: center; gap: 2px; }
+      .project-file-row > .project-document, .project-file-row > .project-source-file { flex: 1; min-width: 0; }
+      .delete-control { display: inline-grid; place-items: center; flex: 0 0 auto; width: 30px; height: 32px; border: 0; border-radius: 5px; padding: 6px; color: var(--muted); background: transparent; }
+      .delete-control svg { display: block; width: 17px; height: 17px; }
+      .delete-control:hover:not(:disabled) { color: #943b2a; background: #f6e9e2; }
+      .delete-control:active:not(:disabled) { background: #eddbd1; }
+      .project-document { display: block; width: 100%; min-height: 42px; border: 0; border-radius: 4px; padding: 6px 8px; color: var(--ink); background: transparent; text-align: left; overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
+      .project-document small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; font-weight: 400; }
+      .project-document[aria-current="true"], .project-document:hover:not(:disabled), .project-source-file:hover:not(:disabled) { color: var(--green-deep); background: var(--green-wash); }
+      .project-files-details { margin: 14px 0 0; color: var(--muted); font-size: 12px; }
+      .project-files-details summary { cursor: pointer; padding: 5px 0; }
+      .project-kits { flex: 0 0 auto; border-top: 1px solid var(--line); }
+      .project-kit-option { display: flex; align-items: center; gap: 9px; min-height: 34px; color: var(--ink); font-size: 12px; cursor: pointer; }
+      .project-kit-option input { flex: 0 0 auto; width: 15px; height: 15px; margin: 0; accent-color: var(--green); }
+      .project-kit-option span { flex: 1; }
+      .project-kit-option small, #project-kit-status { color: var(--muted); font-size: 11px; line-height: 1.5; }
+      #project-kit-status { margin: 8px 0 0; }
+      #project-kit-status[data-error="true"] { color: #9d3727; }
+      .project-source-file { display: block; width: 100%; min-height: 30px; border: 0; border-radius: 4px; padding: 5px 8px; color: var(--muted); background: transparent; text-align: left; overflow-wrap: anywhere; font-size: 11px; }
+      .project-media-item { min-width: 0; }
+      .project-thumbnail { position: relative; display: grid; place-items: center; width: 100%; aspect-ratio: 1; overflow: hidden; border: 0; border-radius: 4px; padding: 0; color: var(--muted); background: var(--paper-deep); }
+      .project-thumbnail img { display: block; width: 100%; height: 100%; object-fit: cover; transition: opacity 120ms ease; }
+      .project-thumbnail:hover:not(:disabled) img { opacity: .85; }
+      .project-thumbnail-kind { position: absolute; right: 5px; bottom: 5px; display: inline-flex; align-items: center; gap: 4px; border-radius: 4px; padding: 3px 5px; color: var(--paper); background: #173b2de6; font-size: 10px; font-variant-numeric: tabular-nums; }
+      .project-thumbnail-kind svg { width: 12px; height: 12px; }
+      .project-thumbnail-placeholder { width: 28px; height: 28px; }
+      .media-job-preview { align-content: center; gap: 10px; padding: 14px; color: var(--green); }
+      .media-job-cog { position: absolute; top: 7px; right: 7px; width: 20px; height: 20px; animation: media-job-turn 3s linear infinite; }
+      @keyframes media-job-turn { to { transform: rotate(360deg); } }
+      .media-job-status { font-size: 12px; font-weight: 500; }
+      .media-job-detail, .media-job-error { margin: 4px 0; color: var(--muted); font-size: 11px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+      .media-job-error { color: var(--ink); }
+      .media-job-progress { width: 80%; height: 3px; border: 0; accent-color: var(--green); }
+      .media-job-progress::-webkit-progress-bar { background: var(--line); }
+      .media-job-progress::-webkit-progress-value { background: var(--green); }
+      .project-media-name { overflow: hidden; margin: 6px 0 2px; color: var(--ink); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+      .project-media-heading { display: flex; align-items: center; gap: 3px; margin-top: 3px; }
+      .project-media-heading .project-media-name { flex: 1; min-width: 0; margin: 0; }
+      .project-media-heading .delete-control { width: 28px; height: 28px; padding: 5px; }
+      .media-in-project { display: inline-flex; align-items: center; gap: 3px; min-height: 26px; color: var(--green); font-size: 11px; }
+      .media-in-project svg { order: -1; width: 13px; height: 13px; }
+      .project-media-actions { display: flex; flex-wrap: wrap; gap: 0 5px; }
+      .project-media-actions .button { min-height: 26px; padding: 3px 0; font-size: 11px; text-align: left; }
+      .project-media-actions .button:hover:not(:disabled) { color: var(--green); background: transparent; text-decoration: underline; text-underline-offset: 3px; }
+      .image-viewer { position: absolute; inset: 0; display: flex; flex-direction: column; min-height: 0; background: var(--paper-deep); }
+      .image-viewer-stage { display: flex; align-items: center; justify-content: center; flex: 1; min-height: 0; overflow: auto; padding: 16px; }
+      .image-viewer-stage img { display: block; width: 100%; height: 100%; object-fit: contain; }
+      .image-viewer-stage video { display: block; width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; background: var(--green-deep); }
+      .image-viewer-stage audio { width: min(100%, 440px); accent-color: var(--green); }
+      .image-viewer[data-zoom="actual"] .image-viewer-stage { display: block; }
+      .image-viewer[data-zoom="actual"] img { width: auto; height: auto; max-width: none; max-height: none; margin: auto; }
+      .image-viewer-footer { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; border-top: 1px solid var(--line); padding: 5px 12px; color: var(--muted); background: var(--paper); font-size: 12px; font-variant-numeric: tabular-nums; }
+      .canvas-tab:hover { background: var(--green-wash); }
+      .project-files-details summary:focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
+      @keyframes drawer-reveal { from { clip-path: inset(0 95% 0 0); } to { clip-path: inset(0); } }
+      @media (max-width: 850px) {
+        html, body { height: auto; min-height: 100%; overflow: auto; }
+        .studio { height: auto; min-height: 100vh; grid-template-columns: minmax(0, 1fr); grid-template-rows: 48px 42px auto minmax(62vh, 1fr); }
+        .topbar { grid-column: 1; gap: 12px; }
+        .activity-bar { grid-column: 1; grid-row: 2; flex-direction: row; padding: 2px 8px; border-right: 0; border-bottom: 1px solid var(--line); }
+        .activity-spacer { flex: 1; }
+        .activity-button[aria-pressed="true"]::after { right: auto; top: auto; bottom: -2px; left: calc(50% - 10px); width: 20px; height: 2px; }
+        .left-column { grid-column: 1; grid-row: 3; height: 580px; }
+        .workbench-splitter { display: none; }
+        .canvas-panel { grid-column: 1; grid-row: 4; min-height: 470px; }
+        .studio[data-sidebar="closed"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 42px minmax(0, 1fr); }
+        .studio[data-sidebar="closed"] .canvas-panel { grid-column: 1; grid-row: 3; min-height: 520px; }
+        .settings-shell { grid-template-columns: 140px minmax(0, 1fr); }
+      }
+      @media (max-width: 620px) {
+        .canvas-files-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: 120px minmax(0, 1fr); }
+        .canvas-files-list { border-right: 0; border-bottom: 1px solid var(--line); }
+        .studio { grid-template-rows: auto 40px auto minmax(58vh, 1fr); }
+        .topbar { flex-wrap: wrap; gap: 8px 12px; padding-block: 8px; }
+        .brand h1 { font-size: 17px; }
+        .project-switcher { order: 3; flex-basis: 100%; }
+        .project-switcher > label { display: none; }
+        .project-switcher .button { padding-inline: 5px; }
+        .topbar-actions { gap: 4px; }
+        .left-column { height: 560px; }
+        .canvas-panel { min-height: 390px; }
+        .canvas-toolbar { padding-inline: 9px; }
+        .canvas-toolbar-actions .button { padding-inline: 5px; font-size: 11px; }
+        .settings-shell { grid-template-columns: 1fr; }
+        .settings-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid var(--line); padding: 7px; }
+        .endpoint-form-grid { grid-template-columns: 1fr; }
+        .model-catalog-list li { grid-template-columns: 24px minmax(0, 1fr); gap: 7px; }
+        .model-controls { grid-column: 2; justify-content: flex-start; }
+        .model-list-head { display: none; }
+        .settings-tab { justify-content: center; gap: 5px; padding-inline: 4px; font-size: 11px; }
+        .settings-section { max-height: calc(100vh - 210px); }
+        .skills-layout { grid-template-columns: 1fr; }
+        .skills-inventory { border-right: 0; border-bottom: 1px solid var(--line); }
+        .skill-editor { padding-top: 13px; }
+        .canvas-empty { justify-content: flex-start; padding: 36px 18px; }
+        .canvas-start-heading h3 { font-size: 28px; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="studio">
+      <header class="topbar">
+        <div class="brand"><div class="brand-mark" aria-hidden="true">E</div><h1>Easel Studio</h1></div>
+        <div class="project-switcher"><label for="project-select">Project</label><select id="project-select" aria-label="Current project"><option value="">Select a project</option></select><button id="project-rename" class="button quiet small" type="button" disabled>Rename</button><button id="project-delete" class="delete-control" type="button" aria-label="Delete project" aria-haspopup="dialog" title="Delete project" disabled><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 5.5h13M7.5 5.5v-2h5v2M5 5.5l.8 11h8.4l.8-11M8 8.5v5M12 8.5v5"/></svg></button><button id="project-new" class="button quiet small" type="button">New project</button></div>
+        <div class="topbar-actions">
+          <button id="connections-open" class="button connection-button" type="button"><span id="connection-dot" class="connection-dot needs-setup" aria-hidden="true"></span>Credentials</button>
+        </div>
+      </header>
+      <nav class="activity-bar" aria-label="Activity bar">
+        <button id="nav-chat" class="activity-button" type="button" aria-label="Show conversation" title="Conversation" aria-pressed="true" aria-controls="conversation-panel">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3v-15a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h7"/></svg>
+          <span id="chat-unread" class="chat-unread" aria-hidden="true" hidden></span>
+        </button>
+        <button id="chat-history-open" class="activity-button" type="button" aria-label="Show chat history" title="Chat history" aria-pressed="false" aria-expanded="false" aria-controls="chat-history-panel">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 10a8.5 8.5 0 1 1 1 7M3.5 5v5H8"/><path d="M12 7v5l3 2"/></svg>
+        </button>
+        <button id="nav-explorer" class="activity-button" type="button" aria-label="Show project files" title="Project files" aria-pressed="false" aria-expanded="false" aria-controls="project-drawer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10.8a1.2 1.2 0 0 1-1.2 1.2H4.7a1.2 1.2 0 0 1-1.2-1.2V6.5Z"/><path d="M3.5 10.5h17"/></svg>
+        </button>
+        <button id="nav-media" class="activity-button" type="button" aria-label="Show media" title="Media" aria-pressed="false" aria-expanded="false" aria-controls="media-drawer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3.5h15.5v15M3.5 6.5h14v14h-14Z"/><path d="m4 17 4.5-4.5 3.5 3.5 2-2 3.5 3.5"/><circle cx="8" cy="10.5" r="1.3"/></svg>
+          <span id="media-unread" class="chat-unread" aria-hidden="true" hidden></span>
+        </button>
+        <span class="activity-spacer"></span>
+        <button id="settings-open" class="activity-button" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 3-.5 2.4-1.7 1-2.3-.8-2.5 4.3 1.8 1.6v2L2.5 15 5 19.3l2.3-.8 1.7 1 .5 2.5h5l.5-2.5 1.7-1 2.3.8 2.5-4.3-1.8-1.5v-2l1.8-1.6L19 5.6l-2.3.8-1.7-1-.5-2.4Z"/><circle cx="12" cy="12.5" r="3.2"/></svg>
+        </button>
+      </nav>
+      <section class="left-column" aria-label="Chat, project files, and media">
+        <section id="project-drawer" class="panel library" aria-labelledby="library-title" hidden>
+          <div class="section-head"><h2 id="library-title">Project files</h2><button id="library-collapse" class="fold-button" type="button" aria-label="Close project files" title="Close drawer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+          <div id="library-panel-content" class="library-panel-content">
+            <div class="library-content project-documents" id="canvases-content"><div class="drawer-section-head"><h3>Canvases</h3><button id="drawer-new-document" class="button quiet small" type="button">New HTML</button></div><div id="canvases-list" class="canvas-list" aria-label="Project HTML documents"></div><p id="canvases-empty" class="empty-library">Select a project to browse its documents.</p><details class="project-files-details"><summary>Source files</summary><div id="project-source-files"></div></details></div>
+            <section class="library-content project-kits" aria-labelledby="project-kits-title"><div class="drawer-section-head"><h3 id="project-kits-title">Canvas kits</h3></div><div id="project-kit-list" aria-label="Kits shared by project canvases"></div><p id="project-kit-status" role="status" aria-live="polite">Select a project to choose its kits.</p></section>
+          </div>
+        </section>
+        <section id="media-drawer" class="panel media-drawer" aria-labelledby="media-drawer-title" hidden>
+          <div class="section-head"><h2 id="media-drawer-title">Media</h2><button id="media-collapse" class="fold-button" type="button" aria-label="Close media" title="Close drawer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+          <div class="library-panel-content">
+            <section class="library-content project-media-section" id="media-content" aria-labelledby="project-media-title"><div class="drawer-section-head"><h3 id="project-media-title">In this project <span id="project-image-count" class="drawer-count">0</span></h3></div><div id="media-list" class="media-grid" aria-label="Media in this project"></div><p id="media-empty" class="empty-library">Generated media appears here automatically.</p></section>
+            <section class="library-content project-media-section" aria-labelledby="all-media-title"><div class="drawer-section-head"><h3 id="all-media-title">All media <span id="all-media-count" class="drawer-count">0</span></h3></div><div id="all-media-list" class="media-grid" aria-label="All saved media"></div><p id="all-media-empty" class="empty-library">Generated media and captures will be saved here, ready to use in any project.</p></section>
+          </div>
+        </section>
+        <section id="chat-history-panel" class="panel chat-history" aria-labelledby="chat-history-title" hidden>
+          <div class="section-head"><h2 id="chat-history-title">History</h2><button id="history-new-chat" class="button quiet small" type="button">New chat</button></div>
+          <p id="chat-history-status" role="status" aria-live="polite"></p><div id="chat-history-list" class="chat-history-list" aria-label="Saved conversations"></div>
+          <p class="chat-history-note">Chats are saved on this device. Opening a chat leaves your current project in place.</p>
+        </section>
+        <section id="conversation-panel" class="panel conversation" aria-label="Conversation">
+          <div class="conversation-head">
+            <div class="conversation-title"><h2>Chat</h2></div>
+            <div class="conversation-actions"><button id="new-chat" class="button quiet small" type="button" title="Start a new chat">New chat</button><button id="chat-hide" class="fold-button" type="button" aria-label="Hide conversation" title="Hide conversation"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+          </div>
+          <div id="conversation-content" class="conversation-content">
+          <div id="messages" aria-live="polite">
+            <article class="message assistant message-welcome">
+              <div class="message-author">EASEL</div>
+              <div class="welcome-copy"><strong>What are we making?</strong><p>Describe an image to begin, or ask for help shaping a visual direction. Add a skill when you want a reusable creative recipe.</p></div>
+              <div class="prompt-suggestions" aria-label="Prompt starters">
+                <button class="prompt-suggestion" type="button" data-prompt="A still life of citrus and glass, soft morning light, editorial photography">Make a still life</button>
+                <button class="prompt-suggestion" type="button" data-prompt="Create a visual direction for a warm, tactile product launch campaign">Shape a campaign</button>
+              </div>
+            </article>
+          </div>
+          <div id="agent-activity" class="agent-activity" role="status" aria-live="polite" hidden><span class="activity-pulse" aria-hidden="true"></span><span id="agent-activity-label">Preparing your image…</span></div>
+          <p id="status" role="status" aria-live="polite"></p>
+          <form id="chat-form">
+            <div id="composer-external" class="composer-external" hidden><strong>Chat in your connected agent</strong><p>Your external MCP client controls Easel. Keep this window open; your draft and chat history stay here.</p><button id="composer-external-settings" class="button quiet small" type="button">Connection details</button></div>
+            <div class="composer">
+              <div class="composer-topline">
+                <div class="composer-options">
+                  <label id="builtin-model-picker" class="model-picker" for="chat-model">Model<select id="chat-model" aria-describedby="status" disabled><option value="">Loading models...</option></select></label>
+                  <label id="codex-model-picker" class="model-picker" for="codex-model" hidden>Codex<select id="codex-model" aria-label="Codex model" aria-describedby="status" disabled><option value="">Sign in to choose a model</option></select></label>
+                </div>
+                <button id="attach-media" class="button quiet small" type="button" aria-label="Attach image, audio, or video" title="Attach image, audio, or video"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 8.5 4.1-4.1a2.1 2.1 0 0 1 3 3l-5.4 5.4a3.2 3.2 0 0 1-4.5-4.5l5.4-5.4"/></svg>Attach</button>
+                <input id="media-files" class="sr-only" type="file" multiple accept="image/png,image/jpeg,image/webp,audio/mpeg,audio/wav,video/mp4,video/webm" />
+                <select id="prompt-template" aria-label="Insert a prompt template"><option value="">Templates</option><option value="image">Generate an image</option><option value="video">Generate a video</option><option value="canvas">Interactive canvas</option><option value="audio">Audio sketch</option><option value="storyboard">Video storyboard</option></select>
+                <button id="composer-skills" class="button quiet small" type="button" aria-haspopup="dialog">Use skills</button>
+              </div>
+              <div id="attachment-strip" class="attachment-strip" aria-label="Pending attachments" hidden></div>
+              <textarea id="message" name="message" placeholder="Describe what you want to make or change…" aria-label="Message to Easel"></textarea>
+              <div class="composer-footer">
+                <span id="composer-help" class="composer-help">Enter to send · Ctrl+Enter for a new line</span>
+                <button id="send" class="button accent" type="submit" disabled><span id="send-label">Send</span><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h9M8 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              </div>
+            </div>
+          </form>
+          </div>
+        </section>
+      </section>
+      <div id="workbench-splitter" class="workbench-splitter" role="separator" aria-label="Resize sidebar and canvas panels" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="55" aria-valuenow="36" tabindex="0"></div>
+      <section class="panel canvas-panel" aria-label="HTML canvas workspace">
+        <div id="open-canvas-tabs" class="canvas-tabs" role="group" aria-label="Open project files and images" hidden></div>
+        <div class="canvas-toolbar">
+          <div class="canvas-heading"><h2 id="canvas-title">Canvas</h2><span class="canvas-state"><span id="canvas-state-dot" class="state-dot" aria-hidden="true"></span><span id="canvas-state">Ready</span></span></div>
+          <div class="canvas-toolbar-actions"><button id="new-canvas-open" class="button quiet small" type="button">New HTML</button><button id="canvas-files-open" class="button quiet small" type="button" aria-haspopup="dialog" disabled>Files</button><button id="canvas-devices-open" class="button quiet small" type="button" title="Camera and microphone access" disabled>Devices</button><button id="canvas-undo" class="button quiet small" type="button" disabled>Undo</button><button id="export-current" class="button quiet small" type="button" disabled>Export project</button></div>
+        </div>
+        <div id="canvas-host" class="canvas-host">
+          <div id="canvas-empty" class="canvas-empty" aria-labelledby="canvas-start-title">
+            <div class="canvas-start-heading"><h3 id="canvas-start-title">Your next idea goes here</h3><p>Describe what you want to make. We can shape it together.</p></div>
+            <div id="canvas-start-composer" class="canvas-start-composer"></div>
+            <div class="canvas-starters"><p>Don't know where to start? Try one of these.</p><div class="canvas-starter-list" aria-label="Starter templates">
+              <button class="canvas-starter" type="button" data-starter="ink"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 14c3-13 6 13 9-7s3 9 5-1"/></svg>Generative ink</button>
+              <button class="canvas-starter" type="button" data-starter="audio"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 8v4M6.5 5v10M10 3v14M13.5 6v8M17 8v4"/></svg>A playable soundscape</button>
+              <button class="canvas-starter" type="button" data-starter="image"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="1"/><path d="m4 14 4-5 4 4 2-2 3 3"/><circle cx="13.5" cy="6.5" r="1"/></svg>An image study</button>
+            </div></div>
+          </div>
+          <section id="image-viewer" class="image-viewer" aria-label="Full media preview" data-zoom="fit" hidden><div class="image-viewer-stage"><img id="image-viewer-image" alt="" /><video id="media-viewer-video" controls preload="metadata" playsinline hidden></video><audio id="media-viewer-audio" controls preload="metadata" hidden></audio></div><div class="image-viewer-footer"><span id="image-viewer-info" role="status"></span><div class="button-row"><button id="image-size-toggle" class="button quiet small" type="button">Actual size</button><button id="image-use-chat" class="button quiet small" type="button">Use in chat</button></div></div></section>
+        </div>
+      </section>
+    </main>
+    <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+      <div class="dialog-head"><div><h2 id="settings-title">Settings</h2><p class="dialog-description">Manage your agent, credentials, models, creative skills, and canvas kits.</p></div><button id="settings-close" class="button outline small" type="button">Done</button></div>
+      <div class="settings-shell">
+        <nav class="settings-nav" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
+          <button id="settings-tab-agent" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-agent"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="14" height="10" rx="3"/><path d="M10 3v3M7 10v1m6-1v1M7 14h6M1 10v3m18-3v3"/></svg>Agent</button>
+          <button id="settings-tab-credentials" class="settings-tab" type="button" role="tab" aria-selected="true" aria-controls="settings-credentials"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6.5" cy="7" r="3.5"/><path d="m9 9.5 7 7m-3-3 2-2m-4 0 2-2"/></svg>Credentials</button>
+          <button id="settings-tab-models" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-models"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="4.5" width="11" height="11" rx="2"/><path d="M7.5 1.8v2.7m5-2.7v2.7m-5 11v2.7m5-2.7v2.7M1.8 7.5h2.7m-2.7 5h2.7m11-5h2.7m-2.7 5h2.7"/><rect x="8" y="8" width="4" height="4" rx=".5"/></svg>Models</button>
+          <button id="settings-tab-skills" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-skills"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 2.8 12 7l4.6.7-3.3 3.2.8 4.6-4.1-2.2-4.1 2.2.8-4.6-3.3-3.2L8 7l2-4.2Z"/></svg>Skills <span id="skill-count" class="active-count" aria-label="0 active skills">0</span></button>
+          <button id="settings-tab-kits" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-kits"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 5-4 5 4 5M13 5l4 5-4 5M11.5 3l-3 14"/></svg>Kits</button>
+        </nav>
+        <section id="settings-agent" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-agent" hidden>
+          <div class="settings-section-head"><h3>Choose your agent</h3><p>Choose where conversations run. Your projects, media, skills, and canvas kits stay in Easel.</p></div>
+          <fieldset class="agent-backends"><legend class="sr-only">Agent backend</legend>
+            <label class="agent-backend-option" for="agent-backend-builtin"><input id="agent-backend-builtin" type="radio" name="agent-backend" value="builtin" checked disabled /><span><strong>Built-in</strong><small>Chat in Easel using a saved API endpoint and Agent model.</small></span></label>
+            <label class="agent-backend-option" for="agent-backend-external"><input id="agent-backend-external" type="radio" name="agent-backend" value="external" disabled /><span><strong>External MCP</strong><small>Chat in desktop Codex or another MCP client and control the open Easel app.</small></span></label>
+            <label class="agent-backend-option" for="agent-backend-codex"><input id="agent-backend-codex" type="radio" name="agent-backend" value="codex" disabled /><span><strong>Codex</strong><small>Chat inside Easel through the Codex runtime installed on this device.</small></span></label>
+          </fieldset>
+          <div id="agent-backend-lock" class="agent-detail" hidden><p>Agent selection is locked while a request is running.</p></div>
+          <div id="agent-builtin-panel" class="agent-detail"><h4>API agent</h4><p>Add an endpoint under Credentials, enable an Agent model under Models, then choose it in the chat.</p></div>
+          <div id="agent-external-panel" class="agent-detail" hidden>
+            <h4>Connect to this window</h4><p>Keep Easel open while your external agent works. The connection token lets that client control your projects and canvases.</p>
+            <code id="agent-mcp-url" class="agent-connection-url">Connection unavailable</code><p id="agent-mcp-status" role="status" aria-live="polite">Waiting for an external client</p>
+            <p>Set the token as <code>EASEL_MCP_TOKEN</code> in your controller environment, then add the connection:</p><pre id="agent-mcp-command" class="agent-setup-command"></pre>
+            <div class="button-row"><button id="agent-mcp-reveal" class="button outline small" type="button" aria-expanded="false" aria-controls="agent-mcp-token-field">Reveal token</button><button id="agent-mcp-copy" class="button quiet small" type="button">Copy token</button><button id="agent-mcp-disconnect" class="button quiet small" type="button" disabled>Disconnect controller</button></div>
+            <label id="agent-mcp-token-field" class="field" for="agent-mcp-token" hidden>Connection token<input id="agent-mcp-token" type="text" readonly autocomplete="off" spellcheck="false" /></label>
+          </div>
+          <div id="agent-codex-panel" class="agent-detail" hidden>
+            <h4 id="agent-codex-runtime">Checking Codex runtime...</h4><p id="agent-codex-install" hidden>Install the official Codex CLI, then reopen Easel to connect it.</p><p id="agent-codex-account">Sign in to use Codex inside Easel.</p>
+            <div id="agent-codex-login-actions" class="button-row"><button id="agent-codex-browser" class="button primary" type="button">Sign in with browser</button><button id="agent-codex-device" class="button outline" type="button">Use a device code</button></div>
+            <div id="agent-codex-login-panel" hidden><p id="agent-codex-login-description"></p><code id="agent-codex-verification-url" class="agent-connection-url"></code><code id="agent-codex-user-code" hidden></code><div class="button-row"><button id="agent-codex-open-login" class="button outline small" type="button">Open sign-in page</button><button id="agent-codex-cancel" class="button quiet small" type="button">Cancel sign-in</button></div></div>
+            <div id="agent-codex-signout-section" hidden><p>This account is shared with other Codex clients on this device. Signing out here signs them out too.</p><button id="agent-codex-signout" class="button outline small" type="button">Sign out of Codex</button></div>
+            <p id="agent-codex-error" role="status" aria-live="polite"></p>
+          </div>
+          <p id="agent-control-status" class="agent-control-status" role="status" aria-live="polite"></p>
+        </section>
+        <section id="settings-credentials" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-credentials">
+          <div class="settings-section-head"><h3>Credentials</h3><p>Save an endpoint and its API key. Each endpoint can provide both Agent and Media models. Keys are encrypted on this device.</p></div>
+          <div class="settings-block">
+            <div class="settings-block-head"><h4>Saved endpoints</h4><button id="connection-add" class="button outline small" type="button" aria-expanded="false" aria-controls="connection-form">Add endpoint</button></div>
+            <div id="connection-list" aria-label="Saved model endpoints"></div>
+            <p id="connections-empty" hidden>No endpoints yet. Add one to discover its models.</p>
+            <form id="connection-form" class="settings-form endpoint-editor" hidden>
+              <h4 id="connection-editor-title">Add endpoint</h4>
+              <div class="endpoint-form-grid">
+                <label class="field endpoint-url" for="connection-url">Endpoint URL<input id="connection-url" type="url" required maxlength="2048" placeholder="https://api.example.com/v1" /><span class="field-hint">Use the API base URL. Models are discovered when you save.</span></label>
+                <label class="field" for="connection-name"><span>Name <span class="field-hint">(optional)</span></span><input id="connection-name" type="text" maxlength="80" placeholder="Uses the endpoint hostname" /></label>
+                <label class="field" for="connection-key">API key<input id="connection-key" type="password" maxlength="4096" autocomplete="new-password" placeholder="Optional for local endpoints" /><span id="connection-key-hint" class="field-hint">Leave blank if this endpoint needs no key.</span></label>
+              </div>
+              <label id="connection-clear-wrap" class="check" hidden><input id="connection-clear-key" type="checkbox" /> Remove saved key</label>
+              <div class="button-row"><button id="connection-save" class="button primary" type="submit">Save endpoint</button><button id="connection-cancel" class="button quiet" type="button">Cancel</button></div>
+            </form>
+            <p id="connection-status" role="status" aria-live="polite"></p>
+          </div>
+        </section>
+        <section id="settings-models" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-models" hidden>
+          <div class="settings-section-head"><h3>Available models</h3><p>Enable the models you want to use. Icons show automatic categories: Agent for chat and tools, Media for image generation. Green means confirmed; muted means unverified.</p><p>Check sends a tool call request and generates one test image when supported. Your endpoint may charge for these requests.</p></div>
+          <div class="model-catalog-actions"><button id="models-refresh" class="button outline small" type="button">Refresh models</button><p id="model-catalog-status" role="status" aria-live="polite"></p></div>
+          <div id="model-catalog" class="model-catalog"></div>
+        </section>
+        <section id="settings-skills" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-skills" hidden>
+          <div class="settings-section-head"><h3>Creative skills</h3><p>Reusable instructions stay on this device. Enabled skills accompany your next request.</p></div>
+          <details class="installed-skill-catalog">
+            <summary><span>Installed skill packs</span><small id="installed-skill-count">Loading…</small></summary>
+            <div id="installed-skills-list" class="installed-skills-list"><p class="skills-empty">Reading skills installed with this client.</p></div>
+          </details>
+          <div class="skills-layout">
+            <section class="skills-inventory" aria-label="Saved skills">
+              <div class="skills-inventory-head"><strong>Your skills</strong><div class="button-row"><button id="skill-import-open" class="button outline small" type="button">Import .md</button><button id="skill-new" class="button primary small" type="button">New skill</button></div></div>
+              <input id="skill-import" class="sr-only" type="file" accept=".md,.txt,text/markdown,text/plain" />
+              <div id="skills-list"></div>
+              <p id="skills-empty" class="skills-empty">No skills yet. Import a Codex SKILL.md or write a small creative recipe.</p>
+            </section>
+            <form id="skill-form" class="skill-editor">
+              <h3 id="skill-editor-title">Add a skill</h3>
+              <label class="field" for="skill-name">Name<input id="skill-name" type="text" maxlength="80" autocomplete="off" placeholder="Image art direction" required /></label>
+            <label class="field" for="skill-instructions">Instructions<textarea id="skill-instructions" maxlength="32000" placeholder="Describe the reusable approach Easel should follow…" required></textarea></label>
+              <p id="skill-status" role="status" aria-live="polite"></p>
+              <div class="skill-editor-footer"><button id="skill-cancel" class="button quiet small" type="button">Clear</button><button id="skill-save" class="button primary" type="submit">Save skill</button></div>
+            </form>
+          </div>
+        </section>
+        <section id="settings-kits" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-kits" hidden>
+          <div class="settings-section-head"><h3>Installed canvas kits</h3><p>These offline frameworks are available on this device. Choose the kits for a project under Project files > Canvas kits; its HTML canvases share that selection.</p></div>
+          <div id="installed-kit-list" class="kit-list"></div>
+          <p id="kit-status" class="kit-status" role="status" aria-live="polite">Kits are embedded in saved HTML and remain available offline.</p>
+        </section>
+      </div>
+    </dialog>
+    <dialog id="new-canvas-dialog" aria-labelledby="new-canvas-title">
+      <div class="dialog-head"><h2 id="new-canvas-title">Create canvas</h2><button id="new-canvas-close" class="button outline small" type="button">Cancel</button></div>
+      <form id="new-canvas-form" class="settings-form">
+        <label class="field" for="new-canvas-name"><span id="new-item-name-label">Project name</span><input id="new-canvas-name" name="title" type="text" maxlength="120" autocomplete="off" placeholder="e.g. Spring campaign" required /></label>
+        <div class="new-canvas-kits">
+          <div class="new-canvas-kits-head"><strong>Project kits</strong></div>
+          <p id="new-canvas-kits"></p>
+          <p id="new-canvas-audio-hint"></p>
+          <p>Choose kits under Project files > Canvas kits. Every HTML canvas in the project shares them.</p>
+        </div>
+        <p id="new-canvas-status" role="status" aria-live="polite"></p>
+        <div class="new-canvas-actions"><button id="new-canvas-submit" class="button primary" type="submit">Create empty canvas</button></div>
+      </form>
+    </dialog>
+    <dialog id="canvas-files-dialog" class="canvas-files-dialog" aria-labelledby="canvas-files-title">
+      <div class="dialog-head"><div><h2 id="canvas-files-title">Project files</h2><p id="canvas-files-description" class="dialog-description">Browse the saved source. Edits are made through chat.</p></div><button id="canvas-files-close" class="button outline small" type="button">Done</button></div>
+      <p id="canvas-files-summary" class="canvas-files-summary" role="status" aria-live="polite">Loading files...</p>
+      <div class="canvas-files-layout">
+        <nav id="canvas-files-list" class="canvas-files-list" aria-label="Canvas source files"></nav>
+        <section class="canvas-file-view" aria-labelledby="canvas-file-path">
+          <h3 id="canvas-file-path" class="canvas-file-heading">Select a file</h3>
+          <pre id="canvas-file-source" class="canvas-file-source" tabindex="0" aria-label="Saved file contents"></pre>
+          <div class="canvas-file-footer"><p id="canvas-file-status" role="status" aria-live="polite"></p><div class="button-row"><button id="canvas-file-previous" class="button outline small" type="button" disabled>Previous</button><button id="canvas-file-next" class="button outline small" type="button" disabled>Next</button></div></div>
+        </section>
+      </div>
+    </dialog>
+    <script src="../node_modules/markdown-it/dist/browser/markdown-it.umd.min.js"></script>
+    <script src="./connection-settings.js"></script>
+    <script src="./project-workspace.js"></script>
+    <script src="./themed-dropdown.js"></script>
+    <script src="./agent-control-ui.js"></script>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

@@ -1,0 +1,106 @@
+name: Desktop Builds
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: package (${{ matrix.os }})
+    if: github.event_name != 'release' || startsWith(github.ref, 'refs/tags/v')
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win
+          - os: macos-latest
+            target: mac
+          - os: ubuntu-latest
+            target: linux
+    runs-on: ${{ matrix.os }}
+    env:
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      - name: Install Electron binary
+        run: node node_modules/electron/install.js
+        env:
+          electron_config_cache: ${{ github.workspace }}/.cache/electron
+      - name: Verify release tag
+        run: npm run check:release-version
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+      - name: Set prerelease package version
+        if: github.ref_type == 'tag' && contains(github.ref_name, '-')
+        shell: bash
+        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
+      - name: Build MCP package
+        run: npm run build:media-mcp
+      - name: Verify Electron download marker
+        shell: bash
+        run: test -f node_modules/electron/dist/version
+      - name: Package desktop app
+        run: npm run dist:${{ matrix.target }}
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+      - name: Package headless MCP server
+        shell: bash
+        run: tar -czf release/easel-media-mcp-${{ matrix.target }}.tar.gz -C packages/media-mcp dist package.json README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: easel-${{ matrix.target }}-${{ github.run_id }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.deb
+            release/easel-media-mcp-*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: package
+    if: (github.event_name == 'push' || github.event_name == 'release') && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: easel-*-${{ github.run_id }}
+          merge-multiple: true
+          path: assets
+      - name: Publish installable packages
+        env:
+          ASSET_DIR: assets
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: bash scripts/publish-release.sh
