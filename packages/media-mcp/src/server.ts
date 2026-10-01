@@ -210,7 +210,7 @@ function videoToolResult(result: VideoResult, modelId?: string, mediaType: 'imag
 }
 
 export function createMediaServer(dependencies: { easel?: EaselClient; canvas?: CanvasRenderer } = {}): McpServer {
-  const server = new McpServer({ name: 'easel-media', version: '0.0.1' });
+  const server = new McpServer({ name: 'easel-media', version: '0.0.2' });
   registerMediaTools(server, dependencies);
   return server;
 }

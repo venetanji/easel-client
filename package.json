@@ -1,6 +1,6 @@
 {
   "name": "easel-client",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Electron client for venetanji/easel",
   "main": "src/main.js",
   "workspaces": [
@@ -22,7 +22,7 @@
     "hono": "4.13.9"
   },
   "dependencies": {
-    "@easel/media-mcp": "0.0.1",
+    "@easel/media-mcp": "0.0.2",
     "@modelcontextprotocol/sdk": "1.30.0",
     "acorn": "^8.18.0",
     "markdown-it": "^15.0.2",
