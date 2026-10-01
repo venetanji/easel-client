@@ -11,3 +11,6 @@ python scripts/build-app-icons.py path/to/source.png
 ```
 
 Omit the source argument to use the checked-in `build/icon.png`.
+
+The app header uses an inline SVG easel mark in `src/index.html`, matching the
+toolbar's 20-unit grid, 1.5-unit stroke, rounded ends, and current text color.

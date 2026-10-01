@@ -39,7 +39,7 @@
       .studio { --left-column-width: 360px; width: 100%; height: 100%; min-width: 0; min-height: 0; display: grid; grid-template-columns: 44px minmax(280px, var(--left-column-width)) 1px minmax(300px, 1fr); grid-template-rows: 48px minmax(0, 1fr); }
       .topbar { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; gap: 20px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--paper); }
       .brand { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 0 0 auto; }
-      .brand-mark { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 8px 8px 8px 2px; background: var(--green); color: var(--paper); font: 600 19px/1 var(--display); }
+      .brand-mark { width: 26px; height: 26px; display: block; flex-shrink: 0; color: var(--green); }
       .brand h1 { margin: 0; font: 600 19px/1.05 var(--display); letter-spacing: -.025em; }
       .topbar-actions, .button-row { display: flex; align-items: center; gap: 6px; }
       .button { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; border-radius: 8px; padding: 7px 11px; color: var(--ink); background: transparent; font-size: 12px; font-weight: 600; transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease; }
@@ -530,7 +530,7 @@
   <body>
     <main class="studio">
       <header class="topbar">
-        <div class="brand"><div class="brand-mark" aria-hidden="true">E</div><h1>Easel Studio</h1></div>
+        <div class="brand"><svg class="brand-mark" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M10 2v2M5 4h10v8H5ZM4 12h12M7 12l-3 6M13 12l3 6M10 12v4"/></svg><h1>Easel Studio</h1></div>
         <div class="project-switcher"><label for="project-select">Project</label><select id="project-select" aria-label="Current project"><option value="">Select a project</option></select><button id="project-rename" class="button quiet small" type="button" disabled>Rename</button><button id="project-delete" class="delete-control" type="button" aria-label="Delete project" aria-haspopup="dialog" title="Delete project" disabled><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 5.5h13M7.5 5.5v-2h5v2M5 5.5l.8 11h8.4l.8-11M8 8.5v5M12 8.5v5"/></svg></button><button id="project-new" class="button quiet small" type="button">New project</button></div>
         <div class="topbar-actions">
           <button id="connections-open" class="button connection-button" type="button"><span id="connection-dot" class="connection-dot needs-setup" aria-hidden="true"></span>Credentials</button>
