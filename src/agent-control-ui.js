@@ -204,7 +204,7 @@ function createAgentControlUi({ document, client, copyText, onStateChange, onOpe
 
   render();
   return {
-    applyState, getState: () => state, isReady, isExternal,
+    applyState, getState: () => state, isReady, isExternal, isBusy,
     setBusy(value) { if (localBusy !== Boolean(value)) { localBusy = Boolean(value); render(); } },
     loadError(error) { message(error?.message || 'Could not load agent settings. Reopen Easel to try again.', true); },
     clearToken: forgetToken,

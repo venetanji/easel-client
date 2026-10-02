@@ -291,6 +291,18 @@
       .canvas-file-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; padding: 9px 13px; border-top: 1px solid var(--line); }
       .canvas-file-footer p { margin: 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
       .settings-shell { flex: 1; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 164px minmax(0, 1fr); }
+      .settings-dialog[data-setup="true"] .settings-shell { grid-template-columns: minmax(0, 1fr); }
+      .settings-dialog[data-setup="true"] .settings-nav { display: none; }
+      .setup-header { padding: 16px 24px 0; }
+      .setup-header p { max-width: 62ch; color: var(--muted); }
+      .setup-steps { display: flex; gap: 22px; list-style: none; padding: 0; margin: 18px 0 0; border-bottom: 1px solid var(--line); }
+      .setup-steps li { padding: 0 0 10px; color: var(--muted); }
+      .setup-steps li[aria-current="step"] { color: var(--green-deep); border-bottom: 2px solid var(--green); font-weight: 600; }
+      .setup-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 24px; border-top: 1px solid var(--line); }
+      .setup-footer #setup-status { flex: 1 1 180px; font-size: 12px; }
+      .setup-footer #setup-progress { color: var(--muted); font-size: 12px; }
+      .setup-model-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 18px; }
+      .setup-model-body { padding: 16px 19px; }
       .settings-nav { display: grid; align-content: start; gap: 4px; border-right: 1px solid #e0e5dd; padding: 12px 8px; background: #f3f3ed; }
       .settings-tab { min-height: 36px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 7px; padding: 6px 9px; color: #526258; background: transparent; text-align: left; font-size: 12px; font-weight: 650; }
       .settings-tab:hover { color: var(--green-deep); background: #e8eee6; }
@@ -642,7 +654,11 @@
       </section>
     </main>
     <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
-      <div class="dialog-head"><div><h2 id="settings-title">Settings</h2><p class="dialog-description">Manage your agent, credentials, models, creative skills, and canvas kits.</p></div><button id="settings-close" class="button outline small" type="button">Done</button></div>
+      <div class="dialog-head"><div><h2 id="settings-title">Settings</h2><p id="settings-description" class="dialog-description">Manage your agent, credentials, models, creative skills, and canvas kits.</p></div><div class="button-row"><button id="setup-open" class="button quiet small" type="button">Setup wizard</button><button id="settings-close" class="button outline small" type="button">Done</button></div></div>
+      <div id="setup-header" class="setup-header" hidden>
+        <p id="setup-description">Choose an agent, connect your account or endpoints, and get a chat model ready for your first canvas.</p>
+        <ol class="setup-steps" aria-label="Setup steps"><li id="setup-step-agent">Agent</li><li id="setup-step-credentials">Credentials</li><li id="setup-step-model">Chat model</li></ol>
+      </div>
       <div class="settings-shell">
         <nav class="settings-nav" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
           <button id="settings-tab-agent" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-agent"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="14" height="10" rx="3"/><path d="M10 3v3M7 10v1m6-1v1M7 14h6M1 10v3m18-3v3"/></svg>Agent</button>
@@ -651,6 +667,13 @@
           <button id="settings-tab-skills" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-skills"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 2.8 12 7l4.6.7-3.3 3.2.8 4.6-4.1-2.2-4.1 2.2.8-4.6-3.3-3.2L8 7l2-4.2Z"/></svg>Skills <span id="skill-count" class="active-count" aria-label="0 active skills">0</span></button>
           <button id="settings-tab-kits" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-kits"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 5-4 5 4 5M13 5l4 5-4 5M11.5 3l-3 14"/></svg>Kits</button>
         </nav>
+        <section id="setup-model-panel" class="settings-section" aria-labelledby="setup-model-title" hidden>
+          <div class="settings-section-head"><h3 id="setup-model-title">Choose a chat model</h3><p id="setup-model-hint"></p></div>
+          <div class="setup-model-body">
+            <label id="setup-model-field" class="field" for="setup-model">Chat model<select id="setup-model" aria-describedby="setup-model-hint setup-ready"></select></label>
+            <div class="setup-model-actions"><button id="setup-refresh" class="button outline small" type="button">Refresh models</button><p id="setup-ready" role="status" aria-live="polite"></p></div>
+          </div>
+        </section>
         <section id="settings-agent" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-agent" hidden>
           <div class="settings-section-head"><h3>Choose your agent</h3><p>Choose where conversations run. Your projects, media, skills, and canvas kits stay in Easel.</p></div>
           <fieldset class="agent-backends"><legend class="sr-only">Agent backend</legend>
@@ -659,7 +682,7 @@
             <label class="agent-backend-option" for="agent-backend-codex"><input id="agent-backend-codex" type="radio" name="agent-backend" value="codex" disabled /><span><strong>Codex</strong><small>Chat inside Easel through the Codex runtime installed on this device.</small></span></label>
           </fieldset>
           <div id="agent-backend-lock" class="agent-detail" hidden><p>Agent selection is locked while a request is running.</p></div>
-          <div id="agent-builtin-panel" class="agent-detail"><h4>API agent</h4><p>Add an endpoint under Credentials, enable an Agent model under Models, then choose it in the chat.</p></div>
+          <div id="agent-builtin-panel" class="agent-detail"><h4>API agent</h4><p id="agent-builtin-setup-hint">Add an endpoint under Credentials, enable an Agent model under Models, then choose it in the chat.</p></div>
           <div id="agent-external-panel" class="agent-detail" hidden>
             <h4>Connect to this window</h4><p>Keep Easel open while your external agent works. The connection token lets that client control your projects and canvases.</p>
             <code id="agent-mcp-url" class="agent-connection-url">Connection unavailable</code><p id="agent-mcp-status" role="status" aria-live="polite">Waiting for an external client</p>
@@ -728,6 +751,11 @@
           <p id="kit-status" class="kit-status" role="status" aria-live="polite">Kits are embedded in saved HTML and remain available offline.</p>
         </section>
       </div>
+      <div id="setup-footer" class="setup-footer" hidden>
+        <button id="setup-skip" class="button quiet small" type="button">Set up later</button><span id="setup-progress"></span>
+        <p id="setup-status" role="status" aria-live="polite"></p>
+        <button id="setup-back" class="button outline small" type="button">Back</button><button id="setup-next" class="button primary" type="button">Continue</button>
+      </div>
     </dialog>
     <dialog id="new-canvas-dialog" aria-labelledby="new-canvas-title">
       <div class="dialog-head"><h2 id="new-canvas-title">Create canvas</h2><button id="new-canvas-close" class="button outline small" type="button">Cancel</button></div>
@@ -762,6 +790,7 @@
     <script src="./project-workspace.js"></script>
     <script src="./themed-dropdown.js"></script>
     <script src="./agent-control-ui.js"></script>
+    <script src="./setup-wizard.js"></script>
     <script src="./renderer.js"></script>
   </body>
 </html>

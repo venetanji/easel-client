@@ -285,7 +285,12 @@ function createConnectionSettings({ document, client, onSettings, onBusy, onRend
       const next = await client.saveConnection({ ...(editingId ? { id: editingId } : {}), name: name.value, baseUrl: url.value, apiKey: key.value, clearApiKey: clear.checked });
       closeEditor();
       onSettings(next);
-      message(status, 'Endpoint saved. Review and enable its models in Models.');
+      const inSetup = document.getElementById('settings-dialog')?.dataset?.setup === 'true';
+      const savedMessage = !inSetup ? 'Endpoint saved. Review and enable its models in Models.'
+        : document.getElementById('agent-backend-builtin')?.checked
+          ? 'Endpoint saved. Continue to Chat model to choose one. Easel will enable it for you.'
+          : 'Endpoint saved. Continue to check your agent. Media models can be enabled later in Settings > Models.';
+      message(status, savedMessage);
       await refresh();
     } catch (error) {
       message(status, error?.message || 'Could not save endpoint.', true);
@@ -298,6 +303,8 @@ function createConnectionSettings({ document, client, onSettings, onBusy, onRend
   return {
     refresh,
     selectedValue,
+    startAdd: () => edit(),
+    closeEditor,
     load(next) {
       settings = next;
       renderConnections();

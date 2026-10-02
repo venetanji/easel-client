@@ -1,5 +1,6 @@
 const RendererActionIcons = typeof module !== 'undefined' ? require('./ui-icons') : EaselUiIcons;
 const RendererMediaResults = typeof module !== 'undefined' ? require('./media-tool-results') : { producedMediaAssets };
+const RendererSetupWizard = typeof module !== 'undefined' ? require('./setup-wizard') : { createSetupWizard };
 
 function setStatus(element, message, isError = false) {
   element.textContent = message;
@@ -1134,6 +1135,8 @@ function wireRenderer({ document, client }) {
   let currentFilePage = null;
   let themedDropdowns = [];
   let agentControlUi = null;
+  let setupWizard = null;
+  let settingsLoaded = false;
   const streamingMessages = new Map();
   const notifiedMediaJobs = new Set();
   const workspace = createProjectWorkspace({
@@ -1537,6 +1540,7 @@ function wireRenderer({ document, client }) {
     const running = agentRunning || canvasResumeBusy || Boolean(control?.busy);
     const ready = agentControlUi?.isReady() && (control.backend !== 'builtin' || Boolean(savedSettings.litellmModel));
     agentControlUi?.setBusy(chatBusy || canvasResumeBusy || backendHistoryBusy || agentRunning || workspace.isOperating());
+    setupWizard?.update(settingsLoaded ? savedSettings : undefined, agentControlUi?.getState());
     workspace.updateBusy();
     document.getElementById('new-canvas-open').disabled = busy;
     document.querySelectorAll('[data-starter], .prompt-suggestion').forEach((button) => { button.disabled = busy || external; });
@@ -2090,14 +2094,24 @@ function wireRenderer({ document, client }) {
 
   const connectionUi = createConnectionSettings({
     document, client, onSettings: applySettings,
-    onBusy: (busy) => { credentialsSaving = busy; updateSendState(); },
+    onBusy: (busy) => { credentialsSaving = busy; updateSendState(); setupWizard?.update(settingsLoaded ? savedSettings : undefined, agentControlUi?.getState()); },
     onRendered: updateSendState,
   });
 
   agentControlUi = createAgentControlUi({
     document, client, copyText,
-    onStateChange: () => { updateConnectionStatus(); updateSendState(); updateCanvasBounds(); },
+    onStateChange: () => { updateConnectionStatus(); updateSendState(); updateCanvasBounds(); setupWizard?.update(settingsLoaded ? savedSettings : undefined, agentControlUi.getState()); },
     onOpenSettings: () => openSettings('agent'),
+  });
+
+  setupWizard = RendererSetupWizard.createSetupWizard({
+    document, client, storage, onSettings: applySettings,
+    onAgentState: (state) => agentControlUi.applyState(state),
+    onOpen: () => openSettings('agent'), onSection: selectSettingsSection,
+    onAddEndpoint: () => connectionUi.startAdd?.(),
+    onClose: () => { agentControlUi.clearToken(); connectionUi.closeEditor?.(); },
+    onBusy: (busy) => { credentialsSaving = busy; updateSendState(); },
+    isBusy: () => credentialsSaving || agentControlUi.isBusy() || modelSaving || chatBusy || canvasResumeBusy,
   });
 
   function updateConnectionStatus() {
@@ -2114,9 +2128,11 @@ function wireRenderer({ document, client }) {
 
   function applySettings(settings) {
     savedSettings = settings;
+    settingsLoaded = true;
     updateConnectionStatus();
     connectionUi.load(settings);
     updateSendState();
+    setupWizard?.update(savedSettings, agentControlUi?.getState());
   }
 
   function refreshModelCatalog() { return connectionUi.refresh(); }
@@ -2703,6 +2719,7 @@ function wireRenderer({ document, client }) {
     dispose() {
       unsubscribe();
       agentControlUi.dispose();
+      setupWizard.dispose();
       streamingMessages.clear();
       disposeMediaPreviews();
       for (const url of messageObjectUrls) URL.revokeObjectURL(url);

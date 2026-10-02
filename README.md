@@ -4,6 +4,8 @@ A local-first Electron client for Easel canvases and media. Choose a built-in Op
 
 ## Configure
 
+New installations open a three-step setup wizard: choose an agent, add credentials or sign in, and select a chat model. For the built-in agent, choosing a model enables it and makes it active. Codex requires a signed-in account and a selected model; External MCP waits for a controller connection. Image and video endpoints are optional and do not replace a chat model. Use **Set up later** to skip, or **Settings > Setup wizard** to run it again. Existing configured installations keep their workspace on launch.
+
 1. In **Settings > Credentials**, add any OpenAI-compatible endpoint and its API key, including Easel. Local endpoints can leave the key blank. Each connection can provide both text and image models; existing LiteLLM and Easel credentials carry over automatically.
 2. **Settings > Models** discovers and groups models by endpoint. Enable the models you want. Read-only icons show automatic **Agent** and **Media** categories: muted icons are discovery suggestions and green icons are confirmed by **Check**. Check sends a Responses API tool call request and an image generation request, which may incur endpoint charges. Authentication, network, and ambiguous errors stay unverified and can be retried. New models start disabled; existing compatible selections carry over.
 3. Choose an enabled **Agent** model from the model picker in chat. Enabled **Media** models are exposed through the agent's media tools, with generation routed to each model's endpoint and key. Image generation currently uses the OpenAI-compatible images API.

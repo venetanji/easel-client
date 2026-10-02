@@ -48,7 +48,7 @@ function createThemedDropdown(select, { onOpenChange } = {}) {
   for (const existingLabel of document.querySelectorAll('label')) {
     if (existingLabel.htmlFor === select.id) existingLabel.htmlFor = trigger.id;
   }
-  document.body.append(popup);
+  (select.closest?.('dialog') || document.body).append(popup);
   let options = [];
   let visible = [];
   let active = -1;
@@ -99,6 +99,7 @@ function createThemedDropdown(select, { onOpenChange } = {}) {
       const row = document.createElement('div');
       row.id = `${select.id}-option-${entry.index}`;
       row.className = 'themed-dropdown-option';
+      row.tabIndex = -1;
       row.setAttribute('role', 'option');
       row.setAttribute('aria-selected', String(entry.value === select.value));
       row.setAttribute('aria-disabled', String(entry.disabled));
