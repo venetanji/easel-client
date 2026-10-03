@@ -2,9 +2,9 @@
 
 ## Decision
 
-Do not select a renderer dependency for Task 5 yet. Keep the timeline/media interface renderer-neutral. `ffmpeg-static` is the only candidate tested here that met synthetic correctness checks, but the tested build is GPL-3.0-or-later and carries a ~77 MiB Linux binary; cross-platform packaged Electron builds and the product's distribution posture remain unvalidated. HyperFrames rendered the same fixture, but requires a browser and FFmpeg/FFprobe runtime and is not a drop-in managed-media timeline engine. The WASM packages were inspected, not rendered.
+Do not select a renderer dependency for Task 5 yet. Keep the timeline/media interface renderer-neutral. `ffmpeg-static` is the only candidate tested here that met the earlier synthetic correctness case, but the tested build is GPL-3.0-or-later and carries a ~77 MiB Linux binary; Gio has clarified that Easel Client is intended to be GPL-3.0, so GPL compatibility is acceptable in principle. Before distribution, still verify the exact FFmpeg build's corresponding-source, notices, and bundled dependency-license obligations. Cross-platform packaged Electron behavior remains unvalidated. HyperFrames rendered the fixture but requires a browser and FFmpeg/FFprobe runtime and is not a drop-in managed-media timeline engine. Mediabunny's bounded follow-up passed one Linux/Electron synthetic composition but has codec, audio-topology, reproducibility, and cross-platform gaps described below. None passes the complete product gate.
 
-Possible follow-up: retain a typed, app-owned timeline model and, after licensing review, evaluate FFmpeg for source-media composition with HyperFrames limited to trusted/template-based HTML overlays. Do not pass agent-authored HTML/JS or arbitrary FFmpeg arguments. A hybrid is a hypothesis, not a validated product recommendation.
+Possible follow-up: retain a typed, app-owned timeline model and compare renderer substrates under a defined output/container and audio-track policy. Do not pass agent-authored HTML/JS or arbitrary FFmpeg arguments. A hybrid is a hypothesis, not a validated product recommendation.
 
 ## Probe scope and environment
 
@@ -227,7 +227,7 @@ This is a separately scoped follow-up; it does not revise the earlier candidate 
 
 ### Commands and artifacts
 
-The probe scripts and generated files are retained under `/tmp/easel-mediabunny-probe-20261003`. Install and package checks included:
+The renderer harness files and generated inputs/outputs are retained under `/tmp/easel-mediabunny-probe-20261003`. The retained `app/index.html` and `app/main.cjs` correspond to the successful WebM/VP8/Opus path and its `bytesArray` result handling; `logs/electron-2.log` records the earlier AAC failure, while `logs/electron-7.log` and `logs/electron-8.log` accompany the two successful output/result pairs. However, the exact shell invocation for those successful renderer runs was not captured alongside the artifacts. The retained harness and outputs support the reported observations, but this is not yet a fully reproducible one-command render recipe. Install and package checks included:
 
 ```sh
 npm install --prefix /tmp/easel-mediabunny-probe-20261003 --no-save --no-audit --no-fund mediabunny@1.61.0
@@ -242,4 +242,4 @@ node /home/venetanji/dev/easel-client-timeline-design-20261003/node_modules/elec
 
 The Electron renderer harness, source/output probing, frame samples, audio FFT checks, package logs, ZIPs and JSON evidence are under the same `/tmp` root. No product source, package manifest, lockfile, dependency tree, Electron cache under `/home/venetanji/.cache/electron`, or unrelated worktree content was changed.
 
-**Mediabunny conclusion:** suitable for a bounded Linux/Electron low-level composition spike, with functional trim/reorder/blend/title/audio-mix semantics implemented in app code, deterministic 18-frame WebM output, and working cancellation in this fixture. It is not a validated drop-in timeline renderer. The Linux packaged build has WebCodecs, but its missing AAC encoder constrains the tested output to WebM/Opus unless a separately approved/validated codec strategy is chosen. Keep the timeline renderer-neutral and do not select Mediabunny for Task 5 until codec/container policy, Windows/macOS packaging/runtime, broader correctness, cancellation lifecycle and production app integration gates are explicitly tested.
+**Mediabunny conclusion:** partial evidence for a bounded Linux/Electron low-level composition spike: the custom app code exercised trim/reorder/blend/title and mixed the two clips' source audio into deterministic 18-frame WebM output, with working cancellation in this fixture. This does not satisfy Task 1's explicit two-track audio example: the output contains one mixed audio stream, not independently selectable audio tracks/stems. Mediabunny is not a validated drop-in timeline renderer. The Linux packaged build has WebCodecs, but its missing AAC encoder constrains the tested output to WebM/Opus unless a separately approved/validated codec strategy is chosen. Keep the timeline renderer-neutral and do not select Mediabunny for Task 5 until codec/container and multi-track audio policy, Windows/macOS packaging/runtime, broader correctness, fully traceable render invocation, cancellation lifecycle and production app integration gates are explicitly tested.
