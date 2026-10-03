@@ -21,7 +21,7 @@ Possible follow-up: retain a typed, app-owned timeline model and, after licensin
 | `ffmpeg-static` native CLI | `ffmpeg-static@5.3.0`; downloaded Linux x64 binary reports FFmpeg `7.0.2-static` | npm package declares GPL-3.0-or-later; downloaded `ffmpeg.LICENSE` included and `ffmpeg -version` shows `--enable-gpl`. README notes each binary's license applies. Distribution needs explicit legal review. | README claims macOS x64/arm64, Linux x86/x64/armhf/arm64, Windows x86/x64. It describes FFmpeg 6.1.1, but this package install returned a binary reporting 7.0.2-static. Installer downloads a platform-specific binary; README warns to purge `node_modules` when packaging for another OS. Only Linux x64 executed. | Linux temp install `node_modules`: 80,978,274 apparent / 81,584,128 allocated bytes. `ffmpeg-static` package subtree including executable: 79,911,849 apparent / 79,933,440 allocated bytes; executable 79,826,272 bytes. |
 | `@ffmpeg/ffmpeg` + `@ffmpeg/core` (considered) | `@ffmpeg/ffmpeg@0.12.15`, `@ffmpeg/core@0.12.10` | npm metadata: wrapper MIT; core GPL-2.0-or-later. Review core FFmpeg build/configuration and distribution obligations. | Browser worker/WASM approach, not a native main-process CLI. Wrapper's Node export is a stub. Pair not executed in Electron renderer; no cross-platform claim validated. | Linux temp install `node_modules`: 64,767,285 apparent / 64,856,064 allocated bytes; core subtree 64,689,644 apparent / 64,704,512 allocated bytes. |
 
-These are extracted temporary `node_modules` directory sizes, not npm archive downloads and not an Easel packaged-app measurement. No isolated app package was built: doing so would require product/build manifest changes outside this no-product-dependency task. No archive byte size or app/installer delta is claimed. The earlier 87 MiB HyperFrames figure had no retained scope/method and is superseded; the reproducible directory measurements above explain why the prior 120 MiB allocated-size figure was larger than the 106.6 MiB apparent-byte count. They refer to one same dependency tree, not different runtime scopes.
+The Round 1 figures above are extracted temporary `node_modules` directory sizes, not npm archive downloads. A separate Round 2 minimal Linux fixture-app build below now measures actual ZIP artifacts and unpacked fixture-app trees; those measurements are not an Easel production package, nor Windows/macOS installers. The earlier 87 MiB HyperFrames figure had no retained scope/method and is superseded; the reproducible directory measurements above explain why the prior 120 MiB allocated-size figure was larger than the 106.6 MiB apparent-byte count. They refer to one same dependency tree, not different runtime scopes.
 
 Authoritative references checked 2026-10-03:
 
@@ -153,3 +153,41 @@ stat -c '%n %s bytes' /tmp/easel-video-renderer-probe-20261003/ffmpeg-static/nod
 Package versions remain HyperFrames `0.8.114` and `ffmpeg-static` `5.3.0`; runtime versions observed in this probe were Node `v26.10.0`, npm `12.1.0`, Chromium `153.0.8010.52` (HyperFrames log identified HeadlessChrome `152.0.7977.30`), and bundled FFmpeg `7.0.2-static`. Only Linux x64 was available. Windows and macOS packaged behavior remain explicitly unverified; upstream platform support declarations are not execution evidence.
 
 Mediabunny was identified as a promising potential pure-TypeScript/WebCodecs candidate (`mediabunny`, reportedly MPL-2.0), but was not installed or tested in this fix round. Its trim, reorder, overlays, audio mux semantics, codec availability in the target Electron Chromium, footprint, and license details must be independently verified before consideration; it does not alter this report's conclusion.
+
+
+## Fix-round 2 evidence: minimal Linux packaged-app size
+
+Built two disposable Electron Linux x64 ZIP targets with `electron-builder@26.16.1` and Electron `44.4.5`: (1) a baseline shell with only a tiny local HTML window, and (2) the same shell bundling the previously tested `ffmpeg-static@5.3.0` Linux executable and its `ffmpeg.LICENSE` as `extraResources`. The candidate includes the exact tested FFmpeg `7.0.2-static` binary (SHA-256 `e7e7fb30477f717e6f55f9180a70386c62677ef8a4d4d1a5d948f4098aa3eb99`) and no separate `ffmpeg-static` npm wrapper dependency. App source, manifests, copied runtime, cache, logs and artifacts are all below `/tmp/easel-video-renderer-probe-20261003/packaging`. Electron distribution `44.4.5` was copied from the already-installed repo Electron into that temp tree and supplied via `electronDist`; build logs confirm the custom temp distribution was used. No product manifest/source/lockfile was changed.
+
+| Linux x64 fixture build | ZIP distributable bytes (`stat -c %s`) | Unpacked tree apparent bytes (`du -sb`) | Unpacked tree allocated bytes (`du -sB1`) |
+|---|---:|---:|---:|
+| Baseline Electron shell | 119,309,509 | 296,304,699 | 296,476,672 |
+| Shell + bundled FFmpeg runtime/license | 147,718,164 | 376,166,158 | 376,340,480 |
+| Candidate delta | +28,408,655 | +79,861,459 | +79,863,808 |
+
+The bundled binary itself is 79,826,272 bytes and its license file is 35,147 bytes (79,861,419 bytes total). The small difference from the unpacked delta is directory/app metadata. In the ZIP, FFmpeg compressed to 28,396,592 bytes and the license to 11,559 bytes. Both ZIP archives passed Python `zipfile.testzip()`; the candidate contained `resources/ffmpeg/ffmpeg` and `resources/ffmpeg/ffmpeg.LICENSE`. Running the unpacked candidate binary returned `ffmpeg version 7.0.2-static`; its SHA-256 matched the source binary. `ldd` reported `not a dynamic executable`, so the bundled FFmpeg runtime does not need a host FFmpeg or Python executable. This does not remove normal Linux Electron host-library/desktop requirements, and the Electron GUI itself was not launched in this probe.
+
+Build versions and command: Node `v26.10.0`, npm `12.1.0`, Linux x64 (`7.2.7-arch1-1`), Electron `44.4.5`, electron-builder `26.16.1`. Baseline and candidate commands were the same apart from `--projectDir` and `APP` (`baseline` or `candidate`):
+
+```sh
+P=/tmp/easel-video-renderer-probe-20261003/packaging
+export HOME="$P/home" TMPDIR="$P/cache/tmp" XDG_CACHE_HOME="$P/cache/xdg"
+export electron_config_cache="$P/cache/electron" ELECTRON_CACHE="$P/cache/electron"
+export ELECTRON_BUILDER_CACHE="$P/cache/electron-builder"
+export npm_config_cache="$P/cache/npm" NPM_CONFIG_CACHE="$P/cache/npm"
+node /home/venetanji/dev/easel-client-timeline-design-20261003/node_modules/electron-builder/cli.js \
+  --projectDir "$P/apps/baseline" --linux zip --x64 --publish never
+node /home/venetanji/dev/easel-client-timeline-design-20261003/node_modules/electron-builder/cli.js \
+  --projectDir "$P/apps/candidate" --linux zip --x64 --publish never
+stat -c '%n %s bytes' \
+  "$P/artifacts/baseline/easel-renderer-fixture-baseline-1.0.0.zip" \
+  "$P/artifacts/candidate/easel-renderer-fixture-candidate-1.0.0.zip"
+du -sb "$P/artifacts/baseline/linux-unpacked" "$P/artifacts/candidate/linux-unpacked"
+du -sB1 "$P/artifacts/baseline/linux-unpacked" "$P/artifacts/candidate/linux-unpacked"
+```
+
+The app manifests set `build.electronDist` to `/tmp/easel-video-renderer-probe-20261003/packaging/runtime/electron-dist`. The candidate additionally copies the existing tested runtime directory with electron-builder `extraResources` into `resources/ffmpeg`; its application `files` allowlist includes only the minimal `main.js`, `index.html` and `package.json`, so the extra-resource staging copy is not duplicated in `app.asar`. The output is a distributable Linux ZIP and the corresponding unpacked electron-builder tree, not an installed Easel application, signed production package, AppImage/deb, or Windows/macOS build. It does not represent Easel-specific files/dependencies and must not be used to forecast Easel's final package size without a product build.
+
+Lifecycle-script boundary and cache history: an earlier temporary `npm install` attempt for the candidate printed `npm warn install-scripts 1 package had install scripts blocked because they are not covered by allowScripts: ffmpeg-static@5.3.0 (install: node install.js)`. I did not approve or invoke that blocked script. Per the follow-up authorization, the candidate uses only the pre-existing tested binary from `/tmp/easel-video-renderer-probe-20261003/ffmpeg-static`; this packaging run copied that binary and license to the temp app's extra-resources input. No install was rerun after the cache correction. The earlier install attempt had written the Electron 44.4.5 archive into the default user Electron cache because the electron-specific lowercase `electron_config_cache` variable was initially omitted. Per Gio's explicit direction, that archive remains untouched; no later operation accessed or modified it. Both fixture-app builds used the four cache variables shown above, all rooted under the packaging `/tmp` directory. The build downloaded its ZIP helper into the redirected Electron Builder cache.
+
+This closes the package-size evidence gap only for the disposable Linux fixture. The earlier full selection decision remains unchanged: no renderer is selected for Easel Task 5, and production packaging, licensing, integration, Linux desktop dependencies, and Windows/macOS packaged behavior remain unvalidated.
