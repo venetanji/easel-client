@@ -15,13 +15,17 @@ npm start
 
 For the offline media regression, run `npm run test:video-export`. On a headless Linux machine, use an existing display or `xvfb-run -a npm run test:video-export`. It uses committed synthetic fixtures, does not contact a model server, and requires no system FFmpeg or Python.
 
+## Updating the editor template
+
+The focused selection/drag-and-drop polish is included in newly created **Video editor** templates. Existing projects retain their editable source and are not overwritten on app update. To try this version, create a new project using **Template → Video editor**. A future explicit refresh can be reviewed against the project's source edits; no automatic migration is included.
+
 ## Try the complete flow
 
 1. Choose **New project → Template → Video editor**. The **Video editor** button above the canvas also adds/opens the editor in the current project.
 2. Use **Import media** in the editor or Media drawer. PNG/JPEG/WebP, MP4/WebM, WAV and MP3 files are saved locally. Import accepts up to 20 files, 32 MiB each. Files are never uploaded to a model by this action.
-3. Pick **This project** or **Media library**, choose an asset and a compatible track, then **Add clip**. Library sources are attached to the project before insertion. Images can occupy a video or overlay track; audio has its own track.
+3. Open the **Media** drawer and drag a media thumbnail onto a compatible timeline track. The insertion marker shows the destination frame. Drop into an empty gap or after a clip; overlapping clips are rejected. Library sources are attached to the project before insertion. Images can occupy a video or overlay track; audio has its own track. For keyboard use, pick **This project** or **Media library** in the editor, choose the asset and destination track, then **Add clip** to append it.
 4. Select a clip to move, trim or remove it and set audio gain/fades. Timeline spans use integer frames with an exclusive end; source in/out values are seconds. Keep source duration and project duration equal for export: speed changes are not implemented.
-5. Play or scrub the live preview. Click a clip or select a range to attach that exact project/revision/frame range to the next chat message. A badge in the main composer shows the pending selection. A changed revision requires selecting again.
+5. Play or scrub the live preview. Click a clip or drag across an empty part of a track to select a visible frame range. Drag either green boundary handle to adjust the range; focus a handle and use **Left/Right** for one frame, **Shift + Left/Right** for ten frames, or **Home/End** for the available bounds. **Escape** cancels an in-progress gesture, or clears a committed selection. Exact numeric controls remain available. Range adjustment changes the context for the next message, not the clip trim. A badge in the main composer shows that exact project/revision/frame range. A changed revision marks the range stale and locks its handles until you select again.
 6. Click **Export video**. The finished WebM is saved to Media and attached once to this project. Select it in Media to play or download it. Cancel discards unfinished output.
 
 The Media drawer supports name/type/ID search, type filters, and newest, oldest, name, duration and size sorting. Search covers loaded media; the global library currently shows its latest 200 items. Imported image names are retained across restarts.
@@ -46,6 +50,12 @@ Mediabunny **1.61.0** supplies decoding, WebCodecs encoding and WebM muxing; Eas
 - Source codec support depends on the installed Electron/OS runtime. Damaged, unsupported or out-of-range sources fail before a finished output is admitted.
 
 The public Easel API MCP schema is unchanged. The separate Python `creative-comfy-graph` package/bridge is not bundled or assumed to exist; generation integration remains a separately versioned ecosystem task.
+
+## Native editor interaction smoke
+
+After `npm run build`, run `node scripts/smoke-video-editor.cjs` (headless Linux: `xvfb-run -a node scripts/smoke-video-editor.cjs`). Set `EASEL_UI_ARTIFACT_DIR` to retain screenshots and the JSON result in a chosen directory.
+
+This offline test starts the real app with a temporary profile, imports the committed synthetic image, captures the actual drawer drag payload, delivers it through native browser `DataTransfer` events to the separate sandboxed template, and checks the persisted insertion. It then uses native mouse/keyboard input for boundary adjustment, verifies Escape rollback and checks durable Undo/Redo through the host bridge. The transfer delivery is automated; an OS-level cross-window drag remains a manual target-platform check. No model server, credentials or paid generation are used.
 
 ## Verification evidence
 

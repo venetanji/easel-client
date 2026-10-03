@@ -70,3 +70,18 @@ button.timeline-track-label:hover { background: var(--green-wash, #e7eee7); colo
 @media (max-width: 750px) { .timeline-workbench { grid-template-columns: minmax(0, 1fr) 190px; } .timeline-preview { padding: 10px; } .timeline-header { padding-inline: 10px; } .timeline-meta { font-size: 10px; } .timeline-preview-footer { gap: 3px; } .timeline-preview-footer [data-role="preview-status"]:empty { display: none; } }
 @media (max-width: 480px) { .timeline-workbench { flex: 0 0 auto; grid-template-columns: minmax(0, 1fr); } .timeline-sidebar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: none; border-left: 0; border-top: 1px solid var(--line, #d4d9d0); } .timeline-inspector { border-bottom: 0; border-right: 1px solid var(--line, #d4d9d0); } .timeline-preview-viewport { min-height: 180px; } .timeline-header { padding-inline: 10px; } .timeline-meta { font-size: 10px; } }
 @media (prefers-reduced-motion: reduce) { .video-timeline *, .video-timeline *::before { transition: none !important; animation: none !important; } }
+/* Selection is distinct from clip trimming; handles adjust the next-message range. */
+.timeline-track-lane { touch-action: none; }
+.timeline-selected-range { border: 2px solid var(--green, #174d3a); border-inline-width: 1px; background: #174d3a1a; }
+.timeline-selected-range[data-stale="true"] { border-style: dashed; border-color: #923c2d; background: #923c2d0d; }
+.timeline-range-handle { position: absolute; z-index: 4; top: 0; width: 24px; height: 58px; padding: 0; border: 0; border-radius: 0; background: transparent; transform: translateX(-50%); cursor: ew-resize; touch-action: none; }
+.timeline-range-handle::before { content: ''; display: block; width: 7px; height: 30px; margin: auto; border: 1px solid var(--paper, #fbfaf6); border-radius: 3px; background: var(--green, #174d3a); }
+.timeline-range-handle-start::before { margin-left: 12px; }
+.timeline-range-handle-end::before { margin-left: 5px; }
+.timeline-range-handle:hover::before, .timeline-range-handle:focus-visible::before { background: var(--green-deep, #12392d); }
+.timeline-range-handle:focus-visible { outline: 2px solid var(--green, #174d3a); outline-offset: -3px; }
+.timeline-range-handle:disabled { cursor: default; }
+.timeline-range-handle:disabled::before { background: #923c2d; }
+.timeline-track-lane[data-drop-state="ready"] { background-color: var(--green-wash, #e7eee7); outline: 2px dashed var(--green, #174d3a); outline-offset: -2px; }
+.timeline-drop-marker { position: absolute; z-index: 6; top: 0; height: 100%; padding: 3px 7px; border-left: 2px solid var(--green, #174d3a); color: var(--paper, #fbfaf6); background: var(--green, #174d3a); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+.video-timeline ::selection { background: var(--green, #174d3a); color: var(--paper, #fbfaf6); }

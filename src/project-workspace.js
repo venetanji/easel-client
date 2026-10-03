@@ -1,4 +1,5 @@
 const WorkspaceActionIcons = typeof module !== 'undefined' ? require('./ui-icons') : EaselUiIcons;
+const WorkspaceTimelineMediaType = /^(?:video\/[a-z0-9.+-]+|audio\/[a-z0-9.+-]+|image\/(?:png|jpeg|webp|gif|avif|bmp))$/i;
 
 function createDeleteButton(document, label, action) {
   const button = document.createElement('button');
@@ -376,8 +377,38 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       image.src = poster;
       image.alt = '';
       image.loading = 'lazy';
+      image.draggable = false;
       thumbnail.append(image);
     } else thumbnail.append(mediaIcon(kind, 'project-thumbnail-placeholder'));
+    if (/^(?:[a-f0-9]{32}|[a-f0-9]{64})$/.test(asset.id) && WorkspaceTimelineMediaType.test(asset.mimeType || '')) {
+      figure.dataset.mediaDragSource = 'true';
+      thumbnail.title = 'Drag to a timeline track, or click to preview';
+      const grip = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      for (const [name, value] of Object.entries({ class: 'project-media-drag-hint', viewBox: '0 0 16 16', fill: 'currentColor', 'aria-hidden': 'true' })) grip.setAttribute(name, value);
+      for (const [x, y] of [[5, 4], [11, 4], [5, 8], [11, 8], [5, 12], [11, 12]]) {
+        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dot.setAttribute('cx', x); dot.setAttribute('cy', y); dot.setAttribute('r', 1);
+        grip.append(dot);
+      }
+      thumbnail.append(grip);
+      figure.addEventListener('dragstart', (event) => {
+        if (!figure.draggable || operation || selectedProjectId !== projectId || isBusy?.() || !event.dataTransfer || actions.contains(event.target) || trash.contains(event.target)) {
+          event.preventDefault();
+          delete figure.dataset.dragging;
+          return;
+        }
+        try {
+          event.dataTransfer.clearData();
+          event.dataTransfer.setData('application/x-easel-media-asset', JSON.stringify({ assetId: asset.id }));
+          event.dataTransfer.effectAllowed = 'copy';
+          figure.dataset.dragging = 'true';
+        } catch {
+          event.preventDefault();
+          delete figure.dataset.dragging;
+        }
+      });
+      figure.addEventListener('dragend', () => { delete figure.dataset.dragging; });
+    }
     const fresh = node('span', 'project-thumbnail-new', `New ${kind}`);
     fresh.hidden = !mediaNotices.has(asset.id);
     thumbnail.append(fresh);
@@ -924,6 +955,10 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     }
     const busy = operation || Boolean(isBusy?.());
     const selectionPending = selectedProjectId !== projectId;
+    for (const list of [mediaList, allMediaList]) for (const card of list.children) {
+      card.draggable = card.dataset.mediaDragSource === 'true' && !busy && !selectionPending;
+      if (!card.draggable) delete card.dataset.dragging;
+    }
     picker.disabled = busy;
     document.getElementById('export-current').disabled = busy || selectionPending || !projectId;
     for (const element of document.querySelectorAll('.project-document, .project-file-device, .project-source-file, .library .delete-control, .media-drawer .delete-control, .project-media-actions button, .media-job-recovery button, button.project-thumbnail, .canvas-tab button, #project-new, #project-rename, #drawer-new-document')) {

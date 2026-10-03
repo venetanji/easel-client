@@ -25,6 +25,7 @@ function element(tagName = 'div', id = '') {
       return descendants.filter((child) => selector.split(',').some((query) => matches(child, query.trim().split(' ').at(-1))));
     },
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null; },
+    contains(node) { return this === node || this.children.some((child) => child.contains(node)); },
     focus() { this.focused = true; },
     pause() { this.paused = true; },
     load() {},
@@ -762,4 +763,140 @@ test('filtered library actions keep their asset identity after sorting and addin
   assert.deepEqual(mediaIds(state), []);
   assert.equal(state.workspace.getPreviewKind(), 'video');
   assert.equal(state.selections.at(-1), selected);
+});
+
+function mediaDragEvent() {
+  const data = new Map([['text/uri-list', 'https://example.invalid/thumbnail.png']]);
+  return {
+    data,
+    prevented: false,
+    preventDefault() { this.prevented = true; },
+    dataTransfer: {
+      effectAllowed: 'uninitialized',
+      clearData() { data.clear(); },
+      setData(type, value) { data.set(type, value); },
+    },
+  };
+}
+
+test('managed media cards drag only an asset ID with a copy operation from either drawer section', async () => {
+  const state = fixture();
+  state.asset.thumbnail = 'data:image/png;base64,YWJj';
+  state.asset.path = '/private/reference.png';
+  await state.workspace.openProject(state.projectId);
+  for (const id of ['media-list', 'all-media-list']) {
+    const card = state.nodes.get(id).children[0];
+    assert.equal(card.draggable, true);
+    const event = mediaDragEvent();
+    card.listeners.dragstart(event);
+    assert.equal(event.prevented, false);
+    assert.equal(event.dataTransfer.effectAllowed, 'copy');
+    assert.deepEqual([...event.data], [['application/x-easel-media-asset', JSON.stringify({ assetId: state.assetId })]]);
+    assert.equal(card.dataset.dragging, 'true');
+    card.listeners.dragend();
+    assert.equal(card.dataset.dragging, undefined);
+    assert.equal(card.draggable, true);
+    const thumbnail = card.querySelector('.project-thumbnail');
+    assert.match(thumbnail.title, /Drag.*timeline/);
+    assert.equal(thumbnail.querySelector('img').draggable, false);
+    assert.equal(thumbnail.querySelector('.project-media-drag-hint').attributes['aria-hidden'], 'true');
+  }
+  assert.deepEqual(state.calls, [], 'Starting a drag must not attach, open, or mutate an asset');
+});
+
+test('media drag sources reject busy starts and clear an active drag when busy state changes', async () => {
+  const state = fixture();
+  await state.workspace.openProject(state.projectId);
+  const card = state.nodes.get('media-list').children[0];
+  assert.equal(card.draggable, true);
+  card.listeners.dragstart(mediaDragEvent());
+  assert.equal(card.dataset.dragging, 'true');
+  state.busy(true);
+  const event = mediaDragEvent();
+  card.listeners.dragstart(event);
+  assert.equal(event.prevented, true, 'Live busy state must guard against stale enabled DOM');
+  assert.equal(event.data.has('application/x-easel-media-asset'), false);
+  state.workspace.updateBusy();
+  assert.equal(card.draggable, false);
+  assert.equal(card.dataset.dragging, undefined);
+  state.busy(false);
+  state.workspace.updateBusy();
+  assert.equal(card.draggable, true);
+  assert.equal(card.querySelector('.project-thumbnail').disabled, false);
+});
+
+test('only valid, supported, ready media cards expose the drag affordance', async () => {
+  const state = fixture();
+  const job = { id: 'f'.repeat(32), status: 'generating', mediaType: 'video' };
+  state.libraryAssets.splice(0, 1,
+    { id: 'b'.repeat(32), mimeType: 'video/mp4', name: 'Clip' },
+    { id: 'd'.repeat(32), mimeType: 'audio/wav', name: 'Sound' },
+    { id: 'e'.repeat(32), mimeType: 'image/svg+xml', name: 'Vector' },
+    { id: 'file:///private/movie.mp4', mimeType: 'video/mp4', name: 'Invalid ID' },
+    { id: job.id, mimeType: 'video/mp4', name: 'Generating', kind: 'job', job });
+  await state.workspace.openProject(state.projectId);
+  const cards = state.nodes.get('all-media-list').children;
+  assert.equal(cards[0].draggable, true);
+  assert.equal(cards[1].draggable, true);
+  for (const card of cards.slice(2)) {
+    assert.notEqual(card.draggable, true);
+    assert.equal(card.listeners.dragstart, undefined);
+    assert.equal(card.querySelector('.project-media-drag-hint'), null);
+  }
+});
+
+test('media drag affordance retains click preview and Add to project as keyboard-accessible buttons', async () => {
+  const state = fixture();
+  const orphan = { ...state.asset, id: 'b'.repeat(32), name: 'Library reference' };
+  state.libraryAssets.push(orphan);
+  await state.workspace.openProject(state.projectId);
+  const card = state.nodes.get('all-media-list').children[1];
+  assert.equal(card.draggable, true);
+  const thumbnail = card.querySelector('.project-thumbnail');
+  assert.equal(thumbnail.tagName, 'button');
+  assert.equal(thumbnail.attributes['aria-label'], 'Open Library reference in viewer');
+  assert.equal(thumbnail.disabled, false);
+  const add = card.querySelector('.project-media-actions').children[0];
+  assert.equal(add.tagName, 'button');
+  assert.equal(add.attributes['aria-label'], 'Add to project');
+  await add.listeners.click();
+  assert.deepEqual(state.calls, [['attach', state.projectId, orphan.id]]);
+  await state.nodes.get('media-list').children[0].querySelector('.project-thumbnail').listeners.click();
+  assert.equal(state.workspace.getPreviewKind(), 'image');
+});
+
+test('media action controls cannot accidentally initiate a parent card drag', async () => {
+  const state = fixture();
+  await state.workspace.openProject(state.projectId);
+  const card = state.nodes.get('media-list').children[0];
+  for (const target of [...card.querySelector('.project-media-actions').children, card.querySelector('.delete-control').children[0]]) {
+    const event = mediaDragEvent();
+    event.target = target;
+    card.listeners.dragstart(event);
+    assert.equal(event.prevented, true);
+    assert.equal(event.data.has('application/x-easel-media-asset'), false);
+    assert.equal(card.dataset.dragging, undefined);
+  }
+});
+
+test('a rejected native data transfer cancels the drag without leaving visual state behind', async () => {
+  const state = fixture();
+  await state.workspace.openProject(state.projectId);
+  const card = state.nodes.get('media-list').children[0];
+  const event = mediaDragEvent();
+  event.dataTransfer.setData = () => { throw new Error('Transfer is not writable'); };
+  assert.doesNotThrow(() => card.listeners.dragstart(event));
+  assert.equal(event.prevented, true);
+  assert.equal(card.dataset.dragging, undefined);
+  assert.deepEqual([...event.data], []);
+});
+
+test('media drawer drag sources accept both managed ID lengths used by the host bridge', async () => {
+  const state = fixture(); const assetId = 'a'.repeat(64);
+  state.libraryAssets.push({ id: assetId, mimeType: 'image/png', name: 'Managed reference' });
+  await state.workspace.openProject(state.projectId);
+  const card = state.nodes.get('all-media-list').children.find((node) => node.dataset.assetId === assetId);
+  assert.equal(card.draggable, true);
+  const event = mediaDragEvent(); card.listeners.dragstart(event);
+  assert.deepEqual(JSON.parse(event.data.get('application/x-easel-media-asset')), { assetId });
 });

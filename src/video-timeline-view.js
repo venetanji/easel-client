@@ -4,6 +4,7 @@
   const MAX_MEDIA_BYTES = 64 * 1024 * 1024;
   const MAX_CACHE_BYTES = 128 * 1024 * 1024;
   const MAX_FRAME = 10_000_000;
+  const MEDIA_DRAG_TYPE = 'application/x-easel-media-asset';
   const MEDIA_TYPE = /^(?:video\/[a-z0-9.+-]+|audio\/[a-z0-9.+-]+|image\/(?:png|jpeg|webp|gif|avif|bmp))$/i;
   const copy = (value) => value == null ? null : JSON.parse(JSON.stringify(value));
   const fps = (rate) => rate.numerator / rate.denominator;
@@ -35,7 +36,7 @@
     let projectId = '', timeline = null, selection = null, assets = [], generation = 0, readSequence = 0;
     let closed = true, destroyed = false, loading = false, mutating = false, explicitlyBusy = false;
     let history = null, libraryAssets = [], exportController = null, preparing = false, exporting = false, playhead = 0, playing = false, animation = null, playOrigin = 0, startedAt = 0;
-    let pixelsPerSecond = PIXELS_PER_SECOND, inspectedItemId = '', drag = null;
+    let pixelsPerSecond = PIXELS_PER_SECOND, inspectedItemId = '', drag = null, dropTarget = null;
     let cachedBytes = 0, itemCounter = 0, mediaFetchTail = Promise.resolve();
     const cache = new Map(), pendingMedia = new Map(), mediaErrors = new Map(), mediaNodes = new Map(), probeCleanups = new Set();
     const ui = {}, editControls = [];
@@ -129,13 +130,18 @@
     ui.zoom.min = '24'; ui.zoom.max = '160'; ui.zoom.step = '8'; ui.zoom.addEventListener('input', () => { pixelsPerSecond = Number(ui.zoom.value); renderTracks(); });
     const tracksViewport = el('div', 'timeline-tracks-viewport', undefined, 'tracks-viewport');
     const tracks = el('div', 'timeline-tracks', undefined, 'tracks'); tracksViewport.append(tracks);
+    tracksViewport.addEventListener('dragleave', (event) => {
+      if (tracksViewport.contains?.(event.relatedTarget)) return;
+      const box = tracksViewport.getBoundingClientRect();
+      if (event.clientX < box.left || event.clientX >= box.left + box.width || event.clientY < box.top || event.clientY >= box.top + box.height) clearDropTarget();
+    });
     const statusNode = el('p', 'timeline-status', '', 'status'); statusNode.setAttribute('role', 'status'); statusNode.setAttribute('aria-live', 'polite');
     shell.append(header, workbench, rangeBar, timelineToolbar, tracksViewport, statusNode); container.replaceChildren(shell); container.hidden = true;
     editControls.push(ui['import-media'], ui['media-source'], ui['media-filter'], ui['media-search'], ui['add-asset'], ui['add-track'], ui['image-duration'], ui['add-clip']);
     shell.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); if (drag) cancelRangeDrag(); else clearSelection(); clearDropTarget(); return; }
       if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(event.target?.tagName)) return;
       if (event.key === ' ') { event.preventDefault(); togglePlayback(); }
-      if (event.key === 'Escape') clearSelection();
       if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); seek(playhead + (event.key === 'ArrowLeft' ? -1 : 1)); }
     });
 
@@ -157,6 +163,7 @@
       ui['clear-selection'].disabled = !selection;
       ui['save-clip'] && (ui['save-clip'].disabled = !editable);
       ui['remove-clip'] && (ui['remove-clip'].disabled = !editable);
+      walk(tracks, (node) => { if (['range-start-handle', 'range-end-handle'].includes(node.dataset?.role)) node.disabled = !editable || !selectionCurrent(); });
       shell.setAttribute('aria-busy', String(loading || mutating || preparing || exporting));
     }
     function pickerAssets() { return ui['media-source'].value === 'library' ? libraryAssets : assets; }
@@ -186,7 +193,7 @@
     }
     function renderTracks() {
       if (!timeline) { tracks.replaceChildren(); return; }
-      const end = Math.max(durationFrames(timeline) + Math.ceil(fps(timeline.frameRate)), Math.ceil(fps(timeline.frameRate) * 8));
+      const end = visibleEndFrame();
       const width = frameToPixels(end, timeline.frameRate, pixelsPerSecond);
       const rows = [];
       const rulerRow = el('div', 'timeline-ruler-row'); rulerRow.append(el('span', 'timeline-track-label', 'Frames'));
@@ -202,17 +209,24 @@
         trackButton.dataset.role = 'track-select'; trackButton.dataset.trackId = track.id; trackButton.setAttribute('aria-label', `Select ${track.name || track.type} track`);
         const lane = el('div', 'timeline-track-lane'); lane.dataset.role = 'track-lane'; lane.dataset.trackId = track.id; lane.style.width = `${width}px`; lane.style.backgroundSize = `${pixelsPerSecond}px 100%`; lane.setAttribute('aria-label', `${track.name || track.type} clips`);
         lane.addEventListener('pointerdown', (event) => {
-          if (event.button !== undefined && event.button !== 0 || event.target !== lane) return;
-          const frame = pixelToFrame(event.clientX - lane.getBoundingClientRect().left, timeline.frameRate, pixelsPerSecond);
-          drag = { trackId: track.id, frame, lane }; lane.setPointerCapture?.(event.pointerId); event.preventDefault();
+          if (event.target === lane) beginRangeDrag(event, lane, track.id);
         });
-        lane.addEventListener('pointerup', (event) => {
-          if (!drag || drag.lane !== lane) return;
-          const first = drag.frame, last = pixelToFrame(event.clientX - lane.getBoundingClientRect().left, timeline.frameRate, pixelsPerSecond); drag = null;
-          lane.releasePointerCapture?.(event.pointerId); selectSpan([track.id], Math.min(first, last), Math.max(first, last) + (first === last ? 1 : 0));
-        });
-        lane.addEventListener('pointercancel', () => { drag = null; });
+        bindRangeGesture(lane);
+        lane.addEventListener('dragover', (event) => previewMediaDrop(event, lane, track));
+        lane.addEventListener('dragleave', (event) => { if (!lane.contains?.(event.relatedTarget)) clearDropTarget(true); });
+        lane.addEventListener('drop', (event) => dropMedia(event, lane, track));
         const selectedRange = el('div', 'timeline-selected-range'); selectedRange.dataset.role = 'range-highlight'; selectedRange.dataset.trackId = track.id; selectedRange.hidden = true; lane.append(selectedRange);
+        for (const edge of ['start', 'end']) {
+          const handle = button('', '', () => {}, `timeline-range-handle timeline-range-handle-${edge}`);
+          handle.dataset.role = `range-${edge}-handle`; handle.dataset.trackId = track.id;
+          handle.setAttribute('role', 'slider'); handle.setAttribute('aria-label', `Selection ${edge} frame on ${track.name || track.type}`);
+          handle.setAttribute('aria-orientation', 'horizontal'); handle.title = 'Drag to adjust selection. Arrow keys: 1 frame; Shift + arrow: 10 frames. Escape: cancel.';
+          handle.hidden = true;
+          handle.addEventListener('pointerdown', (event) => beginRangeDrag(event, lane, track.id, edge, handle));
+          handle.addEventListener('keydown', (event) => adjustRangeKey(event, edge));
+          bindRangeGesture(handle); lane.append(handle);
+        }
+        const dropMarker = el('div', 'timeline-drop-marker'); dropMarker.dataset.role = 'drop-marker'; dropMarker.hidden = true; lane.append(dropMarker);
         for (const item of timeline.items.filter((entry) => entry.trackId === track.id)) {
           const clip = button('', '', () => selectClip(item.id), 'timeline-clip'); clip.dataset.itemId = item.id;
           clip.style.left = `${frameToPixels(item.startFrame, timeline.frameRate, pixelsPerSecond)}px`; clip.style.width = `${frameToPixels(item.endFrame - item.startFrame, timeline.frameRate, pixelsPerSecond)}px`;
@@ -226,26 +240,135 @@
       }
       tracks.replaceChildren(...rows); renderSelection();
     }
+    function visibleEndFrame() {
+      return Math.min(MAX_FRAME, Math.max(durationFrames(timeline) + Math.ceil(fps(timeline.frameRate)), Math.ceil(fps(timeline.frameRate) * 8), selection?.endFrame || 0));
+    }
+    function selectionCurrent() { return !!selection && selection.timelineRevision === timeline?.revision && selection.timelineId === timeline?.id; }
+    function frameAt(event, lane, end = visibleEndFrame()) {
+      return clamp(pixelToFrame(event.clientX - lane.getBoundingClientRect().left, timeline.frameRate, pixelsPerSecond), 0, end);
+    }
+    function beginRangeDrag(event, lane, trackId, edge, target = lane) {
+      if (!canEdit() || drag || event.button !== undefined && event.button !== 0 || edge && !selectionCurrent()) return;
+      event.preventDefault(); event.stopPropagation();
+      drag = { trackId, lane, target, edge, pointerId: event.pointerId, frame: frameAt(event, lane), previous: copy(selection), fields: ['range-start', 'range-end', 'range-track'].map((role) => ui[role].value), token: generation, revision: timeline.revision, end: visibleEndFrame() };
+      target.setPointerCapture?.(event.pointerId);
+      if (!edge) previewRangeDrag(event);
+    }
+    function previewRangeDrag(event) {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      if (!active(drag.token) || timeline?.revision !== drag.revision) { cancelRangeDrag(); return; }
+      const last = frameAt(event, drag.lane, drag.end);
+      let start = drag.previous?.startFrame, end = drag.previous?.endFrame;
+      if (drag.edge === 'start') start = clamp(start + last - drag.frame, 0, end - 1);
+      else if (drag.edge === 'end') end = clamp(end + last - drag.frame, start + 1, drag.end);
+      else { start = Math.min(drag.frame, last, drag.end - 1); end = Math.max(drag.frame, last, start + 1); }
+      selectSpan(drag.edge ? drag.previous.trackIds : [drag.trackId], start, end, undefined, false);
+    }
+    function finishRangeDrag(event) {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      previewRangeDrag(event); if (!drag) return;
+      const gesture = drag; drag = null; gesture.target.releasePointerCapture?.(gesture.pointerId);
+      inspectedItemId = selection?.itemIds.length === 1 ? selection.itemIds[0] : ''; renderInspector(); onSelection(copy(selection));
+    }
+    function cancelRangeDrag() {
+      if (!drag) return;
+      const gesture = drag; drag = null; selection = gesture.previous;
+      gesture.target.releasePointerCapture?.(gesture.pointerId);
+      ['range-start', 'range-end', 'range-track'].forEach((role, index) => { ui[role].value = gesture.fields[index]; }); renderSelection();
+    }
+    function bindRangeGesture(target) {
+      target.addEventListener('pointermove', previewRangeDrag);
+      target.addEventListener('pointerup', finishRangeDrag);
+      target.addEventListener('pointercancel', (event) => { if (drag?.pointerId === event.pointerId) cancelRangeDrag(); });
+      target.addEventListener('lostpointercapture', cancelRangeDrag);
+    }
+    function adjustRangeKey(event, edge) {
+      if (!canEdit() || !selectionCurrent() || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault(); event.stopPropagation();
+      const min = edge === 'start' ? 0 : selection.startFrame + 1;
+      const max = edge === 'start' ? selection.endFrame - 1 : visibleEndFrame();
+      const next = event.key === 'Home' ? min : event.key === 'End' ? max : clamp(selection[`${edge}Frame`] + (event.key === 'ArrowLeft' ? -1 : 1) * (event.shiftKey ? 10 : 1), min, max);
+      selectSpan(selection.trackIds, edge === 'start' ? next : selection.startFrame, edge === 'end' ? next : selection.endFrame);
+    }
+    function clearDropTarget(preserveContext = false) {
+      if (!dropTarget) return;
+      dropTarget.lane.dataset.dropState = ''; const marker = [...dropTarget.lane.children].find((node) => node.dataset.role === 'drop-marker'); if (marker) marker.hidden = true;
+      if (!preserveContext) dropTarget = null;
+    }
+    function previewMediaDrop(event, lane, track) {
+      if (!canEdit() || !Array.from(event.dataTransfer?.types || []).includes(MEDIA_DRAG_TYPE)) return;
+      event.preventDefault(); event.dataTransfer.dropEffect = 'copy';
+      if (dropTarget?.lane !== lane) {
+        const previous = dropTarget; clearDropTarget();
+        dropTarget = { lane, token: previous?.token ?? generation, revision: previous?.revision ?? timeline.revision };
+      }
+      const frame = frameAt(event, lane); lane.dataset.dropState = 'ready';
+      const marker = [...lane.children].find((node) => node.dataset.role === 'drop-marker');
+      if (marker) { marker.hidden = false; marker.style.left = `${frameToPixels(frame, timeline.frameRate, pixelsPerSecond)}px`; marker.textContent = `${track.name || track.type} · frame ${frame}`; }
+    }
+    function compatibleAsset(asset, track) {
+      return MEDIA_TYPE.test(asset?.mimeType || '') && (asset.mimeType.startsWith('image/') ? ['video', 'overlay'].includes(track?.type) : asset.mimeType.startsWith('audio/') ? track?.type === 'audio' : track?.type === 'video');
+    }
+    async function dropMedia(event, lane, track) {
+      event.preventDefault(); event.stopPropagation();
+      const target = dropTarget; clearDropTarget();
+      if (!canEdit()) return;
+      const token = generation, revision = timeline.revision, owner = projectId;
+      try {
+        if (target && (target.token !== token || target.revision !== revision)) throw new Error('The timeline changed during the drag. Drag the media again.');
+        if (!Array.from(event.dataTransfer?.types || []).includes(MEDIA_DRAG_TYPE)) throw new Error('Drag media from the Media drawer. Use Import media for files.');
+        const raw = event.dataTransfer.getData(MEDIA_DRAG_TYPE);
+        if (typeof raw !== 'string' || raw.length > 160) throw new Error('Invalid managed media payload. Drag the media again.');
+        let payload; try { payload = JSON.parse(raw); } catch { throw new Error('Invalid managed media payload. Drag the media again.'); }
+        if (!payload || Object.keys(payload).length !== 1 || typeof payload.assetId !== 'string' || !/^(?:[a-f0-9]{32}|[a-f0-9]{64})$/.test(payload.assetId || '')) throw new Error('Invalid managed media payload. Drag the media again.');
+        const startFrame = frameAt(event, lane);
+        preparing = true; updateControls();
+        let asset = assets.find((entry) => entry.id === payload.assetId);
+        if (!asset && client.listAssets) {
+          const result = await client.listAssets();
+          if (!active(token) || timeline?.revision !== revision) return;
+          libraryAssets = Array.isArray(result) ? result : result?.assets || [];
+          asset = libraryAssets.find((entry) => entry.id === payload.assetId);
+        }
+        if (!asset) throw new Error('This media is no longer available. Refresh the Media drawer and try again.');
+        if (!compatibleAsset(asset, track)) throw new Error(`This media is not compatible with the ${track.name || track.type} track. Use a ${asset.mimeType?.startsWith('audio/') ? 'audio' : 'video'} track.`);
+        preparing = false;
+        await addClip({ asset, trackId: track.id, startFrame, token, revision, owner });
+      } catch (error) { if (active(token)) status(error.message || 'Could not drop this media.', true); }
+      finally { if (active(token)) { preparing = false; updateControls(); } }
+    }
     function walk(node, fn) { fn(node); for (const child of node.children || []) walk(child, fn); }
     function renderSelection() {
       const stale = !!selection && (selection.timelineRevision !== timeline?.revision || selection.timelineId !== timeline?.id);
-      ui['selection-summary'].textContent = selection ? stale ? `Timeline changed after selection (revision ${selection.timelineRevision}). Select again before sending.` : `Selected frames [${selection.startFrame}, ${selection.endFrame}) · ${selection.trackIds.length} track${selection.trackIds.length === 1 ? '' : 's'} · attaches to your next message` : 'Select a clip or drag a range. Exact frame controls are above.';
+      if (selection) { ui['range-start'].value = String(selection.startFrame); ui['range-end'].value = String(selection.endFrame); ui['range-track'].value = selection.trackIds.length === 1 ? selection.trackIds[0] : ''; }
+      ui['selection-summary'].textContent = selection ? stale ? `Timeline changed after selection (revision ${selection.timelineRevision}). Select again before sending.` : `Selected frames [${selection.startFrame}, ${selection.endFrame}) · ${selection.trackIds.length} track${selection.trackIds.length === 1 ? '' : 's'} · ${selection.endFrame - selection.startFrame} frames · drag handles to adjust · next message` : 'Click a clip or drag a range. Drop media from the Media drawer onto a track.';
       ui['selection-summary'].dataset.stale = String(stale);
       walk(tracks, (node) => {
         if (node.dataset?.itemId) node.setAttribute('aria-pressed', String(selection?.itemIds.includes(node.dataset.itemId) || false));
+        if (['range-start-handle', 'range-end-handle'].includes(node.dataset?.role)) {
+          const edge = node.dataset.role === 'range-start-handle' ? 'start' : 'end';
+          node.hidden = !selection || !selection.trackIds.includes(node.dataset.trackId);
+          if (selection) {
+            node.style.left = `${frameToPixels(selection[`${edge}Frame`], timeline.frameRate, pixelsPerSecond)}px`;
+            node.setAttribute('aria-valuenow', selection[`${edge}Frame`]); node.setAttribute('aria-valuetext', `Frame ${selection[`${edge}Frame`]}${edge === 'end' ? ', exclusive' : ''}`);
+            node.setAttribute('aria-valuemin', edge === 'start' ? 0 : selection.startFrame + 1); node.setAttribute('aria-valuemax', edge === 'start' ? selection.endFrame - 1 : visibleEndFrame());
+          }
+        }
         if (node.dataset?.role === 'range-highlight') {
+          node.dataset.stale = String(stale);
           node.hidden = !selection || !selection.trackIds.includes(node.dataset.trackId);
           if (selection) { node.style.left = `${frameToPixels(selection.startFrame, timeline.frameRate, pixelsPerSecond)}px`; node.style.width = `${frameToPixels(selection.endFrame - selection.startFrame, timeline.frameRate, pixelsPerSecond)}px`; }
         }
       });
       updateControls();
     }
-    function selectSpan(trackIds, startFrame, endFrame, itemIds) {
+    function selectSpan(trackIds, startFrame, endFrame, itemIds, commit = true) {
       if (!timeline || !Number.isSafeInteger(startFrame) || !Number.isSafeInteger(endFrame) || startFrame < 0 || endFrame <= startFrame || endFrame > MAX_FRAME) return;
       const chosenItems = itemIds || timeline.items.filter((item) => trackIds.includes(item.trackId) && item.startFrame < endFrame && item.endFrame > startFrame).map((item) => item.id);
       selection = { projectId, timelineId: timeline.id, timelineRevision: timeline.revision, trackIds: [...trackIds], itemIds: [...chosenItems], startFrame, endFrame };
       ui['range-start'].value = String(startFrame); ui['range-end'].value = String(endFrame); ui['range-track'].value = trackIds.length === 1 ? trackIds[0] : '';
-      inspectedItemId = chosenItems.length === 1 ? chosenItems[0] : ''; renderSelection(); renderInspector(); onSelection(copy(selection));
+      if (commit) inspectedItemId = chosenItems.length === 1 ? chosenItems[0] : '';
+      renderSelection(); if (commit) { renderInspector(); onSelection(copy(selection)); }
     }
     function selectClip(itemId) {
       const item = timeline?.items.find((entry) => entry.id === itemId); if (!item) return;
@@ -257,7 +380,7 @@
       catch (error) { status(error.message, true); }
     }
     function clearSelection() {
-      const hadSelection = !!selection; selection = null; inspectedItemId = ''; renderSelection(); renderInspector(); if (hadSelection) onSelection(null);
+      cancelRangeDrag(); const hadSelection = !!selection; selection = null; inspectedItemId = ''; renderSelection(); renderInspector(); if (hadSelection) onSelection(null);
     }
     function renderInspector() {
       const inspector = ui.inspector; const item = timeline?.items.find((entry) => entry.id === inspectedItemId);
@@ -296,6 +419,7 @@
     }
     async function mutate(method, operations) {
       if (!canEdit()) return;
+      cancelRangeDrag(); clearDropTarget();
       const token = generation, owner = projectId, revision = timeline.revision;
       mutating = true; readSequence += 1; pause(); updateControls();
       try {
@@ -305,18 +429,21 @@
       } catch (error) { if (active(token)) status(`${error.message || 'Could not save the timeline.'}${/revision|conflict/i.test(error.message || '') ? ' Refresh, then select again.' : ''}`, true); }
       finally { if (active(token)) { mutating = false; updateControls(); } }
     }
-    async function addClip() {
+    async function addClip(drop) {
       if (!canEdit()) return;
-      const asset = pickerAssets().find((entry) => entry.id === ui['add-asset'].value); const trackId = ui['add-track'].value;
+      const asset = drop?.asset || pickerAssets().find((entry) => entry.id === ui['add-asset'].value); const trackId = drop?.trackId || ui['add-track'].value;
       if (!asset || !timeline.tracks.some((track) => track.id === trackId)) return;
       const token = generation, originalRevision = timeline.revision;
+      if (drop?.asset && (drop.token !== token || drop.revision !== originalRevision || drop.owner !== projectId)) return;
       preparing = true; updateControls();
       try {
+        if (!compatibleAsset(asset, timeline.tracks.find((track) => track.id === trackId))) throw new Error('Choose a compatible destination track.');
         if (!assets.some((entry) => entry.id === asset.id)) {
           if (!client.attachProjectAsset) throw new Error('Attach this media to the project first.');
           await client.attachProjectAsset(projectId, asset.id);
           if (!active(token)) return;
           assets = await readAssets(projectId, token);
+          if (!active(token) || timeline?.revision !== originalRevision) return;
           if (!assets.some((entry) => entry.id === asset.id)) assets.push(asset);
         }
         const isStill = asset.mimeType.startsWith('image/');
@@ -329,7 +456,9 @@
         preparing = false; if (!canEdit()) return;
         const count = Math.floor(sourceDurationSeconds * fps(timeline.frameRate));
         if (count < 1) throw new Error('This source is shorter than one project frame.');
-        const startFrame = Math.max(0, ...timeline.items.filter((item) => item.trackId === trackId).map((item) => item.endFrame));
+        const startFrame = drop?.asset ? drop.startFrame : Math.max(0, ...timeline.items.filter((item) => item.trackId === trackId).map((item) => item.endFrame));
+        if (startFrame + count > MAX_FRAME) throw new Error('This clip extends beyond the timeline frame limit. Drop it earlier.');
+        if (timeline.items.some((item) => item.trackId === trackId && item.startFrame < startFrame + count && item.endFrame > startFrame)) throw new Error('That space overlaps another clip. Drop into an empty gap or after the last clip.');
         const id = `clip-${host.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${++itemCounter}`}`;
         await mutate('applyTimeline', [{ type: 'insert', item: { id, trackId, startFrame, endFrame: startFrame + count, assetId: asset.id, name: String(asset.name || 'Untitled clip').slice(0, 120).replace(/[\uD800-\uDBFF]$/, ''), sourceStartSeconds: 0, sourceEndSeconds: count / fps(timeline.frameRate), ...(!isStill ? { sourceDurationSeconds } : {}) } }]);
       } catch (error) { if (active(token)) status(error.message || 'Could not add this media.', true); }
@@ -511,15 +640,15 @@
     async function open(nextProjectId) {
       if (destroyed) throw new Error('Timeline view has been destroyed.');
       if (typeof nextProjectId !== 'string' || !nextProjectId) throw new Error('Open a project before using Timeline.');
-      generation += 1; exportController?.abort(); exportController = null; exporting = false; preparing = false; disposePreview(); closed = false; projectId = nextProjectId; timeline = null; assets = []; libraryAssets = []; ui['media-source'].value = 'project'; ui['media-search'].value = ''; ui['media-filter'].value = ''; history = null; inspectedItemId = ''; playhead = 0; mutating = false;
+      cancelRangeDrag(); clearDropTarget(); generation += 1; exportController?.abort(); exportController = null; exporting = false; preparing = false; disposePreview(); closed = false; projectId = nextProjectId; timeline = null; assets = []; libraryAssets = []; ui['media-source'].value = 'project'; ui['media-search'].value = ''; ui['media-filter'].value = ''; history = null; inspectedItemId = ''; playhead = 0; mutating = false;
       if (selection) { selection = null; onSelection(null); }
       container.hidden = false; tracks.replaceChildren(); ui.inspector.replaceChildren(); ui['add-asset'].replaceChildren(); status('Opening timeline…'); render();
       await load(generation, true);
     }
-    async function refresh() { if (closed || destroyed || mutating || preparing || exporting) return; pause(); await load(generation, true); }
-    function close() { generation += 1; exportController?.abort(); exportController = null; exporting = false; preparing = false; closed = true; loading = false; mutating = false; disposePreview(); projectId = ''; timeline = null; assets = []; history = null; clearSelection(); container.hidden = true; }
+    async function refresh() { if (closed || destroyed || mutating || preparing || exporting) return; cancelRangeDrag(); pause(); await load(generation, true); }
+    function close() { cancelRangeDrag(); clearDropTarget(); generation += 1; exportController?.abort(); exportController = null; exporting = false; preparing = false; closed = true; loading = false; mutating = false; disposePreview(); projectId = ''; timeline = null; assets = []; history = null; clearSelection(); container.hidden = true; }
     function destroy() { if (destroyed) return; close(); destroyed = true; container.replaceChildren(); }
-    function setBusy(value) { explicitlyBusy = !!value; updateControls(); }
+    function setBusy(value) { explicitlyBusy = !!value; if (value) { cancelRangeDrag(); clearDropTarget(); } updateControls(); renderSelection(); }
     return { open, refresh, getSelection: () => copy(selection), clearSelection, close, destroy, setBusy };
   }
   const api = { createVideoTimelineView, frameToPixels, pixelToFrame, getPreviewLayers };

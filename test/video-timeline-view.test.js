@@ -393,3 +393,156 @@ test('browser preview frame preserves output geometry at desktop and narrow size
     }
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+function laneFor(f, trackId = 'video-1') { return f.all((node) => node.dataset.role === 'track-lane' && node.dataset.trackId === trackId)[0]; }
+function handleFor(f, edge = 'end', trackId = 'video-1') { return f.all((node) => node.dataset.role === `range-${edge}-handle` && node.dataset.trackId === trackId)[0]; }
+function mediaTransfer(assetId, extra = {}) { return { types: ['application/x-easel-media-asset'], dropEffect: 'none', getData: () => JSON.stringify({ assetId, ...extra }) }; }
+
+test('selection exposes visible named boundary handles with frame precision keyboard adjustment', async () => {
+  const f = fixture(); await f.view.open('project-a'); await f.click(f.item('clip-1'));
+  const start = handleFor(f, 'start'), end = handleFor(f);
+  assert.ok(start && end, 'selection needs two visible adjustable handles');
+  assert.equal(start.hidden, false); assert.match(start.getAttribute('aria-label'), /selection start/i);
+  assert.equal(start.getAttribute('aria-valuenow'), '24');
+  await end.dispatchEvent({ type: 'keydown', key: 'ArrowRight' }); assert.equal(f.view.getSelection().endFrame, 73);
+  await start.dispatchEvent({ type: 'keydown', key: 'ArrowLeft', shiftKey: true }); assert.equal(f.view.getSelection().startFrame, 14);
+  await start.dispatchEvent({ type: 'keydown', key: 'Home' }); assert.equal(f.view.getSelection().startFrame, 0);
+  assert.equal(f.calls.some(([method]) => method === 'apply'), false, 'selection must never trim media');
+});
+
+test('range drags preview continuously, commit once, and cancel without changing attached context', async () => {
+  const f = fixture(); await f.view.open('project-a'); await f.click(f.item('clip-1'));
+  const end = handleFor(f); assert.ok(end, 'drag handle exists'); const before = f.selections.length;
+  await end.dispatchEvent({ type: 'pointerdown', clientX: 216, pointerId: 7 });
+  await end.dispatchEvent({ type: 'pointermove', clientX: 288, pointerId: 7 });
+  assert.equal(f.role('range-end').value, '96'); assert.equal(f.selections.length, before);
+  await end.dispatchEvent({ type: 'pointercancel', pointerId: 7 });
+  assert.equal(f.view.getSelection().endFrame, 72); assert.equal(f.selections.length, before);
+  await end.dispatchEvent({ type: 'pointerdown', clientX: 216, pointerId: 8 });
+  await end.dispatchEvent({ type: 'pointerup', clientX: 270, pointerId: 8 });
+  assert.equal(f.view.getSelection().endFrame, 90); assert.equal(f.selections.length, before + 1);
+});
+
+test('empty-lane selection is visible during a gesture and stays within its lane', async () => {
+  const f = fixture(); await f.view.open('project-a'); const lane = laneFor(f);
+  await lane.dispatchEvent({ type: 'pointerdown', clientX: 72, pointerId: 2 });
+  await lane.dispatchEvent({ type: 'pointermove', clientX: 144, pointerId: 2 });
+  assert.equal(f.role('range-highlight').hidden, false); assert.equal(f.role('range-end').value, '48');
+  await lane.dispatchEvent({ type: 'pointerup', clientX: 1e12, pointerId: 2 });
+  assert.equal(f.view.getSelection().endFrame, 192);
+});
+
+test('stale ranges cannot be adjusted into a fresh revision by keyboard or pointer', async () => {
+  const f = fixture(); await f.view.open('project-a'); await f.click(f.item('clip-1'));
+  f.setStored(timeline('timeline-a', 2)); await f.view.refresh(); const handle = handleFor(f); assert.ok(handle);
+  assert.equal(handle.disabled, true); await handle.dispatchEvent({ type: 'keydown', key: 'ArrowRight' });
+  assert.equal(f.view.getSelection().timelineRevision, 1); assert.equal(f.view.getSelection().endFrame, 72);
+});
+
+test('media drops insert a managed source at the pointed frame with expected revision', async () => {
+  const id = 'a'.repeat(32); const f = fixture({ assets: [{ id, mimeType: 'image/png', name: 'Card' }] }); await f.view.open('project-a');
+  const lane = laneFor(f, 'overlay-1'), dataTransfer = mediaTransfer(id);
+  await lane.dispatchEvent({ type: 'dragover', clientX: 108, dataTransfer });
+  assert.equal(dataTransfer.dropEffect, 'copy'); assert.equal(lane.dataset.dropState, 'ready');
+  await lane.dispatchEvent({ type: 'drop', clientX: 108, dataTransfer });
+  const request = f.calls.find(([method]) => method === 'apply')?.[2]; assert.ok(request, 'drop inserts a clip');
+  assert.equal(request.expectedRevision, 1); assert.equal(request.operations[0].item.startFrame, 36); assert.equal(request.operations[0].item.assetId, id);
+});
+
+test('drop rejects external files, path-bearing payloads and incompatible media without attachment', async () => {
+  const id = 'a'.repeat(32); const f = fixture({ assets: [{ id, mimeType: 'video/mp4', name: 'Video', duration: 2 }] }); await f.view.open('project-a');
+  const lane = laneFor(f, 'audio-1');
+  await lane.dispatchEvent({ type: 'drop', clientX: 0, dataTransfer: mediaTransfer(id) });
+  assert.match(f.role('status').textContent, /compatible|video track/i);
+  await lane.dispatchEvent({ type: 'drop', clientX: 0, dataTransfer: mediaTransfer(id, { path: '/private/source.mp4' }) });
+  assert.match(f.role('status').textContent, /managed|payload/i);
+  await lane.dispatchEvent({ type: 'drop', clientX: 0, dataTransfer: { types: ['Files'], getData: () => '' } });
+  assert.equal(f.calls.some(([method]) => ['apply', 'attach'].includes(method)), false);
+});
+
+test('library drop attaches only after compatibility checks and refuses stale async results', async () => {
+  const id = 'b'.repeat(64); let finish;
+  const f = fixture({ overrides: { listAssets: () => new Promise((resolve) => { finish = resolve; }), attachProjectAsset: async (...args) => f.calls.push(['attach', ...args]) } });
+  await f.view.open('project-a'); const lane = laneFor(f, 'overlay-1');
+  const drop = lane.dispatchEvent({ type: 'drop', clientX: 0, dataTransfer: mediaTransfer(id) }); await settle();
+  await f.view.open('project-b'); finish([{ id, mimeType: 'image/png', name: 'Library' }]); await drop;
+  assert.equal(f.calls.some(([method]) => ['apply', 'attach'].includes(method)), false);
+});
+
+test('media drop rejects non-string asset IDs and overlapping placement', async () => {
+  const id = 'a'.repeat(32); const f = fixture({ assets: [{ id, mimeType: 'video/mp4', duration: 2 }] }); await f.view.open('project-a'); const lane = laneFor(f);
+  await lane.dispatchEvent({ type: 'drop', clientX: 72, dataTransfer: mediaTransfer([id]) });
+  assert.match(f.role('status').textContent, /payload/);
+  await lane.dispatchEvent({ type: 'drop', clientX: 72, dataTransfer: mediaTransfer(id) });
+  assert.match(f.role('status').textContent, /overlaps/);
+  assert.equal(f.calls.some(([method]) => method === 'apply'), false);
+});
+
+test('drag escape restores the original range and project navigation cancels the gesture', async () => {
+  const f = fixture(); await f.view.open('project-a'); await f.click(f.item('clip-1')); const end = handleFor(f); const before = f.selections.length;
+  await end.dispatchEvent({ type: 'pointerdown', clientX: 216, pointerId: 1 }); await end.dispatchEvent({ type: 'pointermove', clientX: 300, pointerId: 1 });
+  await f.container.children[0].dispatchEvent({ type: 'keydown', key: 'Escape', target: end });
+  assert.equal(f.view.getSelection().endFrame, 72); assert.equal(f.selections.length, before);
+  await end.dispatchEvent({ type: 'pointerdown', clientX: 216, pointerId: 1 }); await f.view.open('project-b');
+  await end.dispatchEvent({ type: 'pointerup', clientX: 300, pointerId: 1 }); assert.equal(f.view.getSelection(), null);
+});
+
+test('library media drop attaches then inserts once and repeated drops stay serialized', async () => {
+  const id = 'b'.repeat(64); let finish; let attached = false;
+  const f = fixture({ overrides: {
+    listAssets: () => new Promise((resolve) => { finish = resolve; }),
+    attachProjectAsset: async (_projectId, assetId) => { f.calls.push(['attach', assetId]); attached = true; },
+    getProjectAssets: async () => ({ assets: attached ? [{ id, mimeType: 'image/png', name: 'Library image' }] : [], nextOffset: null }),
+  } });
+  await f.view.open('project-a'); const lane = laneFor(f, 'overlay-1');
+  const first = lane.dispatchEvent({ type: 'drop', clientX: 36, dataTransfer: mediaTransfer(id) }); await settle();
+  await lane.dispatchEvent({ type: 'drop', clientX: 36, dataTransfer: mediaTransfer(id) }); finish([{ id, mimeType: 'image/png', name: 'Library image' }]); await first;
+  assert.equal(f.calls.filter(([method]) => method === 'attach').length, 1);
+  const apply = f.calls.filter(([method]) => method === 'apply'); assert.equal(apply.length, 1); assert.equal(apply[0][2].operations[0].item.startFrame, 12);
+});
+
+test('a revised timeline rejects an old drop target instead of silently using the new revision', async () => {
+  const id = 'a'.repeat(32); const f = fixture({ assets: [{ id, mimeType: 'image/png' }] }); await f.view.open('project-a'); const oldLane = laneFor(f, 'overlay-1');
+  await oldLane.dispatchEvent({ type: 'dragover', clientX: 0, dataTransfer: mediaTransfer(id) }); f.setStored(timeline('timeline-a', 2)); await f.view.refresh();
+  await oldLane.dispatchEvent({ type: 'dragleave', relatedTarget: null });
+  await laneFor(f, 'overlay-1').dispatchEvent({ type: 'dragover', clientX: 0, dataTransfer: mediaTransfer(id) });
+  await laneFor(f, 'overlay-1').dispatchEvent({ type: 'drop', clientX: 0, dataTransfer: mediaTransfer(id) });
+  assert.match(f.role('status').textContent, /changed during the drag/); assert.equal(f.calls.some(([method]) => method === 'apply'), false);
+});
+
+test('range handles preserve the grab offset without jumping on a wide hit target', async () => {
+  const f = fixture(); await f.view.open('project-a'); await f.click(f.item('clip-1')); const end = handleFor(f);
+  await end.dispatchEvent({ type: 'pointerdown', clientX: 210, pointerId: 1 });
+  await end.dispatchEvent({ type: 'pointerup', clientX: 213, pointerId: 1 });
+  assert.equal(f.view.getSelection().endFrame, 73, 'a three-pixel move adds one frame regardless of where the handle was grabbed');
+});
+
+test('an unchanged refresh re-enables current selection handles and busy state disables them', async () => {
+  const f = fixture(); await f.view.open('project-a'); await f.click(f.item('clip-1')); await f.view.refresh();
+  assert.equal(handleFor(f).disabled, false, 'loading must release the handle when the revision stayed current');
+  f.view.setBusy(true); assert.equal(handleFor(f).disabled, true);
+  f.view.setBusy(false); assert.equal(handleFor(f).disabled, false);
+});
+
+test('canceling a cross-track gesture restores the exact range controls for the next selection', async () => {
+  const f = fixture(); await f.view.open('project-a'); await f.click(f.item('clip-1')); const lane = laneFor(f, 'audio-1');
+  await lane.dispatchEvent({ type: 'pointerdown', clientX: 0, pointerId: 9 });
+  await lane.dispatchEvent({ type: 'pointermove', clientX: 72, pointerId: 9 });
+  await lane.dispatchEvent({ type: 'pointercancel', pointerId: 9 });
+  assert.equal(f.role('range-track').value, 'video-1');
+  await f.click(f.role('select-range')); assert.deepEqual(f.view.getSelection().trackIds, ['video-1']);
+  f.view.clearSelection(); await f.change(f.role('range-start'), 5); await f.change(f.role('range-end'), 15); await f.change(f.role('range-track'), 'overlay-1');
+  await lane.dispatchEvent({ type: 'pointerdown', clientX: 0, pointerId: 10 }); await lane.dispatchEvent({ type: 'pointercancel', pointerId: 10 });
+  assert.equal(f.view.getSelection(), null); assert.equal(f.role('range-start').value, '5'); assert.equal(f.role('range-end').value, '15'); assert.equal(f.role('range-track').value, 'overlay-1');
+});
+
+test('leaving the timeline clears drag feedback and lets a new drag use the refreshed revision', async () => {
+  const id = 'a'.repeat(32); const f = fixture({ assets: [{ id, mimeType: 'image/png' }] }); await f.view.open('project-a'); const lane = laneFor(f, 'overlay-1');
+  await lane.dispatchEvent({ type: 'dragover', clientX: 0, dataTransfer: mediaTransfer(id) });
+  await f.role('tracks-viewport').dispatchEvent({ type: 'dragleave', clientX: -1, clientY: 10 });
+  assert.equal(lane.dataset.dropState, '');
+  f.setStored(timeline('timeline-a', 2)); await f.view.refresh(); const freshLane = laneFor(f, 'overlay-1');
+  await freshLane.dispatchEvent({ type: 'dragover', clientX: 0, dataTransfer: mediaTransfer(id) });
+  await freshLane.dispatchEvent({ type: 'drop', clientX: 0, dataTransfer: mediaTransfer(id) });
+  assert.equal(f.calls.find(([method]) => method === 'apply')[2].expectedRevision, 2);
+});
