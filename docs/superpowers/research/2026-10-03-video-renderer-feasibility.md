@@ -11,15 +11,17 @@ Possible follow-up: retain a typed, app-owned timeline model and, after licensin
 - Branch `docs/agent-video-timeline-design-20261003`, base commit `f66c315b1b606ce3fc672a5630739867546c1805`.
 - Node `v26.10.0`, npm `12.1.0`, Linux x64; system Chromium `/usr/bin/chromium`; system FFmpeg/FFprobe `n9.0.2`.
 - All media, installs, and outputs were synthetic and under `/tmp/easel-video-renderer-probe-20261003`. No product manifest/dependency changes, user media, generation API, model download, or GPU job.
-- The assigned `.superpowers/sdd/2026-10-03-agent-video-timeline/task-1-brief.md` was absent. Followed Task 1 in `docs/superpowers/plans/2026-10-03-agent-video-timeline.md` and the renderer gate in `docs/superpowers/specs/2026-10-03-agent-video-timeline-design.md`.
+- I read the original Task 1 brief at `.superpowers/sdd/2026-10-03-agent-video-timeline/task-1-brief.md`, the Task 1 plan, and the renderer gate in the design spec. The earlier report's statement that the brief was absent was incorrect; this fix-round report corrects that process record.
 
 ## Candidates and evidence
 
 | Candidate | Exact version | License evidence | Runtime/platform evidence | Footprint observed |
 |---|---|---|---|---|
-| HyperFrames CLI | `hyperframes@0.8.114` | npm package declares Apache-2.0; upstream repository `LICENSE` is Apache-2.0. | Package README requires Node >=22 and FFmpeg. `doctor` found FFmpeg, FFprobe, Chrome; tested Linux x64 with HeadlessChrome 152. The npm package is not a self-contained browser/media stack. Cross-platform packaging was not tested. | Temporary installed dependency tree 120 MiB at final measurement; HyperFrames package 34 MiB. Browser and FFmpeg/FFprobe excluded. |
-| `ffmpeg-static` native CLI | `ffmpeg-static@5.3.0`; downloaded Linux x64 binary reports FFmpeg `7.0.2-static` | npm package declares GPL-3.0-or-later; downloaded `ffmpeg.LICENSE` included and `ffmpeg -version` shows `--enable-gpl`. README notes each binary's license applies. Distribution needs explicit legal review. | README claims macOS x64/arm64, Linux x86/x64/armhf/arm64, Windows x86/x64. It describes FFmpeg 6.1.1, but this package install returned a binary reporting 7.0.2-static. Installer downloads a platform-specific binary; README warns to purge `node_modules` when packaging for another OS. Only Linux x64 executed. | Temporary package tree 78 MiB; binary 77 MiB. npm package unpacked size ~48 KiB excluding binary. |
-| `@ffmpeg/ffmpeg` + `@ffmpeg/core` (considered) | `@ffmpeg/ffmpeg@0.12.15`, `@ffmpeg/core@0.12.10` | npm metadata: wrapper MIT; core GPL-2.0-or-later. Review core FFmpeg build/configuration and distribution obligations. | Browser worker/WASM approach, not a native main-process CLI. Wrapper's Node export is a stub. Pair not executed in Electron renderer; no cross-platform claim validated. | Temporary install 62 MiB; core `dist` 62 MiB. No runtime/performance number because not rendered. |
+| HyperFrames CLI | `hyperframes@0.8.114` | npm package declares Apache-2.0; upstream repository `LICENSE` is Apache-2.0. | Package README requires Node >=22 and FFmpeg. `doctor` found FFmpeg, FFprobe, Chrome; tested Linux x64 with HeadlessChrome 152. The npm package is not a self-contained browser/media stack. Cross-platform packaging was not tested. | Linux temp install `node_modules`: 111,841,190 apparent bytes (106.6 MiB); 125,108,224 allocated bytes (119.3 MiB). HyperFrames package subtree: 33,425,375 apparent / 34,676,736 allocated bytes. Browser and FFmpeg/FFprobe excluded. |
+| `ffmpeg-static` native CLI | `ffmpeg-static@5.3.0`; downloaded Linux x64 binary reports FFmpeg `7.0.2-static` | npm package declares GPL-3.0-or-later; downloaded `ffmpeg.LICENSE` included and `ffmpeg -version` shows `--enable-gpl`. README notes each binary's license applies. Distribution needs explicit legal review. | README claims macOS x64/arm64, Linux x86/x64/armhf/arm64, Windows x86/x64. It describes FFmpeg 6.1.1, but this package install returned a binary reporting 7.0.2-static. Installer downloads a platform-specific binary; README warns to purge `node_modules` when packaging for another OS. Only Linux x64 executed. | Linux temp install `node_modules`: 80,978,274 apparent / 81,584,128 allocated bytes. `ffmpeg-static` package subtree including executable: 79,911,849 apparent / 79,933,440 allocated bytes; executable 79,826,272 bytes. |
+| `@ffmpeg/ffmpeg` + `@ffmpeg/core` (considered) | `@ffmpeg/ffmpeg@0.12.15`, `@ffmpeg/core@0.12.10` | npm metadata: wrapper MIT; core GPL-2.0-or-later. Review core FFmpeg build/configuration and distribution obligations. | Browser worker/WASM approach, not a native main-process CLI. Wrapper's Node export is a stub. Pair not executed in Electron renderer; no cross-platform claim validated. | Linux temp install `node_modules`: 64,767,285 apparent / 64,856,064 allocated bytes; core subtree 64,689,644 apparent / 64,704,512 allocated bytes. |
+
+These are extracted temporary `node_modules` directory sizes, not npm archive downloads and not an Easel packaged-app measurement. No isolated app package was built: doing so would require product/build manifest changes outside this no-product-dependency task. No archive byte size or app/installer delta is claimed. The earlier 87 MiB HyperFrames figure had no retained scope/method and is superseded; the reproducible directory measurements above explain why the prior 120 MiB allocated-size figure was larger than the 106.6 MiB apparent-byte count. They refer to one same dependency tree, not different runtime scopes.
 
 Authoritative references checked 2026-10-03:
 
@@ -48,7 +50,7 @@ Generated locally using the temporary `ffmpeg-static` binary:
 | Cancellation | SIGINT on a 60 s synthetic render exited code 1 (`render_cancelled_by_sigint`); no output remained. CLI observation only, not a programmatic job API test. | SIGINT on a paced 20 s synthetic render exited code 255 and left a 22,884-byte partial MP4. App wrapper must use temp output, terminate child, remove partial, and publish atomically. |
 | Failure/unsupported notes | Generated project template includes external GSAP CDN; removed for offline fixture. Requires browser and FFmpeg/FFprobe. Footage layers and dissolve were custom HTML/CSS/JS, not a typed managed-asset timeline API. | Direct mixed-rate `xfade` first failed with `inputs needs to be a constant frame rate; current rate is 1/0`. Normalizing each input to 24 fps intermediate FFV1 fixed it. `drawtext` fixture failed because the binary lacks that filter; solid-color clips were used instead. Output audio is a single mix. |
 
-Both matched duration, count, boundaries, dissolve location, overlay span, and deterministic output on this small Linux fixture. This does not establish VFR behavior, broader codec support, long-form performance, or Windows/macOS packaging.
+Both matched duration, count, boundaries, dissolve location, overlay span, and deterministic output on this small Linux fixture. A second explicit trim/reorder case and scoped repeat-render timings are recorded below in the fix-round evidence. This does not establish VFR behavior, broader codec support, long-form performance, or Windows/macOS packaging.
 
 ## Commands and reproduction notes
 
@@ -96,3 +98,58 @@ The same native command was run a second time with output name `ffmpeg-render-2.
 - License/package decision: not passed pending GPL review. HyperFrames Apache-2.0 does not resolve its runtime requirements or timeline-model mismatch.
 
 **Conclusion:** no candidate passes the complete product gate. Renderer-neutral timeline/model work can proceed. Before Task 5, approve the GPL terms or select an explicitly licensed FFmpeg build, define per-OS/arch resource inclusion and update/signing implications, then run packaged Windows/macOS/Linux fixture smokes without system FFmpeg/Python. Also test VFR/codecs, cancellation cleanup, and audio policy. Never silently fall back to system FFmpeg.
+
+
+## Fix-round evidence: trimmed/reordered edit and render timings
+
+A second, explicitly matched case used the same synthetic red 12 fps A, blue 24 fps B, and yellow still. Both candidates output B before A, trimming each clip to source interval `[0.25, 0.75)`: B occupies timeline `[0, 0.5)`, A `[0.25, 0.75)`. A 0.25 s cross-dissolve spans `[0.25, 0.5)` and the 50%-opacity yellow overlay spans `[0.25, 0.5)`. Output is 24 fps, 18 frames, 0.75 s. Audio policy is matched: retain both trimmed clips' original audio, time-align B at 0 and A at 0.25 s, and mix them into one output stream. This case intentionally has no independent audio track; it does not verify three-way mixing, separate stem preservation, gain automation, or track editability.
+
+| Check | HyperFrames | `ffmpeg-static` |
+|---|---|---|
+| Trim/order and output | 18 frames, 24/1 fps, 0.750 s; blue B at frames 0-5, transition frames 6-11, red A at frames 12-17. | Same frame count/rate/duration and source-color spans; same transition frames. |
+| Overlay | Yellow overlay visible only in its authored interval (measured transition-frame RGB shifts, e.g. frame 11 mean RGB `(229,125,19)`). | Same authored interval (frame 11 mean RGB `(232,126,18)`; small codec/blend-path difference). |
+| Audio | One AAC stream, 0.750 s. Decoded FFT peaks near 662 Hz at 0.10 s (B), both ~438 and ~662 Hz at 0.40 s (overlap), and ~438 Hz at 0.60 s (A). | One AAC stream, 0.750 s; same source-tone presence at the corresponding positions. |
+| Repeat render | SHA-256 identical across the two renders: `4ebe0bbab454d385fe991c1bf3fe68dadba17d96e3a72059df53ea6b703c4129`. | SHA-256 identical across the two renders: `c8d3d3b395caaed3fdbbc7f087147acf9121e55a4d68697d77228a8328e46bfd`. |
+| Wall time | 2.875 s and 2.783 s; median 2.829 s. | 0.074 s and 0.072 s; median 0.073 s. |
+
+Timing method: immediately before/after each full CLI render, capture `date +%s%N` and calculate elapsed wall-clock milliseconds; no CPU/RSS profile. Same Linux x64 host, 18-frame case, 24 fps, output settings above; each run launched a fresh renderer process. These were sequential warm-host/filesystem-cache runs, not a cold-machine benchmark. HyperFrames wall time includes its headless Chromium launch and screenshot/render path; native timing includes FFmpeg process startup and encode. These are operational round-trip numbers for this fixture, not a controlled codec/backend throughput comparison or production performance claim.
+
+Trim/reorder probe invocations (all fixture/output files remain below `/tmp/easel-video-renderer-probe-20261003/trim-reorder`):
+
+```sh
+# HyperFrames; index.html encodes B first, A second, each data-media-start=0.25.
+HYPERFRAMES_TELEMETRY=0 HYPERFRAMES_SKIP_SKILLS=1 \
+  /tmp/easel-video-renderer-probe-20261003/hyperframes/node_modules/.bin/hyperframes \
+  render /tmp/easel-video-renderer-probe-20261003/trim-reorder/hf \
+  -o /tmp/easel-video-renderer-probe-20261003/trim-reorder/out/hf-1.mp4 \
+  --fps 24 --workers 1 --no-browser-gpu --quiet
+# Repeat with output hf-2.mp4.
+
+# ffmpeg-static; B input 0 and A input 1; filter graph trims each source to
+# 0.25..0.75, xfade duration=0.25/offset=0.25, overlays at 0.25..0.5,
+# trims source audio identically and mixes B at 0 s with A delayed 250 ms.
+/tmp/easel-video-renderer-probe-20261003/ffmpeg-static/node_modules/ffmpeg-static/ffmpeg \
+  -i /tmp/easel-video-renderer-probe-20261003/fixtures/clip-b-24fps.mp4 \
+  -i /tmp/easel-video-renderer-probe-20261003/fixtures/clip-a-12fps.mp4 \
+  -loop 1 -framerate 24 -t 0.75 -i /tmp/easel-video-renderer-probe-20261003/fixtures/overlay-yellow.png \
+  -filter_complex '[0:v]trim=start=0.25:duration=0.5,setpts=PTS-STARTPTS,fps=24,settb=1/24,format=yuv420p[bv];[1:v]trim=start=0.25:duration=0.5,setpts=PTS-STARTPTS,fps=24,settb=1/24,format=yuv420p[av];[bv][av]xfade=transition=fade:duration=0.25:offset=0.25[x];[2:v]fps=24,settb=1/24,format=rgba,colorchannelmixer=aa=0.5[ov];[x][ov]overlay=enable='gte(t,0.25)*lt(t,0.5)':shortest=1[outv];[0:a]atrim=start=0.25:duration=0.5,asetpts=PTS-STARTPTS,adelay=0|0[b];[1:a]atrim=start=0.25:duration=0.5,asetpts=PTS-STARTPTS,adelay=250|250[a];[b][a]amix=inputs=2:duration=longest:normalize=0,atrim=duration=0.75[outa]' \
+  -map '[outv]' -map '[outa]' -r 24 -frames:v 18 -c:v libx264 \
+  -preset ultrafast -crf 0 -c:a aac -b:a 192k -t 0.75 -map_metadata -1 \
+  -y /tmp/easel-video-renderer-probe-20261003/trim-reorder/out/ffmpeg-1.mp4
+# Repeat with output ffmpeg-2.mp4.
+```
+
+Footprint measurement command and scope:
+
+```sh
+for x in /tmp/easel-video-renderer-probe-20261003/hyperframes/node_modules \
+  /tmp/easel-video-renderer-probe-20261003/ffmpeg-static/node_modules \
+  /tmp/easel-video-renderer-probe-20261003/ffmpeg-wasm/node_modules; do
+  du -sb "$x"; du -sB1 "$x";
+done
+stat -c '%n %s bytes' /tmp/easel-video-renderer-probe-20261003/ffmpeg-static/node_modules/ffmpeg-static/ffmpeg
+```
+
+Package versions remain HyperFrames `0.8.114` and `ffmpeg-static` `5.3.0`; runtime versions observed in this probe were Node `v26.10.0`, npm `12.1.0`, Chromium `153.0.8010.52` (HyperFrames log identified HeadlessChrome `152.0.7977.30`), and bundled FFmpeg `7.0.2-static`. Only Linux x64 was available. Windows and macOS packaged behavior remain explicitly unverified; upstream platform support declarations are not execution evidence.
+
+Mediabunny was identified as a promising potential pure-TypeScript/WebCodecs candidate (`mediabunny`, reportedly MPL-2.0), but was not installed or tested in this fix round. Its trim, reorder, overlays, audio mux semantics, codec availability in the target Electron Chromium, footprint, and license details must be independently verified before consideration; it does not alter this report's conclusion.
