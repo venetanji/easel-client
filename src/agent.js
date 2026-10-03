@@ -1,3 +1,4 @@
+const { TIMELINE_TOOLS, TIMELINE_METHODS } = require('./video-timeline-tools');
 const { ALLOWED_MEDIA_TOOLS } = require('./media-mcp-client');
 const { PROJECT_CANVAS_TOOLS, SOURCE_CANVAS_TOOLS } = require('./canvas-tools');
 const { CANVAS_INPUT_TOOLS } = require('./canvas-input-tools');
@@ -281,7 +282,7 @@ function toOpenAITools(mcpTools) {
         parameters: mediaToolSchema(tool),
       },
     }));
-  return [...tools, PRESENT_CANVAS_TOOL, ...CANVAS_TOOLS, ...MEDIA_REFERENCE_TOOLS];
+  return [...tools, PRESENT_CANVAS_TOOL, ...CANVAS_TOOLS, ...MEDIA_REFERENCE_TOOLS, ...TIMELINE_TOOLS];
 }
 
 function formatSkillInstructions(skills) {
@@ -423,7 +424,12 @@ async function executeEaselTool(name, args, {
   let awaitingMediaJob;
   const liveCaptures = [];
   throwIfAborted(signal);
-  if (name === 'request_canvas_input' || name === 'get_canvas_inputs') {
+  if (Object.hasOwn(TIMELINE_METHODS, name)) {
+    const method = TIMELINE_METHODS[name];
+    if (typeof canvasController?.[method] !== 'function') throw new Error('Timeline editing is unavailable in this app version.');
+    if (context.turnOptions?.timelineSelection && args.projectId !== context.turnOptions.timelineSelection.projectId) throw new Error('The timeline edit must target the project selected for this turn.');
+    content = JSON.stringify(await canvasController[method](args, context));
+  } else if (name === 'request_canvas_input' || name === 'get_canvas_inputs') {
     try {
       if (!canvasController) throw new Error('Canvas input is unavailable.');
       if (name === 'request_canvas_input') {

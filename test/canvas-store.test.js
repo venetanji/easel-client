@@ -610,3 +610,69 @@ test('legacy bundled kits migrate to one shared selection and can be disabled ac
   for (const document of store.listDocuments(id).documents) assert.deepEqual(managedKitScripts(store.get(id, { documentPath: document.path }).html), []);
   assert.match(store.readFile(id, { path: 'other.html' }).text, /data-easel-canvas-kit="tone"/);
 });
+
+test('project export includes an editable timeline and protects its referenced media from detachment', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-timeline-export-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  let timeline = null;
+  const store = createCanvasStore({ userDataPath, readTimeline: () => timeline });
+  const project = store.save({ title: 'Video edit', html: '<h1>Editor</h1>', assets: [{ name: 'source', data: 'YWJj', mimeType: 'image/png' }] });
+  const assetId = store.getProject(project.id).manifest.assets[0].id;
+  timeline = { schemaVersion: 1, id: 'timeline', revision: 0, frameRate: { numerator: 24, denominator: 1 }, width: 1920, height: 1080,
+    tracks: [{ id: 'overlay-1', type: 'overlay', name: 'Image' }], items: [{ id: 'still', assetId, trackId: 'overlay-1', startFrame: 0, endFrame: 24, sourceStartSeconds: 0, sourceEndSeconds: 1 }], transitions: [] };
+  assert.equal(store.inspectAssetDeletion(project.id, { assetId }).ok, false);
+  assert.throws(() => store.detachAsset(project.id, { assetId }), /timeline/i);
+  const exported = store.exportProject(project.id);
+  assert.equal(exported.manifest.timeline, '.easel/timeline.json');
+  const zlib = require('node:zlib');
+  let offset = 0;
+  let saved;
+  while (exported.data.readUInt32LE(offset) === 0x04034b50) {
+    const method = exported.data.readUInt16LE(offset + 8), bytes = exported.data.readUInt32LE(offset + 18);
+    const names = exported.data.readUInt16LE(offset + 26), extras = exported.data.readUInt16LE(offset + 28);
+    const name = exported.data.toString('utf8', offset + 30, offset + 30 + names), start = offset + 30 + names + extras;
+    const data = exported.data.subarray(start, start + bytes);
+    if (name === '.easel/timeline.json') saved = JSON.parse((method === 8 ? zlib.inflateRawSync(data) : data).toString());
+    offset = start + bytes;
+  }
+  assert.deepEqual(saved, timeline);
+});
+
+test('a populated timeline does not block deleting an unrelated project source file', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-timeline-delete-file-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  let timeline = null;
+  const store = createCanvasStore({ userDataPath, readTimeline: () => timeline });
+  const project = store.save({ title: 'Edit', html: '<h1>Edit</h1>', assets: [{ name: 'source', data: 'YWJj', mimeType: 'image/png' }] });
+  timeline = { items: [{ assetId: store.getProject(project.id).manifest.assets[0].id }] };
+  store.writeFile(project.id, { path: 'unused.txt', content: 'Remove this note.' });
+  assert.equal(store.inspectDeletion(project.id, { path: 'unused.txt' }).ok, true);
+  store.deleteFile(project.id, { path: 'unused.txt' });
+  assert.equal(store.listFiles(project.id).files.some((file) => file.path === 'unused.txt'), false);
+});
+
+test('large saved videos attach without recursive base64 validation failures', async (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-large-attach-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const assetId = 'b'.repeat(32);
+  const data = Buffer.alloc(8_000_000).toString('base64');
+  const store = createCanvasStore({ userDataPath, assetStore: { get: async () => ({ id: assetId, data, mimeType: 'video/webm' }) } });
+  const project = store.createProject({ title: 'Video' });
+  await store.attachAssets(project.id, { assetIds: [assetId] });
+  assert.equal(store.listAssets(project.id).assets[0].bytes, 8_000_000);
+});
+
+test('restoring an older canvas snapshot cannot detach a live timeline source', async (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-timeline-canvas-undo-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  let timeline = null;
+  const assetId = 'd'.repeat(32);
+  const store = createCanvasStore({ userDataPath, readTimeline: () => timeline,
+    assetStore: { get: async () => ({ id: assetId, data: 'YWJj', mimeType: 'video/webm' }) } });
+  const project = store.createProject({ title: 'Edit' });
+  const before = store.get(project.id).html;
+  await store.attachAssets(project.id, { assetIds: [assetId] });
+  timeline = { items: [{ assetId }] };
+  assert.throws(() => store.update(project.id, before, { restoreMetadata: true }), /timeline/i);
+  assert.equal(store.getAsset(project.id, assetId).data, 'YWJj');
+});

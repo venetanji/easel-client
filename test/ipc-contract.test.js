@@ -68,3 +68,12 @@ test('validates and trims empty canvas names', () => {
   assert.throws(() => validateCanvasTitle('  '), /name is required/i);
   assert.throws(() => validateCanvasTitle('x'.repeat(121)), /120 characters/i);
 });
+
+test('chat options accept a bounded timeline selection but no renderer-authored timeline context', () => {
+  const { validateChatOptions } = require('../src/ipc-contract');
+  const selection = { projectId: 'a'.repeat(32), timelineId: 'timeline-1', timelineRevision: 0, trackIds: ['video-1'], itemIds: [], startFrame: 0, endFrame: 24 };
+  assert.deepEqual(validateChatOptions({ timelineSelection: selection }).timelineSelection, selection);
+  assert.throws(() => validateChatOptions({ timelineSelection: { ...selection, endFrame: 0 } }), /range/i);
+  assert.throws(() => validateChatOptions({ timelineSelection: { ...selection, data: 'bytes' } }), /unsupported/i);
+  assert.throws(() => validateChatOptions({ timelineContext: {} }), /unsupported/i);
+});

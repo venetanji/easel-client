@@ -140,7 +140,7 @@ export function registerMediaTools(
       inputSchema: GenerateImageInput.extend({ model }).strict(),
     }, async (input, extra) => imageToolResult(await easel.generateImages({ ...input, signal: extra?.signal }), 'Generated', input.model));
     if (easel.getImageJob) server.registerTool('get_image_job', {
-      description: 'Retrieve an accepted queued image job using its original ID and model. Uses the proposed /v1/images/jobs/{id} contract; only use for an endpoint that returned a queued image receipt. Pending jobs are monitored automatically in Easel client. Never resubmit a queued image job.',
+      description: 'Retrieve an accepted queued image job using its original ID and model. Uses Easel’s /v1/images/jobs/{id} contract; only use for an endpoint that returned a queued image receipt. Pending jobs are monitored automatically in Easel client. Never resubmit a queued image job.',
       inputSchema: z.object({ jobId: z.string().regex(VIDEO_ID_PATTERN), model }).strict(),
     }, async (input, extra) => {
       const result = await easel.getImageJob!({ ...input, signal: extra?.signal });

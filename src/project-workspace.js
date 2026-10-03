@@ -25,6 +25,11 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   const mediaDrawerToggle = document.getElementById('nav-media');
   const mediaList = document.getElementById('media-list');
   const allMediaList = document.getElementById('all-media-list');
+  const mediaSearch = document.getElementById('media-search');
+  const mediaTypeFilter = document.getElementById('media-type-filter');
+  const mediaSort = document.getElementById('media-sort');
+  const mediaFiltersReset = document.getElementById('media-filters-reset');
+  const mediaNameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
   const mediaUnreadBadge = document.getElementById('media-unread');
   const mediaGenerationIndicator = document.getElementById('media-generating');
   const projectKitList = document.getElementById('project-kit-list');
@@ -290,25 +295,73 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   async function refreshAssets() {
     const owner = projectId;
     const version = ++mediaVersion;
-    const [current, all] = await Promise.all([owner ? client.getProjectAssets(owner) : [], client.listAssets()]);
+    let [current, all] = await Promise.all([owner ? client.getProjectAssets(owner) : [], client.listAssets()]);
     if (version !== mediaVersion || owner !== projectId) return;
-    assets = Array.isArray(current) ? current : current.assets || [];
+    const currentAssets = new Map();
+    let offset = 0;
+    while (true) {
+      for (const asset of Array.isArray(current) ? current : current.assets || []) currentAssets.set(`${asset.kind || 'asset'}:${asset.id}`, asset);
+      if (Array.isArray(current) || current.nextOffset == null) break;
+      if (!Number.isInteger(current.nextOffset) || current.nextOffset <= offset) throw new Error('Project media pagination did not advance. Try reopening the project.');
+      offset = current.nextOffset;
+      current = await client.getProjectAssets(owner, { offset, limit: 200 });
+      if (version !== mediaVersion || owner !== projectId) return;
+    }
+    assets = [...currentAssets.values()];
     libraryAssets = Array.isArray(all) ? all : all.assets || [];
     renderAssets();
   }
+  function mediaFilters() {
+    return {
+      terms: (mediaSearch?.value || '').trim().toLowerCase().split(/\s+/).filter(Boolean),
+      type: ['image', 'video', 'audio'].includes(mediaTypeFilter?.value) ? mediaTypeFilter.value : 'all',
+      sort: ['oldest', 'name', 'duration', 'size'].includes(mediaSort?.value) ? mediaSort.value : 'newest',
+    };
+  }
+  function visibleMedia(collection, filters) {
+    const numericValue = (asset) => {
+      if (filters.sort === 'size') return Number.isFinite(asset.bytes) && asset.bytes >= 0 ? asset.bytes : null;
+      if (filters.sort === 'duration') return ['audio', 'video'].includes(mediaKind(asset)) && Number.isFinite(asset.duration) && asset.duration >= 0 ? asset.duration : null;
+      return [asset.createdAt, asset.job?.createdAt, asset.updatedAt, asset.job?.updatedAt].find((value) => Number.isFinite(value) && value >= 0) ?? null;
+    };
+    return collection.filter((asset) => {
+      if (filters.type !== 'all' && mediaKind(asset) !== filters.type) return false;
+      const text = [asset.name, asset.path, asset.id, asset.mimeType, asset.codec, asset.job?.name, asset.job?.prompt]
+        .filter((value) => typeof value === 'string').join(' ').toLowerCase();
+      return filters.terms.every((term) => text.includes(term));
+    }).map((asset, index) => ({ asset, index })).sort((left, right) => {
+      if (filters.sort === 'name') return mediaNameOrder.compare(left.asset.name || left.asset.path || left.asset.id, right.asset.name || right.asset.path || right.asset.id) || left.index - right.index;
+      const a = numericValue(left.asset);
+      const b = numericValue(right.asset);
+      // Missing metadata stays after known values for either sort direction.
+      if (a === null || b === null) return (a === null) - (b === null) || left.index - right.index;
+      return (filters.sort === 'oldest' ? a - b : b - a) || left.index - right.index;
+    }).map(({ asset }) => asset);
+  }
   function renderAssets() {
     const attached = new Set(assets.map((asset) => asset.id));
-    const newestFirst = (left, right) => Number(right.createdAt || right.updatedAt || 0) - Number(left.createdAt || left.updatedAt || 0);
-    const current = assets.filter((asset) => mediaKind(asset)).sort(newestFirst);
-    const all = libraryAssets.filter((asset) => mediaKind(asset)).sort(newestFirst);
+    const filters = mediaFilters();
+    const filtering = filters.terms.length > 0 || filters.type !== 'all';
+    const currentMedia = assets.filter((asset) => mediaKind(asset));
+    const libraryMedia = libraryAssets.filter((asset) => mediaKind(asset));
+    const current = visibleMedia(currentMedia, filters);
+    const all = visibleMedia(libraryMedia, filters);
     mediaList.replaceChildren(...current.map((asset) => asset.kind === 'job' ? jobCard(asset) : mediaCard(asset, false, true)));
     allMediaList.replaceChildren(...all.map((asset) => asset.kind === 'job' ? jobCard(asset) : mediaCard(asset, true, attached.has(asset.id))));
     const empty = document.getElementById('media-empty');
     empty.hidden = current.length > 0;
-    empty.textContent = projectId ? 'Generated media appears here. Add a reference from All media below.' : 'Select a project to collect media. All media is available below.';
-    document.getElementById('all-media-empty').hidden = all.length > 0;
-    document.getElementById('project-image-count').textContent = String(current.length);
-    document.getElementById('all-media-count').textContent = String(all.length);
+    const noMatches = 'No media matches these filters. Try another search or reset the filters.';
+    empty.textContent = !projectId ? 'Select a project to collect media. All media is available below.'
+      : currentMedia.length && filtering ? noMatches : 'Generated media appears here. Add a reference from All media below.';
+    const allEmpty = document.getElementById('all-media-empty');
+    allEmpty.hidden = all.length > 0;
+    allEmpty.textContent = libraryMedia.length && filtering ? noMatches : 'Generated media and captures will be saved here, ready to use in any project.';
+    for (const [id, matched, total] of [['project-image-count', current.length, currentMedia.length], ['all-media-count', all.length, libraryMedia.length]]) {
+      const count = document.getElementById(id);
+      count.textContent = filtering ? `${matched} / ${total}` : String(total);
+      count.setAttribute('aria-label', filtering ? `${matched} of ${total} media items` : `${total} media items`);
+    }
+    if (mediaFiltersReset) mediaFiltersReset.disabled = !mediaSearch?.value && !filtering && filters.sort === 'newest';
     updateMediaNotices();
     updateBusy();
   }
@@ -901,6 +954,16 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   document.getElementById('library-collapse').addEventListener('click', () => setDrawer(false));
   mediaDrawerToggle.addEventListener('click', () => setMediaDrawer(mediaDrawer.hidden));
   document.getElementById('media-collapse').addEventListener('click', () => setMediaDrawer(false));
+  mediaSearch?.addEventListener('input', renderAssets);
+  mediaTypeFilter?.addEventListener('change', renderAssets);
+  mediaSort?.addEventListener('change', renderAssets);
+  mediaFiltersReset?.addEventListener('click', () => {
+    if (mediaSearch) mediaSearch.value = '';
+    if (mediaTypeFilter) mediaTypeFilter.value = 'all';
+    if (mediaSort) mediaSort.value = 'newest';
+    renderAssets();
+    mediaSearch?.focus();
+  });
   document.getElementById('project-new').addEventListener('click', () => onCreate('project'));
   document.getElementById('project-rename').addEventListener('click', () => onCreate('rename', title()));
   document.getElementById('project-delete').addEventListener('click', () => run(deleteProject));

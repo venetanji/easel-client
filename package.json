@@ -12,11 +12,14 @@
     "build:media-mcp": "npm run build --workspace=@easel/media-mcp",
     "build:canvas-kits": "node scripts/build-canvas-kits.js",
     "check:release-version": "node scripts/check-release-version.js",
-    "build": "npm run check:release-version && npm run build:media-mcp && npm run build:canvas-kits",
+    "build": "npm run check:release-version && npm run build:media-mcp && npm run build:canvas-kits && npm run build:video-runtime",
     "dist:dir": "npm run build && electron-builder --dir",
     "dist:win": "npm run build && electron-builder --win nsis zip",
     "dist:mac": "npm run build && electron-builder --mac dmg zip",
-    "dist:linux": "npm run build && electron-builder --linux AppImage deb"
+    "dist:linux": "npm run build && electron-builder --linux AppImage deb",
+    "build:video-runtime": "node scripts/build-video-runtime.js",
+    "test:video-export": "npm run build:video-runtime && node scripts/smoke-video-export.cjs",
+    "test:video-live": "npm run build:media-mcp && npm run build:video-runtime && node scripts/test-live-video-workflow.cjs"
   },
   "overrides": {
     "hono": "4.13.9"
@@ -26,6 +29,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "acorn": "^8.18.0",
     "markdown-it": "^15.0.2",
+    "mediabunny": "1.61.0",
     "openai": "7.15.0",
     "parse5": "8.0.1"
   },

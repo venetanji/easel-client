@@ -873,7 +873,7 @@ async function handleSettingsSubmit({ client, fields, statusElement }) {
   }
 }
 
-async function handleChatSubmit({ client, document, input, button, statusElement, messagesElement, mode = 'chat', size = '1024x1024', skills = [], kits = ['canvas-2d'], attachments = [], activityElement, activityLabel, newChatButton, modeButtons, copyText, onRunStart }) {
+async function handleChatSubmit({ client, document, input, button, statusElement, messagesElement, mode = 'chat', size = '1024x1024', skills = [], kits = ['canvas-2d'], attachments = [], timelineSelection, activityElement, activityLabel, newChatButton, modeButtons, copyText, onRunStart }) {
   const text = input.value.trim();
   if (!text && attachments.length === 0) return;
   const inputWasDisabled = input.disabled;
@@ -893,6 +893,7 @@ async function handleChatSubmit({ client, document, input, button, statusElement
       size,
       skills,
       kits,
+      ...(timelineSelection ? { timelineSelection } : {}),
       attachments: attachments.map(({ type, name, mimeType, data, frames }) => type === 'video'
         ? { type, name, mimeType, frames }
         : { type, name, mimeType, data }),
@@ -1095,6 +1096,15 @@ function wireRenderer({ document, client }) {
     ? (value) => navigator.clipboard.writeText(value)
     : null;
   let activeCanvasId = '';
+  let timelineSelection = null;
+  let videoEditorOpening = false;
+  function setTimelineSelection(selection) {
+    timelineSelection = selection;
+    const badge = document.getElementById('timeline-chat-context');
+    if (!badge) return;
+    badge.hidden = !selection;
+    document.getElementById('timeline-chat-selection').textContent = selection ? `Timeline frames ${selection.startFrame}–${selection.endFrame} · revision ${selection.timelineRevision} · next message` : '';
+  }
   let activeDocumentPath = '';
   let activePreviewKind = 'empty';
   let starterDocument = false;
@@ -1544,6 +1554,8 @@ function wireRenderer({ document, client }) {
     workspace.updateBusy();
     document.getElementById('new-canvas-open').disabled = busy;
     document.querySelectorAll('[data-starter], .prompt-suggestion').forEach((button) => { button.disabled = busy || external; });
+    const videoEditorButton = document.getElementById('open-video-editor');
+    if (videoEditorButton) videoEditorButton.disabled = busy || videoEditorOpening;
     undoCanvasButton.disabled = busy || activePreviewKind !== 'document' || !activeUndoAvailable;
     sendButton.disabled = external || (running ? stopPending : busy || modelSaving || credentialsSaving || !ready || (!messageInput.value.trim() && pendingAttachments.length === 0));
     sendButton.dataset.action = running ? 'stop' : 'send';
@@ -1917,6 +1929,7 @@ function wireRenderer({ document, client }) {
   }
 
   function restoreChat(chat, { preserveComposer = false } = {}) {
+    setTimelineSelection(null);
     streamingMessages.clear();
     clearUnreadMessages();
     notifiedCanvasInputs.clear();
@@ -2071,6 +2084,7 @@ function wireRenderer({ document, client }) {
   function updateCanvasState(canvas) {
     const nextId = canvas?.projectId || canvas?.id || '';
     const nextPath = canvas?.documentPath || '';
+    if (nextId !== activeCanvasId || nextPath !== activeDocumentPath) setTimelineSelection(null);
     if (nextId !== activeCanvasId || nextPath !== activeDocumentPath) starterSubmitted = false;
     activeCanvasId = nextId;
     activeDocumentPath = nextPath;
@@ -2181,6 +2195,7 @@ function wireRenderer({ document, client }) {
       if (startNewChat) {
         await client.clearChat();
         activeChatId = '';
+        setTimelineSelection(null);
         messagesElement.replaceChildren();
         streamingMessages.clear();
         canvasInputs.clear();
@@ -2202,6 +2217,7 @@ function wireRenderer({ document, client }) {
         mode: 'chat',
         skills: localSkills.filter((skill) => skill.enabled).map(({ name, instructions }) => ({ name, instructions })),
         kits: workspace.getKits(),
+        timelineSelection,
         attachments,
         activityElement,
         activityLabel,
@@ -2209,6 +2225,7 @@ function wireRenderer({ document, client }) {
         copyText,
         onRunStart: () => { agentRunning = true; updateSendState(); },
       });
+      setTimelineSelection(null);
       activeChatId = result.chatId || activeChatId;
       if (!chatHistoryPanel.hidden) await refreshChatHistory();
       pendingAttachments = [];
@@ -2411,6 +2428,9 @@ function wireRenderer({ document, client }) {
     newCanvasName.value = name;
     newCanvasName.placeholder = creationKind === 'document' ? 'e.g. Audio study' : 'e.g. Spring campaign';
     newCanvasDialog.querySelector('.new-canvas-kits').hidden = rename;
+    const templateField = document.getElementById('new-project-template-field');
+    if (templateField) templateField.hidden = creationKind !== 'project';
+    if (document.getElementById('new-project-template')) document.getElementById('new-project-template').value = 'blank';
     setStatus(newCanvasStatus, '');
     const request = ++newProjectKitRequest;
     newProjectKitInputs = null;
@@ -2444,6 +2464,30 @@ function wireRenderer({ document, client }) {
       setStatus(newCanvasStatus, `${error?.message || 'Could not load available kits.'} Close and reopen this dialog to try again.`, true);
     }
   }
+  document.getElementById('media-import')?.addEventListener('click', async () => {
+    const button = document.getElementById('media-import');
+    if (chatBusy || canvasResumeBusy || backendHistoryBusy || workspace.isOperating()) return;
+    button.disabled = true; nativeDialogOpen = true; updateCanvasBounds();
+    try {
+      const result = await client.importMedia(activeCanvasId ? { projectId: activeCanvasId } : {});
+      if (!result.canceled) {
+        await workspace.refreshAssets();
+        setStatus(statusElement, result.errors?.length ? `Imported ${result.assets.length} files. ${result.errors.map((entry) => `${entry.name}: ${entry.error}`).join(' ')}` : `Imported ${result.assets.length} files to Media.`, Boolean(result.errors?.length));
+      }
+    } catch (error) { setStatus(statusElement, error.message, true); }
+    finally { button.disabled = false; nativeDialogOpen = false; updateCanvasBounds(); }
+  });
+  document.getElementById('timeline-chat-clear')?.addEventListener('click', () => setTimelineSelection(null));
+  document.getElementById('open-video-editor')?.addEventListener('click', async () => {
+    if (videoEditorOpening || chatBusy || canvasResumeBusy || backendHistoryBusy || workspace.isOperating()) return;
+    videoEditorOpening = true; updateSendState();
+    try {
+      const result = await client.openVideoEditor(activeCanvasId ? { projectId: activeCanvasId } : {});
+      await workspace.openProject(result.projectId || result.id, result.documentPath);
+      setStatus(statusElement, 'Video editor ready. Its HTML, JavaScript and styles are editable under Project files.');
+    } catch (error) { setStatus(statusElement, error.message, true); }
+    finally { videoEditorOpening = false; updateSendState(); }
+  });
   document.getElementById('new-canvas-open').addEventListener('click', () => openNewCanvasDialog('document'));
   document.getElementById('new-canvas-close').addEventListener('click', () => newCanvasDialog.close());
   newCanvasDialog.addEventListener('close', () => { ++newProjectKitRequest; newProjectKitInputs = null; updateCanvasBounds(); });
@@ -2454,7 +2498,11 @@ function wireRenderer({ document, client }) {
     newCanvasSubmit.textContent = creationKind === 'rename' ? 'Saving...' : 'Creating...';
     try {
       const kits = creationKind === 'project' ? newProjectKitInputs.filter((input) => input.checked).map((input) => input.value) : undefined;
-      const canvas = await workspace.create(creationKind, newCanvasName.value.trim(), kits);
+      const videoTemplate = creationKind === 'project' && document.getElementById('new-project-template')?.value === 'video';
+      const canvas = videoTemplate
+        ? await client.openVideoEditor({ title: newCanvasName.value.trim(), kits })
+        : await workspace.create(creationKind, newCanvasName.value.trim(), kits);
+      if (videoTemplate) await workspace.openProject(canvas.projectId || canvas.id, canvas.documentPath);
       newCanvasDialog.close();
       newCanvasName.value = '';
       setStatus(statusElement, creationKind === 'rename' ? 'Project renamed.' : `Created ${canvas.documentTitle || canvas.title}.`);
@@ -2528,6 +2576,20 @@ function wireRenderer({ document, client }) {
   });
 
   const unsubscribe = client.onAgentEvent((event) => {
+    if (event.type === 'media-imported') { workspace.refreshAssets().catch((error) => setStatus(statusElement, error.message, true)); return; }
+    if (event.type === 'timeline-selection') {
+      if (event.projectId === activeCanvasId && event.documentPath === activeDocumentPath && (event.chatId || '') === (activeChatId || '')) setTimelineSelection(event.selection);
+      return;
+    }
+    if (event.type === 'timeline-changed') {
+      if (timelineSelection?.projectId === event.projectId && timelineSelection.timelineRevision !== event.revision) setTimelineSelection(null);
+      return;
+    }
+    if (event.type === 'timeline-exported') {
+      refreshAssets();
+      setStatus(statusElement, event.warning || 'Video exported to Media. Select it there to play or download.');
+      return;
+    }
     if (event.type === 'agent-control') {
       const previous = agentControlUi.getState()?.backend;
       if (event.state?.busy === false) {
