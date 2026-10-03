@@ -59,13 +59,21 @@ const timeout = setTimeout(() => { console.error('Native editor smoke timed out.
   const timeline = await until(async () => { const value = await edit('window.EaselHost.timeline({action:"read"})'); return value.items.length === 1 ? value : null; }, 'Drawer drop did not save a clip.');
   assert.equal(timeline.items[0].startFrame, 24); assert.equal(timeline.items[0].endFrame, 72);
   await edit('document.querySelector(".timeline-clip").click()');
+  // Native input requires the containing window and sandboxed view to have
+  // focus. The drawer held focus during the preceding import/drop steps.
+  window.show(); window.focus(); canvas.focus();
+  await until(() => edit('document.hasFocus()'), 'Canvas did not receive native input focus.');
+  await edit('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+  await edit(`window.nativePointerEvents = []; for (const type of ['pointerdown', 'pointermove', 'pointerup']) document.addEventListener(type, event => window.nativePointerEvents.push({type, role:event.target.dataset?.role, x:event.clientX, y:event.clientY}), true)`);
   const handle = await edit(`(() => { const node=document.querySelector('[data-role="range-end-handle"][data-track-id="video-1"]'); const box=node.getBoundingClientRect(); return {x:Math.round(box.x+box.width/2-3),y:Math.round(box.y+box.height/2),visible:!node.hidden,disabled:node.disabled}; })()`);
   assert.equal(handle.visible, true); assert.equal(handle.disabled, false);
   canvas.sendInputEvent({type:'mouseMove',x:handle.x,y:handle.y});
   canvas.sendInputEvent({type:'mouseDown',x:handle.x,y:handle.y,button:'left',clickCount:1});
+  await until(() => edit('window.nativePointerEvents.some(event => event.type === "pointerdown" && event.role === "range-end-handle")'), 'Native pointer did not reach the end handle.');
   canvas.sendInputEvent({type:'mouseMove',x:handle.x+36,y:handle.y,movementX:36});
   canvas.sendInputEvent({type:'mouseUp',x:handle.x+36,y:handle.y,button:'left',clickCount:1});
-  await until(() => edit('window.EaselVideoEditor.getSelection()?.endFrame===84'), 'Native pointer did not adjust the range.');
+  try { await until(() => edit('window.EaselVideoEditor.getSelection()?.endFrame===84'), 'Native pointer did not adjust the range.'); }
+  catch (error) { console.error(await edit('JSON.stringify({selection:window.EaselVideoEditor.getSelection(),events:window.nativePointerEvents,focused:document.hasFocus()})')); throw error; }
   await edit('document.querySelector("[data-role=range-end-handle][data-track-id=video-1]").focus()');
   canvas.sendInputEvent({type:'keyDown',keyCode:'Right',modifiers:['shift']});
   canvas.sendInputEvent({type:'keyUp',keyCode:'Right',modifiers:['shift']});
