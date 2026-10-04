@@ -49,6 +49,7 @@ test('settings store refuses to persist credentials when encryption is unavailab
   const store = createSettingsStore({ userDataPath, safeStorage: fakeSafeStorage(false) });
 
   assert.throws(() => store.save({ easelApiKey: 'secret' }), /secure storage is unavailable/i);
+  assert.throws(() => store.saveConnection({ name: 'Example', baseUrl: 'https://example.test/v1', apiKey: 'secret' }), /secure storage is unavailable/i);
   assert.equal(fs.existsSync(path.join(userDataPath, 'settings.json')), false);
 });
 
