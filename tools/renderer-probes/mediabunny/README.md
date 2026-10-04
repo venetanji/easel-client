@@ -22,4 +22,14 @@ xvfb-run -a ./node_modules/.bin/electron tools/renderer-probes/mediabunny
 
 The harness writes `out/render.webm` and `out/renderer-result.json` under its own directory. Generated clips, output files, and nested `node_modules` are ignored by its `.gitignore`. It binds its temporary HTTP server to loopback, runs the renderer with sandboxing/context isolation and Node integration disabled, and uses an isolated Electron user-data directory under the OS temporary directory.
 
+Each invocation clears the previous render, partial render, and result before loading the renderer. A successful result with nonempty output bytes writes `render.webm` atomically and exits with code 0. Failed or cancelled results remove render output and exit with code 1. Renderer crashes, a closed window, page/module load failures, server errors, and a 60-second watchdog timeout also terminate with code 1 and record an error in `renderer-result.json` when the output directory is writable. Terminal cleanup destroys the hidden window and closes the HTTP server, including stalled connections; duplicate or late results cannot replace the first terminal result. A missing optional favicon does not fail the probe.
+
+Run the harness lifecycle regressions without Electron, FFmpeg, a display server, or probe dependencies:
+
+```sh
+node --test test/mediabunny-probe.test.js
+```
+
+These tests use the real HTTP server and filesystem with a fake Electron boundary and controllable watchdog; they do not validate codecs or rendered media.
+
 Mediabunny is pinned to `1.61.0` in the probe-only package manifest and lockfile. This package is separate from the Easel Client runtime manifest; do not add it as a product dependency based on this experiment alone.
