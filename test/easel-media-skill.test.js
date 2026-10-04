@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { readInstalledSkills } = require('../src/skill-catalog');
 const { MEDIA_REFERENCE_TOOLS } = require('../src/media-reference-tools');
+const { TIMELINE_TOOLS } = require('../src/video-timeline-tools');
 
 const skillDirectory = path.join(__dirname, '..', '.agents', 'skills', 'easel-media');
 const referencesDirectory = path.join(skillDirectory, 'references');
@@ -93,4 +94,43 @@ test('in-app skill injection includes every adapter and the essential creative g
     assert.ok(MEDIA_REFERENCE_TOOLS.some((tool) => tool.function.name === toolName));
     assert.ok(skill.instructions.includes('`' + toolName + '`'));
   }
+});
+
+
+function injectedMediaInstructions() {
+  return readInstalledSkills(path.dirname(skillDirectory))
+    .find((entry) => entry.name === 'easel-media').instructions.replace(/\s+/g, ' ');
+}
+
+test('injected media skill explains managed timeline assembly without source retiming', () => {
+  const instructions = injectedMediaInstructions();
+  for (const { function: tool } of TIMELINE_TOOLS) {
+    assert.ok(instructions.includes('`' + tool.name + '`'), tool.name);
+  }
+  assert.match(instructions, /`inspect_timeline`.*`list_media_assets`.*`attach_canvas_assets`.*`apply_timeline_edit`/);
+  assert.match(instructions, /`expectedRevision`/);
+  assert.match(instructions, /stale.*fresh selection/);
+  assert.match(instructions, /integer half-open.*\[startFrame,endFrame\)/);
+  assert.match(instructions, /sourceStartSeconds.*sourceEndSeconds.*seconds/);
+  assert.match(instructions, /frameRate.numerator \/ frameRate.denominator/);
+  assert.match(instructions, /sourceEndSeconds - sourceStartSeconds = \(endFrame - startFrame\) \/ fps/);
+  assert.match(instructions, /\[0,48\).*\[48,96\)/);
+  assert.match(instructions, /no same-track overlaps/);
+  assert.match(instructions, /Export video.*no agent export tool/);
+});
+
+test('injected stitching recipes separate local cuts from unsupported temporal generation', () => {
+  const instructions = injectedMediaInstructions();
+  assert.match(instructions, /Hard-cut assembly/);
+  assert.match(instructions, /Generative stitching/);
+  assert.match(instructions, /H3.*temporal video\/audio guides.*client.*cannot submit/);
+  assert.match(instructions, /LTX.*still-image.*temporal.*not exposed/);
+  assert.match(instructions, /retained.*boundary frames/);
+  assert.match(instructions, /duplicate.*boundary frame/);
+  assert.match(instructions, /identity.*motion.*lighting/);
+  assert.match(instructions, /gain.*fadeInFrames.*fadeOutFrames/);
+  assert.match(instructions, /never claim.*heard.*metadata/);
+  assert.match(instructions, /ComfyUI restart.*downloaded managed assets/);
+  assert.match(instructions, /never.*resubmit.*billed/);
+  assert.doesNotMatch(instructions, /prepare_timeline_guides/);
 });

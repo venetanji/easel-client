@@ -1,6 +1,6 @@
 ---
 name: easel-media
-description: Generate and edit Easel images, submit durable video jobs, choose camera and LoRA workflows, and prepare offline canvas previews. Use for Easel media requests, including multiprompt batches and guided-video planning.
+description: Generate and edit Easel media, assemble managed clips with revision-safe timeline tools, review stitching and audio continuity, and plan supported video workflows. Use for media requests, timeline edits and guided-video planning.
 ---
 
 # Easel Media
@@ -11,8 +11,9 @@ current tool schema and endpoint actually support.
 
 ## Models and references
 
-The target Easel service has two provider models: `qwen-image-2.1` for images and
-reference edits, and `ltx-2.5` for video. The legacy `flux2-9b` and `flux2-4b`
+Known provider models include `qwen-image-2.1` for images/reference edits and
+`ltx-2.5` for video; discover the enabled IDs rather than treating this list as
+exhaustive. The legacy `flux2-9b` and `flux2-4b`
 models are being retired. Do not substitute Flux for an unavailable model.
 `flux-2.5` is not the LTX video model ID.
 
@@ -46,7 +47,8 @@ The current Media MCP package exposes:
 - `edit_image` and `create_image_variation` to transform saved reference images when supported by the endpoint.
 - `generate_video` to submit one video job with a video model, prompt, optional reference image, seconds and size.
 - `get_video` and `get_image_job` to retrieve accepted jobs in standalone MCP use.
-- In-app `list_media_jobs`, `list_media_assets` and `inspect_media_asset` to inspect durable jobs and choose real saved references.
+- In-app `list_media_jobs` and `list_media_assets` to inspect jobs and real saved references; `inspect_media_asset` shows saved images, not decoded video frames.
+- In-app `inspect_timeline`, `create_timeline`, `apply_timeline_edit`, `undo_timeline` and `redo_timeline` for revision-safe hard-cut assembly; `attach_canvas_assets` attaches existing managed media to the active project.
 - `capture_canvas_screenshot` to render HTML and local image assets in an offline browser and return a PNG screenshot.
 
 There is no current MCP adapter-discovery tool, camera/LoRA argument or guide-video
@@ -54,6 +56,83 @@ upload argument. Server-side features in the references are not valid MCP fields
 until exposed by the tool schema. Audio generation tools are not available yet,
 even if discovery lists audio output models. Do not imply that a job was submitted
 or finished without its tool result.
+
+## Timeline stitching and review
+
+### Hard-cut assembly
+
+Use local timeline edits when the request is to arrange, trim or join existing
+clips. This preserves source files and does not submit a generation job.
+
+1. Call `inspect_timeline` for the active project and `list_media_assets` for
+   real managed sources. Read the current revision, frame rate, track types and
+   capabilities. Use `create_timeline` only if no timeline exists. Preserve the
+   user's selected range; if it is stale, request a fresh selection rather than
+   silently changing its scope.
+2. Reuse actual asset IDs and available duration/geometry metadata. A remote job
+   receipt is not a playable source. Use `attach_canvas_assets` for any library
+   sources not yet attached to this project before `apply_timeline_edit`. Match
+   video/images to video tracks, audio to audio tracks and images to overlays.
+   Never use paths, URLs or invented IDs as timeline sources.
+3. Plan retained ranges in integer half-open project frames
+   `[startFrame,endFrame)`, with exclusive end. `sourceStartSeconds` and
+   `sourceEndSeconds` are source times in seconds, not frame indexes. Compute
+   `fps = frameRate.numerator / frameRate.denominator` from the inspected
+   timeline. Export requires
+   `sourceEndSeconds - sourceStartSeconds = (endFrame - startFrame) / fps`;
+   speed changes are unsupported. Keep trims within the actual source duration.
+   At 24 fps, `[0,48)` then `[48,96)` is a four-second hard-cut sequence of two
+   two-second clips. The first item ends on project frame 47; frame 48 belongs
+   to the second. A source offset of 1 second for a two-second item uses source
+   seconds `[1,3)`, independent of where the item sits on the timeline.
+4. Submit a bounded batch of typed operations with `apply_timeline_edit` and the
+   inspected `expectedRevision`. Use actual item/track IDs and only fields for
+   each operation. There are no same-track overlaps; place the next cut at the
+   prior item's exclusive end. Transitions and retiming are unavailable. On a
+   revision conflict, reinspect and rebase instead of overwriting newer edits.
+   `undo_timeline` and `redo_timeline` also require the current revision.
+5. Review the resulting timeline and retained first/middle/last and boundary
+   frames with editor playback/frame stepping and captured views where
+   available. Check identity, motion direction, lighting, framing, aspect fit,
+   black gaps and duplicate retained boundary frames. A timeline selection is
+   compact context, not decoded media or proof that the footage was reviewed.
+6. Review source-clip audio and any separate music/voice track across each cut.
+   Keep an approved master audio bed once; avoid accidentally doubling it with
+   clip sound. Use `set-audio-level` operations with `gain`, `fadeInFrames` and
+   `fadeOutFrames` where needed; fades use project frames and must fit the item.
+   Ask for playback review if listening is unavailable; never claim to have
+   heard audio from metadata or a successful render alone.
+7. The user exports through the editor's **Export video** button; there is no
+   agent export tool. Do not trigger export via runtime JavaScript as a tool
+   workaround. The local WebM export is separate from saving the timeline or
+   exporting a project ZIP. Stay within the inspected/export limits (currently
+   60 seconds, 32 items and 32 MiB output). Treat editor preview as approximate;
+   verify the saved exported asset before claiming a finished video.
+
+### Generative stitching
+
+Generating a transition, extension or gap-fill means synthesizing new content;
+putting two clips next to each other is not that capability. Plan the missing
+shot and continuity constraints, then check the actual enabled tool schema.
+Do not promise exact motion, seamless joins or audio alignment from a still
+reference. Current `generate_video` accepts one saved still-image reference,
+not a selected timeline range, guide video or source audio. If a usable boundary
+still is already saved, inspect and use its real ID; otherwise ask the user to
+capture/import the intended still. There is no agent frame-extraction tool.
+
+H3 server workflows support temporal video/audio guides, but the current client
+schema cannot submit them. LTX's current API guidance is still-image-only;
+temporal video guidance and continuation/first-last controls are not exposed
+by this client. Do not infer callable support from model discovery, installed
+weights, a server feature or a successful text/image-to-video job. Do not invent
+fields, tools or direct API/shell bypasses to bridge this gap.
+
+For a currently supported new shot, submit once, let the host finish/download
+it, then inspect the saved result and attach it before typed timeline edits.
+Plan retained output spans separately from any conditioning context; never
+count context as extra delivered frames or duplicate a retained boundary frame.
+Review the join's identity, motion and lighting plus both sides' audio before
+calling it continuous. Report which continuity checks were actually possible.
 
 ## Video workflow
 
@@ -112,6 +191,10 @@ a small coherent batch over many individual submissions; review before expanding
   a closed conversation must not trigger regeneration of an accepted job.
 - Do not blindly retry a generation POST after receipt loss or a timeout;
   acceptance is ambiguous and the server has no idempotency recovery contract.
+- H3 job receipts may disappear after a ComfyUI restart. Prefer downloaded
+  managed assets over upstream receipts for reuse; the host's persisted job ID
+  does not restore lost server history. Check local assets and monitor state,
+  report an unresolved receipt, and never blindly resubmit a possibly billed job.
 - Queue estimates are approximate and may be absent. `estimated_wait_seconds`
   on Easel means time to completion, including generation, not queue time alone.
 - HTTP 429 with `Retry-After` is admission backpressure, not permission for a
@@ -193,9 +276,11 @@ IC adapters need loader metadata and guide/crop handling, not just model patches
 
 ### Guiding-video preparation
 
-There is no current typed guide-video submission path in Easel API/MCP. Most
-video-conditioned IC adapters remain disabled even when their weights are
-installed. A private ComfyUI prototype is not a portable callable workflow.
+The current client has no typed guide-video submission path. The LTX API
+still accepts image references only; its video-conditioned IC adapters mostly
+remain disabled even when their weights are installed. H3 server temporal
+guidance does not expose that capability to this client. A private ComfyUI
+prototype is not a portable callable workflow.
 
 Prepare depth for spatial layout/occlusion/parallax, real Canny for silhouettes,
 or pose for body motion. Register RGB and control frames at matching aspect,

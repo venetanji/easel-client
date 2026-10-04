@@ -92,7 +92,7 @@ test('opens a missing timeline with accessible track controls without inventing 
   assert.equal(f.role('play').textContent, 'Play');
   assert.equal(f.role('seek').getAttribute('aria-label'), 'Preview frame');
   assert.equal(f.all((node) => node.dataset.trackId && node.dataset.role === 'track-select').length, 3);
-  assert.match(f.container.textContent, /Add media/);
+  assert.match(f.container.textContent, /Add clip/);
   assert.equal(f.role('redo').disabled, true);
 });
 
@@ -229,17 +229,37 @@ test('library media is attached explicitly before inserting and previewing it', 
   const f = fixture();
   f.client.listAssets = async () => [{ id: 'library-video', name: 'Generated scene', mimeType: 'video/mp4', duration: 2 }];
   f.client.attachProjectAsset = async (projectId, assetId) => { f.calls.push(['attach', projectId, assetId]); };
-  await f.view.open('project-a'); await f.change(f.role('media-source'), 'library'); await f.change(f.role('add-asset'), 'library-video'); await f.click(f.role('add-clip'));
+  await f.view.open('project-a'); f.role('add-picker').open = true; await f.role('add-picker').dispatchEvent({ type: 'toggle' }); await f.change(f.role('add-asset'), 'library-video'); await f.click(f.role('add-clip'));
   const attachIndex = f.calls.findIndex(([method]) => method === 'attach'), applyIndex = f.calls.findIndex(([method]) => method === 'apply');
   assert.ok(attachIndex >= 0 && attachIndex < applyIndex);
   assert.equal(f.calls[applyIndex][2].operations[0].item.assetId, 'library-video');
 });
 
-test('media filtering uses type and case-insensitive names without loading bytes', async () => {
-  const f = fixture(); await f.view.open('project-a'); await f.change(f.role('media-filter'), 'image');
-  assert.equal(f.role('add-asset').children.length, 1); assert.equal(f.role('add-asset').children[0].value, 'asset-image');
-  await f.change(f.role('media-search'), 'coast'); assert.equal(f.role('add-asset').children.length, 0);
+test('media insertion is a compact disclosure outside a full-width preview', async () => {
+  const f = fixture(); await f.view.open('project-a');
+  const picker = f.role('add-picker');
+  assert.ok(picker, 'Keyboard insertion remains available');
+  assert.equal(picker.tagName, 'DETAILS'); assert.equal(picker.open, false);
+  assert.equal(f.all(node => node.className === 'timeline-sidebar').length, 0);
+  for (const role of ['media-source', 'media-filter', 'media-search', 'import-media']) assert.equal(f.role(role), undefined);
+  const workbench = f.all(node => node.className === 'timeline-workbench')[0];
+  assert.equal(workbench.children.length, 1);
+  assert.equal(f.role('inspector').hidden, true);
   assert.equal(f.calls.some(([method]) => method === 'asset'), false);
+});
+
+test('keyboard picker merges project and library sources without duplicate IDs', async () => {
+  const f = fixture(); f.client.listAssets = async () => [
+    { id: 'asset-video', mimeType: 'video/mp4', name: 'Coast' },
+    { id: 'new-image', mimeType: 'image/png', name: 'Generated still' },
+  ];
+  await f.view.open('project-a'); f.role('add-picker').open = true;
+  await f.role('add-picker').dispatchEvent({ type: 'toggle' });
+  assert.deepEqual(f.role('add-asset').children.map(node => node.value), ['asset-video', 'asset-image', 'new-image']);
+  await f.change(f.role('add-asset'), 'asset-image'); await f.change(f.role('image-duration'), 2);
+  await f.click(f.role('add-clip'));
+  const item = f.calls.find(([method]) => method === 'apply')[2].operations[0].item;
+  assert.equal(item.endFrame - item.startFrame, 48);
 });
 
 test('project media pagination reaches later files without repeating pages', async () => {
@@ -278,12 +298,11 @@ test('closing cancels an in-flight export without saving its result', async () =
   assert.equal(signal.aborted, true); assert.equal(f.calls.some(([method]) => method === 'save-export'), false);
 });
 
-test('optional native import refreshes project media without opening source bytes in the editor', async () => {
-  const f = fixture(); let imported = false;
-  f.client.importMedia = async (projectId) => { assert.equal(projectId, 'project-a'); imported = true; return { imported: 1 }; };
-  f.client.getProjectAssets = async () => ({ assets: imported ? [{ id: 'new-asset', name: 'New recording', mimeType: 'video/webm', duration: 1 }] : [], nextOffset: null });
-  await f.view.open('project-a'); await f.click(f.role('import-media'));
-  assert.equal(f.role('add-asset').children[0].value, 'new-asset'); assert.equal(f.calls.some(([method]) => method === 'asset'), false);
+test('refresh picks up media imported through the existing app drawer', async () => {
+  const f = fixture(); await f.view.open('project-a');
+  f.client.getProjectAssets = async () => ({ assets: [{ id: 'new-asset', name: 'New recording', mimeType: 'video/webm', duration: 1 }], nextOffset: null });
+  await f.click(f.role('refresh'));
+  assert.equal(f.role('add-asset').children[0].value, 'new-asset');
 });
 
 test('visual overlay videos stay silent and expose no audio edits', async () => {
@@ -298,9 +317,11 @@ test('opening clears the external loading status when timeline is ready', async 
   const f = fixture(); await f.view.open('project-a'); assert.equal(f.statuses.at(-1), '');
 });
 
-test('selecting a clip puts its inspector before the media picker', async () => {
+test('selecting a clip reveals contextual timing and audio without moving the picker', async () => {
   const f = fixture(); await f.view.open('project-a'); await f.click(f.item('clip-1'));
-  assert.equal(f.role('inspector').parentNode.children[0], f.role('inspector'));
+  assert.equal(f.role('inspector').hidden, false);
+  assert.equal(f.role('inspector').tagName, 'DETAILS');
+  assert.equal(f.role('inspector').parentNode.children[0], f.role('add-picker'));
 });
 
 test('long filenames remain unchanged in media but clip names fit the timeline contract', async () => {
@@ -769,4 +790,53 @@ test('one-frame clips at minimum zoom keep their authored width rather than bord
   const f=fixture({initial:doc}); await f.view.open('project-a'); f.role('zoom').value='24'; await f.role('zoom').dispatchEvent({type:'input'});
   const clip=f.item('clip-1'); assert.equal(clip.style.width,'1px');
   assert.ok(parseFloat(clip.style.borderWidth)*2+parseFloat(clip.style.paddingInline)*2<=1);
+});
+
+test('a delayed keyboard library list never leaks across project switches', async () => {
+  const f = fixture(); let finish;
+  f.client.listAssets = () => new Promise(resolve => { finish = resolve; });
+  await f.view.open('project-a'); f.role('add-picker').open = true;
+  const pending = f.role('add-picker').dispatchEvent({ type: 'toggle' });
+  await f.view.open('project-b');
+  finish([{ id: 'old-library', mimeType: 'video/mp4', name: 'Old project context' }]); await pending;
+  assert.equal(f.role('add-picker').open, false);
+  assert.equal(f.role('add-asset').children.some(option => option.value === 'old-library'), false);
+});
+
+test('a failed library list keeps project keyboard insertion and can retry', async () => {
+  const f = fixture(); f.client.listAssets = async () => { throw new Error('Unavailable'); };
+  await f.view.open('project-a'); f.role('add-picker').open = true;
+  await f.role('add-picker').dispatchEvent({ type: 'toggle' });
+  assert.equal(f.role('add-clip').disabled, false);
+  assert.match(f.role('status').textContent, /Refresh to retry/);
+  f.client.listAssets = async () => [{ id: 'retry-image', mimeType: 'image/png', name: 'Recovered' }];
+  await f.click(f.role('refresh'));
+  assert.ok(f.role('add-asset').children.some(option => option.value === 'retry-image'));
+});
+
+test('disclosure keyboard activation does not trigger playback or cancel native toggling', async () => {
+  const f = fixture(); await f.view.open('project-a');
+  const shell = f.all(node => node.className === 'video-timeline')[0];
+  let prevented = false;
+  await shell.dispatchEvent({ type: 'keydown', key: ' ', target: { tagName: 'SUMMARY' }, preventDefault() { prevented = true; } });
+  assert.equal(prevented, false);
+  assert.equal(f.role('play').textContent, 'Play');
+});
+
+test('latest keyboard library refresh wins without silently changing the chosen source', async () => {
+  const f = fixture(); const pending = [];
+  f.client.listAssets = () => new Promise((resolve, reject) => pending.push({ resolve, reject }));
+  await f.view.open('project-a'); f.role('add-picker').open = true;
+  const first = f.role('add-picker').dispatchEvent({ type: 'toggle' });
+  const second = f.role('add-picker').dispatchEvent({ type: 'toggle' });
+  pending[1].resolve([{ id: 'new-image', mimeType: 'image/png', name: 'Latest' }]); await second;
+  await f.change(f.role('add-asset'), 'new-image');
+  pending[0].resolve([{ id: 'old-image', mimeType: 'image/png', name: 'Outdated' }]); await first;
+  assert.equal(f.role('add-asset').value, 'new-image');
+  assert.equal(f.role('add-asset').children.some(option => option.value === 'old-image'), false);
+  const oldError = f.role('add-picker').dispatchEvent({ type: 'toggle' });
+  const latest = f.role('add-picker').dispatchEvent({ type: 'toggle' });
+  pending[3].resolve([{ id: 'new-image', mimeType: 'image/png', name: 'Latest' }]); await latest;
+  pending[2].reject(new Error('Outdated error')); await oldError;
+  assert.doesNotMatch(f.role('status').textContent, /Outdated error/);
 });
