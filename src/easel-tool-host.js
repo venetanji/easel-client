@@ -135,7 +135,7 @@ function createEaselToolHost({ canvasController, presentCanvas, assetStore, medi
       if (signal?.aborted) throw error;
       const message = String(error.message || error);
       const correction = toolCorrection(name, descriptor ? { function: { parameters: descriptor.inputSchema } } : undefined, message, error.code);
-      return { isError: true, content: [{ type: 'text', text: JSON.stringify({ ok: false, error: message, code: error.code || 'EASEL_TOOL_ERROR', ...(error.acceptedJob ? { acceptedJob: error.acceptedJob } : {}), ...correction }) }] };
+      return { isError: true, content: [{ type: 'text', text: JSON.stringify({ ok: false, error: message, code: error.code || 'EASEL_TOOL_ERROR', ...(error.requestSent === false && ['INVALID_TOOL_ARGUMENTS', 'INVALID_MEDIA_REFERENCE'].includes(error.code) ? { requestSent: false, stage: error.stage } : {}), ...(error.acceptedJob ? { acceptedJob: error.acceptedJob } : {}), ...correction }) }] };
     }
   }
   return {

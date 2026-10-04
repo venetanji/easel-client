@@ -65,13 +65,27 @@ test('skill reference links remain local and resolve inside the bundled skill', 
   assert.ok(referenceCount >= 6);
 });
 
-test('the skill distinguishes target models, tool gaps and current fan-out limits', () => {
+test('the skill distinguishes target models, typed generation controls and current fan-out limits', () => {
   const skill = fs.readFileSync(path.join(skillDirectory, 'SKILL.md'), 'utf8');
   assert.match(skill, /name: easel-media/);
   assert.match(skill, /`qwen-image-2\.1`/);
   assert.match(skill, /`ltx-2\.5`/);
   assert.match(skill, /Current client limit: at most four nonempty segments/);
-  assert.match(skill, /no current MCP adapter-discovery tool/);
+  for (const name of ['discover_video_capabilities({model})', 'list_video_loras({model})', 'cameraLora', 'cameraLoraStrength', 'loras: [{id,strength?}]', 'motionSpeed', 'loraReferenceAssetId', 'loraReferenceStrength', 'guidingFrames: [{assetId,frameIndex,strength?}]', 'guidingFrames: [{image:{data,mimeType,name?},frameIndex,strength?}]']) {
+    assert.ok(skill.includes(name), name);
+  }
+  assert.match(skill, /exact decimal string/);
+  assert.match(skill, /18446744073709551614/);
+  assert.match(skill, /32 MiB/);
+  assert.match(skill, /1–8 stills/);
+  assert.match(skill, /seconds \* 24/);
+  assert.match(skill, /step \*\*one\*\*/);
+  assert.match(skill, /graph_contract_tested/);
+  assert.match(skill, /not live-GPU\/visually verified/);
+  assert.match(skill, /soft conditioning/);
+  assert.match(skill, /LTX-2\.5 runtime remains unavailable/);
+  assert.match(skill.replace(/\s+/g, ' '), /decoded still images.*32 million pixels.*declared MIME/);
+  assert.doesNotMatch(skill, /no current MCP adapter-discovery tool|server-side recipes, not current MCP arguments/);
   assert.match(skill, /not a video timeline/);
   assert.match(skill, /no idempotency recovery contract/);
 });
@@ -86,7 +100,7 @@ test('in-app skill injection includes every adapter and the essential creative g
     .map((match) => match[1]);
   assert.deepEqual(documentedIds.sort(), catalog.map((entry) => entry.id).sort());
   const normalizedInstructions = skill.instructions.replace(/\s+/g, ' ');
-  for (const practice of ['pose-neutral', 'master audio', 'motion_speed', 'guide-token', '8n+1']) {
+  for (const practice of ['pose-neutral', 'master audio', 'motionSpeed', 'guide-token', '8n+1']) {
     assert.ok(normalizedInstructions.includes(practice), practice);
   }
   for (const toolName of ['list_media_jobs', 'list_media_assets', 'inspect_media_asset']) {
