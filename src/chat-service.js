@@ -1,3 +1,4 @@
+const { timelineContextText, TIMELINE_METHODS } = require('./video-timeline-tools');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { buildUserContent, handleMcpResult, runAgentTurn } = require('./agent');
@@ -145,6 +146,11 @@ function createChatService({
     if (!canvasController) return canvasController;
     return {
       ...canvasController,
+      ...Object.fromEntries(Object.values(TIMELINE_METHODS).map((method) => [method, (args) => {
+        if (turnOptions.timelineSelection && args.projectId !== turnOptions.timelineSelection.projectId) throw new Error('The timeline edit must target the project selected for this turn.');
+        if (typeof canvasController?.[method] !== 'function') throw new Error('Timeline editing is unavailable.');
+        return canvasController[method](args);
+      }])),
       requestCanvasInput: async (args) => {
         if (!inputStore || typeof canvasController.requestCanvasInput !== 'function') throw new Error('Canvas input is unavailable.');
         return canvasController.requestCanvasInput(args, { chatId: turnChatId, turnOptions });
@@ -178,7 +184,7 @@ function createChatService({
     if (JSON.stringify(approved) !== JSON.stringify(current)) throw new Error(message);
   }
 
-  async function sendMessage(input, { mode = 'chat', size = '1024x1024', skills = [], kits = [], attachments = [] } = {}, canvasResume = null, resumeTurn = null) {
+  async function sendMessage(input, { mode = 'chat', size = '1024x1024', skills = [], kits = [], attachments = [], timelineContext, timelineSelection } = {}, canvasResume = null, resumeTurn = null) {
     if (!enabled) throw new Error('The built-in agent is disabled while another controller is selected.');
     let userMessage = '';
     if (typeof input === 'string' && input.trim()) {
@@ -220,7 +226,7 @@ function createChatService({
       if (!canvasResume) {
         deliverMediaNotifications({ consume: true });
         const text = userMessage || 'Review the attached media and respond with what you find.';
-        const requestText = mode === 'image' ? `Create one image with size ${size}. Use the generate_image tool with n=1. User brief:\n${text}` : text;
+        const requestText = (mode === 'image' ? `Create one image with size ${size}. Use the generate_image tool with n=1. User brief:\n${text}` : text) + timelineContextText(timelineContext);
         history.push({ role: 'user', content: attachments.length ? buildUserContent(requestText, attachments) : requestText });
         checkpoint();
       }
@@ -300,7 +306,7 @@ function createChatService({
           mcp,
           assetStore,
           mediaAssetStore,
-          canvasController: scopedCanvasController(turnChatId, turnOptions),
+          canvasController: scopedCanvasController(turnChatId, { ...turnOptions, ...(timelineSelection ? { timelineSelection } : {}) }),
           presentCanvas,
           onEvent,
           signal,

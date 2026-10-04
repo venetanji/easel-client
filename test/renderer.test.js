@@ -471,3 +471,13 @@ test('unsupported bundled skill copies stay editable but cannot be enabled', () 
   assert.match(list.textContent, /Requires a CLI/);
   assert.equal(list.querySelectorAll('button').find((button) => button.textContent === 'Edit').disabled, false);
 });
+
+test('chat submit forwards an exact explicit timeline selection without renderer context or bytes', async () => {
+  const input = element('textarea'); input.value = 'Trim this range';
+  let options;
+  const selection = { projectId: 'a'.repeat(32), timelineId: 'tl', timelineRevision: 2, trackIds: ['video-1'], itemIds: ['clip'], startFrame: 10, endFrame: 20 };
+  await handleChatSubmit({ client: { async sendMessage(_text, value) { options = value; return { ok: true }; } },
+    document: { createElement: (tag) => element(tag) }, input, button: element('button'), statusElement: element(), messagesElement: element(), timelineSelection: selection });
+  assert.deepEqual(options.timelineSelection, selection);
+  assert.equal(options.timelineContext, undefined);
+});

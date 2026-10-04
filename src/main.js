@@ -40,6 +40,12 @@ const { createAssetStore } = require('./asset-store');
 const { createCanvasStore } = require('./canvas-store');
 const { createCanvasView } = require('./canvas-view');
 const { createCanvasHistory } = require('./canvas-history');
+const { createVideoTimelineStore } = require('./video-timeline-store');
+const { createVideoTimelineController } = require('./video-timeline-controller');
+const { timelineContextText } = require('./video-timeline-tools');
+const { createVideoTimelineBridge } = require('./video-timeline-bridge');
+const { createVideoTimelineTemplate } = require('./video-timeline-template');
+const { importMediaFiles } = require('./media-import');
 const { producedMediaAssets } = require('./media-tool-results');
 const { createChatService, defaultMcpLaunchOptions } = require('./chat-service');
 const { createMediaMcpClient } = require('./media-mcp-client');
@@ -124,8 +130,13 @@ const MEDIA_ASSETS = {
     return result;
   },
 };
-const CANVASES = createCanvasStore({ userDataPath: app.getPath('userData'), kitBundles: CANVAS_KIT_BUNDLES, assetStore: MEDIA_ASSETS, thumbnailFactory: projectThumbnail });
+const CANVASES = createCanvasStore({ userDataPath: app.getPath('userData'), kitBundles: CANVAS_KIT_BUNDLES, assetStore: MEDIA_ASSETS, thumbnailFactory: projectThumbnail, readTimeline: (id) => TIMELINES.read(id) });
 const CANVAS_HISTORY = createCanvasHistory();
+const TIMELINES = createVideoTimelineStore({ userDataPath: app.getPath('userData') });
+const TIMELINE_CONTROLLER = createVideoTimelineController({ store: TIMELINES, projectStore: CANVASES,
+  getActiveProjectId: () => canvasView?.getCurrentCanvasId() || '',
+  onChanged: (event) => emitAgentEvent(event),
+});
 let mainWindow;
 let canvasView;
 let canvasOperations = Promise.resolve();
@@ -147,6 +158,45 @@ function projectMutation(method, options) {
         emitCanvasSaved(CANVASES.get(canvasId));
       }
     }
+  });
+}
+
+async function importLocalMedia(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => key !== 'projectId')) throw new Error('Media import options are invalid.');
+  const projectId = input.projectId ? validateOpaqueId(input.projectId, 'Project ID') : '';
+  if (projectId) CANVASES.getProject(projectId);
+  const picked = await dialog.showOpenDialog(mainWindow, { title: 'Import media to Easel', properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Images, audio and video', extensions: ['png', 'jpg', 'jpeg', 'webp', 'wav', 'mp3', 'mp4', 'webm'] }] });
+  if (picked.canceled || !picked.filePaths.length) return { canceled: true, assets: [], errors: [] };
+  const result = await importMediaFiles({ filenames: picked.filePaths, imageStore: ASSETS, mediaStore: CAPTURE_MEDIA,
+    validateImage: (bytes) => { if (nativeImage.createFromBuffer(bytes).isEmpty()) throw new Error('This image cannot be decoded.'); },
+  });
+  if (projectId && result.assets.length) {
+    try { await attachProjectAssets(requireCanvasView(), projectId, result.assets.map((asset) => asset.assetId)); }
+    catch (error) { result.errors.push({ name: 'Project attachment', error: `Files are saved in Media. ${error.message}` }); }
+  }
+  emitAgentEvent({ type: 'media-imported', projectId, assets: result.assets, errors: result.errors });
+  VIDEO_METADATA.enrichAssets(result.assets).catch(() => {});
+  return result;
+}
+
+function openVideoEditorProject(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['projectId', 'title', 'kits'].includes(key))) throw new Error('Video project options are invalid.');
+  if (input.projectId) validateOpaqueId(input.projectId, 'Project ID');
+  const title = validateCanvasTitle(input.title || 'Video project');
+  const kits = input.kits === undefined ? ['canvas-2d'] : validateCanvasKits(input.kits);
+  assertInstalledKits(kits, CANVAS_KIT_BUNDLES);
+  return withCanvas(async (controller) => {
+    await saveCanvasBeforeSwitch(controller);
+    const projectId = input.projectId || CANVASES.createProject({ title, kits }).id;
+    const documentPath = 'video-editor/index.html';
+    const docs = CANVASES.listDocuments(projectId).documents;
+    if (!docs.some((document) => document.path === documentPath)) CANVASES.createDocument(projectId, { path: documentPath, title: 'Video editor', html: createVideoTimelineTemplate() });
+    if (!input.projectId) CANVASES.updateManifest(projectId, { entry: documentPath });
+    if (!TIMELINES.read(projectId)) TIMELINES.create(projectId, {});
+    const opened = await controller.openSaved(projectId, documentPath);
+    emitCanvasSaved(opened);
+    return { ...opened, document: TIMELINES.read(projectId), undoAvailable: CANVAS_HISTORY.canUndo(projectId) };
   });
 }
 
@@ -212,6 +262,7 @@ const DELETIONS = createDeletionService({
   onChanged: emitCanvasSaved,
   onProjectDeleted: async (controller, id) => {
     CANVAS_HISTORY.clear(id);
+    TIMELINES.remove(id);
     for (const job of MEDIA_JOBS.list({ projectId: id, raw: true })) {
       MEDIA_JOBS.update(job.id, { projectId: '', notification: 'interrupted' });
     }
@@ -348,6 +399,11 @@ const presentToolCanvas = (artifact) => withCanvas(async (controller) => {
     finally { if (id && CANVASES.get(id).html !== before) CANVAS_HISTORY.record(id, before); }
   });
 const CANVAS_CONTROLLER = {
+    inspectTimeline: (args) => TIMELINE_CONTROLLER.inspect(args),
+    createTimeline: ({ projectId }) => TIMELINE_CONTROLLER.openEditor(projectId, () => openVideoEditorProject({ projectId })),
+    applyTimelineEdit: ({ projectId, ...input }) => TIMELINE_CONTROLLER.apply(projectId, input),
+    undoTimeline: ({ projectId, ...input }) => TIMELINE_CONTROLLER.undo(projectId, input),
+    redoTimeline: ({ projectId, ...input }) => TIMELINE_CONTROLLER.redo(projectId, input),
     createEmpty: (title, kits) => withCanvas(async (controller) => {
       await saveCanvasBeforeSwitch(controller);
       const id = controller.getCurrentCanvasId();
@@ -462,6 +518,7 @@ const CANVAS_CONTROLLER = {
     addImage: (options) => projectMutation('addImage', options),
   };
 const emitAgentEvent = (event) => {
+    if (event.type === 'timeline-changed' && canvasView?.getCurrentCanvasId() === event.projectId) canvasView.view.webContents.send('canvas:timeline-changed', event);
     if (event.type === 'control-settled') { emitControlState(); return; }
     if (['canvas', 'project-assets', 'project-deleted'].includes(event.type)) recordControlChange(event);
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, event);
@@ -525,7 +582,7 @@ const CODEX_CHAT = createCodexChatService({
     return { output, events };
   },
   prepareInput: async ({ text, attachments, options }) => {
-    const input = defaultInput({ text, attachments });
+    const input = defaultInput({ text: text + timelineContextText(options.timelineContext), attachments });
     if (!options.attachmentRefs?.length && attachments.length) {
       options.attachmentRefs = await Promise.all(attachments.map(async (attachment) => {
         const assetId = await (attachment.type === 'image' ? ASSETS : CAPTURE_MEDIA).save(attachment);
@@ -717,6 +774,37 @@ function registerIpcHandlers() {
     if (event.sender !== controller.view.webContents || event.senderFrame !== controller.view.webContents.mainFrame || !controller.getCurrentCanvasId() || contract.loading || contract.previewHidden || event.senderFrame.url !== contract.url) throw new Error('Canvas bridge request was rejected.');
     return controller;
   }
+  const timelineBridge = createVideoTimelineBridge({
+    controller: TIMELINE_CONTROLLER,
+    assertOrigin: (scope) => {
+      const current = requireCanvasView();
+      if (current.getCurrentCanvasId() !== scope.projectId || current.getCurrentDocumentPath() !== scope.documentPath || current.getContract().runtimeGeneration !== scope.runtimeGeneration) throw new Error('The editor project changed. Open the original editor and try again.');
+    },
+    getAssets: (id, options) => CANVASES.listAssets(id, options),
+    getAsset: (id, assetId) => projectMedia(id, assetId),
+    listLibrary: () => listStoredMedia(),
+    importMedia: (id) => importLocalMedia({ projectId: id }),
+    attach: (id, assetIds) => attachProjectAssets(requireCanvasView(), id, assetIds),
+    select: (selection, scope) => emitAgentEvent({ type: 'timeline-selection', selection, projectId: scope.projectId, documentPath: scope.documentPath, chatId: CHAT.getActiveChatId() }),
+    saveMedia: (media) => CAPTURE_MEDIA.save(media),
+    onExport: (receipt) => emitAgentEvent({ type: 'timeline-exported', ...receipt }),
+    isBusy: () => CHAT.isBusy() || AGENT_CONTROL.isToolBusy(),
+  });
+  ipcMain.handle('canvas:timeline', (event, request) => {
+    const canvas = requireCanvasSender(event);
+    const scope = { projectId: canvas.getCurrentCanvasId(), documentPath: canvas.getCurrentDocumentPath(), runtimeGeneration: canvas.getContract().runtimeGeneration };
+    return timelineBridge.handle(request, scope);
+  });
+  ipcMain.handle(IPC_CHANNELS.IMPORT_MEDIA, (event, input = {}) => {
+    assertTrustedSender(event, mainWindow);
+    if (CHAT.isBusy() || AGENT_CONTROL.isToolBusy()) throw new Error('Wait for the current operation before importing media.');
+    return importLocalMedia(input);
+  });
+  ipcMain.handle(IPC_CHANNELS.OPEN_VIDEO_EDITOR, async (event, input = {}) => {
+    assertTrustedSender(event, mainWindow);
+    if (CHAT.isBusy() || AGENT_CONTROL.isToolBusy()) throw new Error('Wait for the current agent operation before opening the video editor.');
+    return openVideoEditorProject(input);
+  });
   ipcMain.handle(IPC_CHANNELS.GET_AGENT_CONTROL, async (event) => {
     assertTrustedSender(event, mainWindow);
     if (AGENT_CONTROL.getBackend() === 'codex' && !CHAT.isBusy()) await refreshCodexState();
@@ -893,10 +981,11 @@ function registerIpcHandlers() {
     const opened = await requireCanvasView().openSaved(projectId, validateDocumentPath(documentPath));
     return { ...opened, undoAvailable: CANVAS_HISTORY.canUndo(projectId) };
   });
-  ipcMain.handle(IPC_CHANNELS.GET_PROJECT_ASSETS, async (event, id) => {
+  ipcMain.handle(IPC_CHANNELS.GET_PROJECT_ASSETS, async (event, id, options = {}) => {
     assertTrustedSender(event, mainWindow);
     const projectId = validateOpaqueId(id, 'Project ID');
-    const result = CANVASES.listAssets(projectId);
+    if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some((key) => !['offset', 'limit'].includes(key))) throw new Error('Media list options are invalid.');
+    const result = CANVASES.listAssets(projectId, options);
     const assets = await Promise.all(result.assets.map(async (asset) => {
       if (!['image/png', 'image/jpeg', 'image/webp'].includes(asset.mimeType)) {
         let metadata = {};
@@ -1052,13 +1141,27 @@ function registerIpcHandlers() {
     assertTrustedSender(event, mainWindow);
     return refreshMediaTools(() => SETTINGS.save(validateSettingsInput(input)));
   });
+  for (const [channel, method, mutation] of [
+    [IPC_CHANNELS.READ_TIMELINE, 'read', false], [IPC_CHANNELS.TIMELINE_HISTORY, 'history', false],
+    [IPC_CHANNELS.CREATE_TIMELINE, 'create', true], [IPC_CHANNELS.APPLY_TIMELINE, 'apply', true],
+    [IPC_CHANNELS.UNDO_TIMELINE, 'undo', true], [IPC_CHANNELS.REDO_TIMELINE, 'redo', true],
+  ]) {
+    ipcMain.handle(channel, (event, projectId, input) => {
+      assertTrustedSender(event, mainWindow);
+      if (mutation && (CHAT.isBusy() || AGENT_CONTROL.isToolBusy())) throw new Error('Wait for the current agent operation before editing the timeline.');
+      return TIMELINE_CONTROLLER[method](projectId, input);
+    });
+  }
   ipcMain.handle(IPC_CHANNELS.SEND_MESSAGE, async (event, input, options) => {
     assertTrustedSender(event, mainWindow);
     const chatOptions = validateChatOptions(options);
     if (chatOptions.skills.length) assertHarnessSkills(chatOptions.skills, readInstalledSkills(path.join(app.getAppPath(), '.agents', 'skills'), { availableKits: availableCanvasKits(CANVAS_KIT_BUNDLES) }));
     const message = typeof input === 'string' && input.trim() ? validateChatMessage(input) : '';
     if (!message && !chatOptions.attachments?.length) throw new Error('Message or attachment is required.');
-    return CHAT.sendMessage(message, chatOptions);
+    if (chatOptions.timelineSelection) chatOptions.timelineContext = TIMELINE_CONTROLLER.resolveSelection(chatOptions.timelineSelection);
+    const result = await CHAT.sendMessage(message, chatOptions);
+    if (chatOptions.timelineSelection && canvasView?.getCurrentCanvasId() === chatOptions.timelineSelection.projectId) canvasView.view.webContents.send('canvas:timeline-changed', { projectId: chatOptions.timelineSelection.projectId, selectionConsumed: true });
+    return result;
   });
   ipcMain.handle(IPC_CHANNELS.STOP_AGENT, (event) => {
     assertTrustedSender(event, mainWindow);
@@ -1233,6 +1336,7 @@ async function createWindow() {
       return result.response === 0;
     },
     onCanvasReady: async (canvasId, documentPath) => {
+      canvasView.view.webContents.send('canvas:timeline-changed', { projectId: canvasId, ready: true });
       const defaultPath = CANVASES.getProject(canvasId).manifest.entry;
       const pending = CANVAS_INPUTS.list({ canvasId, status: 'pending', limit: 200, raw: true }).find((request) => request.documentPath ? request.documentPath === documentPath : documentPath === defaultPath);
       if (pending) await canvasView.evaluate(renderCanvasInputScript({ ...pending, contextNote: pending.chatId === CHAT.getActiveChatId() ? '' : 'This question belongs to another conversation. Answer here, then open that conversation in History to continue. You can also dismiss it.' }));

@@ -157,3 +157,15 @@ test('completed video notifications expose compact previews and reopen chats wit
   assert.equal(restored.media[0].projectId, projectId);
   assert.equal(restored.media[0].data, undefined);
 });
+
+test('host timeline context is attached to one submitted user turn and not automatic later turns', async () => {
+  const requests = [];
+  const service = createChatService({ settingsStore: settingsStore(), assetStore: {},
+    llmFactory: () => ({ async createCompletion({ messages }) { requests.push(messages); return reply('Timeline inspected.'); } }),
+    mcpFactory: async () => ({ async listTools() { return []; }, async close() {} }), mcpLaunchOptions: () => ({ command: 'node' }),
+  });
+  await service.sendMessage('Trim this selection', { timelineContext: { selection: { projectId: 'a'.repeat(32), startFrame: 5, endFrame: 12 }, items: [] } });
+  assert.match(requests[0].find((message) => message.role === 'user').content, /"startFrame":5/);
+  await service.sendMessage('What next?');
+  assert.equal(requests[1].filter((message) => message.role === 'user').at(-1).content, 'What next?');
+});

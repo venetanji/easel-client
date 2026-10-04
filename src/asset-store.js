@@ -1,3 +1,4 @@
+const { isMediaBase64 } = require('./media-base64');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -22,13 +23,24 @@ function createAssetStore({
   const assetsPath = path.join(userDataPath, 'assets');
   const thumbnails = new Map();
 
-  async function save({ data, mimeType } = {}) {
+  function metadata(filename) {
+    try {
+      const stat = fileSystem.lstatSync(`${filename}.json`);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024) return {};
+      const value = JSON.parse(fileSystem.readFileSync(`${filename}.json`, 'utf8'));
+      if (typeof value.name === 'string' && value.name.trim() && value.name.length <= 160 && !/[\u0000-\u001f\u007f]/.test(value.name)) return { name: value.name };
+    } catch {}
+    return {};
+  }
+
+  async function save({ data, mimeType, name } = {}) {
+    if (name !== undefined && (typeof name !== 'string' || !name.trim() || name.length > 160 || /[\u0000-\u001f\u007f]/.test(name))) throw new Error('Image name is invalid.');
     if (!Object.hasOwn(FORMATS, mimeType)) throw new Error('Unsupported image type.');
     if (typeof data !== 'string' || !data) {
       throw new Error('Image data must be base64.');
     }
     if (data.length > MAX_BASE64_LENGTH) throw new Error('Image asset exceeds 32 MiB.');
-    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) {
+    if (!isMediaBase64(data)) {
       throw new Error('Image data must be base64.');
     }
     const bytes = Buffer.from(data, 'base64');
@@ -40,11 +52,18 @@ function createAssetStore({
     assertStorageSpace(assetsPath, bytes.length, fileSystem);
     const filename = path.join(assetsPath, `${id}.${FORMATS[mimeType]}`);
     const temporary = `${filename}.${crypto.randomUUID()}.tmp`;
+    const metadataTemporary = `${temporary}.json`;
+    const existing = fileSystem.existsSync(filename);
+    if (name && existing) throw new Error('The new image ID already exists.');
     try {
       fileSystem.writeFileSync(temporary, bytes, { mode: 0o600, flag: 'wx' });
+      if (name) fileSystem.writeFileSync(metadataTemporary, JSON.stringify({ name: name.trim() }), { mode: 0o600, flag: 'wx' });
       fileSystem.renameSync(temporary, filename);
+      if (name) fileSystem.renameSync(metadataTemporary, `${filename}.json`);
     } catch (error) {
       try { fileSystem.rmSync(temporary, { force: true }); } catch { /* Keep the original storage failure. */ }
+      try { fileSystem.rmSync(metadataTemporary, { force: true }); } catch {}
+      if (name && !existing) { try { fileSystem.rmSync(filename, { force: true }); } catch {} }
       throw storageWriteError(error);
     }
     return id;
@@ -55,7 +74,7 @@ function createAssetStore({
     for (const [mimeType, extension] of Object.entries(FORMATS)) {
       const filename = path.join(assetsPath, `${id}.${extension}`);
       if (fileSystem.existsSync(filename)) {
-        return { id, data: fileSystem.readFileSync(filename).toString('base64'), mimeType };
+        return { id, data: fileSystem.readFileSync(filename).toString('base64'), mimeType, ...metadata(filename) };
       }
     }
     throw new Error('Asset was not found.');
@@ -75,7 +94,7 @@ function createAssetStore({
       filenames.push(filename);
     }
     if (!filenames.length) throw new Error('Asset was not found.');
-    for (const filename of filenames) fileSystem.unlinkSync(filename);
+    for (const filename of filenames) { fileSystem.unlinkSync(filename); try { fileSystem.unlinkSync(`${filename}.json`); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
     for (const filename of filenames) thumbnails.delete(path.basename(filename));
     return { id, deleted: true };
   }
@@ -102,7 +121,7 @@ function createAssetStore({
         : thumbnailFactory(fileSystem.readFileSync(path.join(assetsPath, filename)), mimeType);
       if (typeof thumbnail !== 'string' || !thumbnail.startsWith('data:image/')) return [];
       thumbnails.set(filename, { thumbnail, updatedAt, bytes: size });
-      return [{ id: match[1], mimeType, thumbnail, updatedAt }];
+      return [{ id: match[1], mimeType, thumbnail, updatedAt, bytes: size, ...metadata(path.join(assetsPath, filename)) }];
     });
   }
 
