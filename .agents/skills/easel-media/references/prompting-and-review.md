@@ -74,7 +74,9 @@ For chained clips, use the previous clip's actual retained endpoint, not an
 unrelated authored frame. Guide/context frames must be cropped out of the
 delivered timeline. Frame/FPS/overlap bookkeeping must also align the audio;
 do not concatenate guide tokens as visible output or guess offsets in seconds.
-Easel MCP does not currently expose continuation or first/last-frame controls.
+Easel MCP exposes timed stills through `guidingFrames`, including first/last
+pixel-frame positions. They are soft guidance, not exact frame copying or a
+seamless-continuity guarantee. Source-video continuation is not exposed.
 
 For a music video, agree on the song and review anchors before rendering every
 scene. Derive scene timing from the actual track/phrases. Preserve the approved

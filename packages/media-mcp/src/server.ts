@@ -6,7 +6,8 @@ import {
   type EaselImage, type ImageResult, type EditImageInput, type GenerateImageInput, type ImageVariationInput,
 } from './easel.js';
 import { MAX_IMAGE_BASE64_CHARS, MAX_IMAGE_INPUTS } from './image-upload.js';
-import { generateVideo, getVideo, VIDEO_ID_PATTERN, type GenerateVideoInput, type GetVideoInput, type VideoJob, type VideoResult } from './video.js';
+import { generateVideo, getVideo, discoverVideoCapabilities, listVideoLoras, VIDEO_ID_PATTERN, type GenerateVideoInput, type GetVideoInput, type VideoJob, type VideoResult, type VideoDiscoveryInput, type VideoCapabilities, type VideoLora } from './video.js';
+import { VideoGenerationSchema } from './video-input.js';
 
 interface EaselClient {
   listModels: (input?: { signal?: AbortSignal }) => Promise<string[]>;
@@ -15,6 +16,8 @@ interface EaselClient {
   createImageVariations?: (input: ImageVariationInput) => Promise<ImageResult>;
   getImageJob?: (input: { jobId: string; model?: string; signal?: AbortSignal }) => Promise<{ job: VideoJob; images?: EaselImage[] }>;
   generateVideo?: (input: GenerateVideoInput) => Promise<VideoJob>;
+  discoverVideoCapabilities?: (input: VideoDiscoveryInput) => Promise<VideoCapabilities>;
+  listVideoLoras?: (input: VideoDiscoveryInput) => Promise<VideoLora[]>;
   getVideo?: (input: GetVideoInput) => Promise<VideoResult>;
 }
 
@@ -48,13 +51,7 @@ const EditImageInput = GenerateImageInput.extend({
 const ImageVariationInput = GenerateImageInput.omit({ prompt: true }).extend({
   image: ImageUploadInput,
 }).strict();
-const GenerateVideoInput = z.object({
-  prompt: GenerateImageInput.shape.prompt,
-  model: z.string().trim().min(1).max(320),
-  seconds: z.number().int().min(1).max(60).describe('Duration depends on the endpoint. Easel accepts integer durations from 1 to 12 seconds.').optional(),
-  size: GenerateImageInput.shape.size,
-  inputReference: ImageUploadInput.optional(),
-}).strict();
+const GenerateVideoInput = VideoGenerationSchema;
 const GetVideoInput = z.object({
   videoId: z.string().regex(VIDEO_ID_PATTERN),
   model: z.string().trim().min(1).max(320).optional(),
@@ -114,6 +111,8 @@ export function registerMediaTools(
       return generateVideo({ ...input, ...provider, model: provider.model! });
     },
     getVideo: (input) => getVideo({ ...input, ...providerFor(input.model, 'video') }),
+    discoverVideoCapabilities: (input) => { const provider = providerFor(input.model, 'video'); return discoverVideoCapabilities({ ...input, ...provider, model: provider.model! }); },
+    listVideoLoras: (input) => { const provider = providerFor(input.model, 'video'); return listVideoLoras({ ...input, ...provider, model: provider.model! }); },
   };
   const canvas = dependencies.canvas || {
     capture: (input: Parameters<CanvasRenderer['capture']>[0]) => captureCanvasScreenshot(input),
@@ -162,10 +161,30 @@ export function registerMediaTools(
   const videoModels = modelsFor('video');
   if (!videoModels || videoModels.length) {
     const model = videoModels ? z.enum(videoModels.map((model) => model.id)) : GenerateVideoInput.shape.model;
+    if (easel.discoverVideoCapabilities) server.registerTool('discover_video_capabilities', {
+      description: 'Read the selected video endpoint capabilities without generation or uploads. Returns duration/size/seed bounds, typed controls and guide-node availability. Code support and available nodes do not prove GPU execution or visual quality. Unsupported endpoints fail explicitly.',
+      inputSchema: z.object({ model }).strict(),
+    }, async (input, extra) => {
+      const capabilities = await easel.discoverVideoCapabilities!({ ...input, signal: extra?.signal });
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ modelId: input.model, capabilities }) }], structuredContent: { modelId: input.model, capabilities } };
+    });
+    if (easel.listVideoLoras) server.registerTool('list_video_loras', {
+      description: 'Read curated video LoRAs for the selected endpoint without generation or uploads. Keep supported, installed, required inputs, validation and provenance distinct. Copy exact IDs; installation alone does not certify execution or visual quality.',
+      inputSchema: z.object({ model }).strict(),
+    }, async (input, extra) => {
+      const loras = await easel.listVideoLoras!({ ...input, signal: extra?.signal });
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ modelId: input.model, loras }) }], structuredContent: { modelId: input.model, loras } };
+    });
     if (easel.generateVideo) server.registerTool('generate_video', {
-      description: 'Submit one video job using a video Media model. Optional inputReference is a PNG/JPEG/WebP upload; omit it for text-only video. Omit size unless requested; the endpoint chooses its default. Do not copy a reference image size into video size. Duration defaults to 4 seconds; Easel accepts integers 1-12. Returns a job ID; the Easel host monitors it, saves the output, and adds a playable chat preview. End the turn after acceptance; do not poll or resubmit. Stop does not cancel an accepted server job.',
+      description: 'Submit one video job using the exact video Media model ID. Read discover_video_capabilities and list_video_loras for advanced controls. Typed camera/LoRA/seed/slow-motion/Ingredients and guidingFrames options map to the API; never supply raw JSON, paths or URLs. PNG/JPEG/WebP references share a 32 MiB limit. Temporal guides (at most 8 unique pixel-frame indices, 24 FPS, 0..seconds*24) cannot combine with inputReference or Ingredients. Seed is an exact decimal string. Omit size unless requested; never derive it from reference dimensions. Duration defaults to 4 seconds; Easel accepts integers 1-12. Returns a durable job ID; the host monitors and previews it. End after acceptance; do not poll or resubmit. Stop does not cancel accepted jobs.',
       inputSchema: GenerateVideoInput.extend({ model }).strict(),
-    }, async (input, extra) => videoToolResult({ job: await easel.generateVideo!({ ...input, signal: extra?.signal }) }, input.model));
+    }, async (input, extra) => {
+      try { return videoToolResult({ job: await easel.generateVideo!({ ...input, signal: extra?.signal }) }, input.model); }
+      catch (error) {
+        if (!(error instanceof Error) || !('code' in error) || error.code !== 'INVALID_TOOL_ARGUMENTS' || !('requestSent' in error) || error.requestSent !== false) throw error;
+        return { isError: true, content: [{ type: 'text' as const, text: error.message }], structuredContent: { error: error.message, code: 'INVALID_TOOL_ARGUMENTS', stage: 'argument_validation', requestSent: false } };
+      }
+    });
     if (easel.getVideo) server.registerTool('get_video', {
       description: 'Retrieve a video job using its ID and the SAME model ID as generate_video. Optional waitSeconds (0-15) checks every 3 seconds. A completed job downloads MP4/WebM up to 32 MiB by default; download:false checks status only. Pending jobs are safe to retrieve later without resubmission. Return to the user instead of repeatedly polling in one turn.',
       inputSchema: GetVideoInput.extend({ model: videoModels ? model : GetVideoInput.shape.model }).strict(),

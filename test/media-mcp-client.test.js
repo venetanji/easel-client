@@ -37,7 +37,7 @@ test('connects over stdio, filters tool listings, and closes the MCP client', as
   await assert.rejects(mcp.callTool('read_local_file', {}), /not allowlisted/i);
   await mcp.close();
   assert.deepEqual(calls.at(-1), ['close']);
-  assert.deepEqual([...ALLOWED_MEDIA_TOOLS].sort(), ['capture_canvas_screenshot', 'create_image_variation', 'edit_image', 'generate_image', 'generate_video', 'get_image_job', 'get_video', 'list_models']);
+  assert.deepEqual([...ALLOWED_MEDIA_TOOLS].sort(), ['capture_canvas_screenshot', 'create_image_variation', 'discover_video_capabilities', 'edit_image', 'generate_image', 'generate_video', 'get_image_job', 'get_video', 'list_models', 'list_video_loras']);
 });
 
 test('does not expose a failing child transport as a connected client', async () => {

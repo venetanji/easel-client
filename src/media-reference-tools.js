@@ -36,11 +36,12 @@ function mediaToolSchema(tool) {
   const schema = tool.inputSchema || { type: 'object', properties: {}, additionalProperties: false };
   if (!['edit_image', 'create_image_variation', 'generate_video'].includes(tool.name)) return schema;
   const properties = { ...schema.properties, projectId: { ...PROJECT_ID, type: ['string', 'null'] } };
-  const required = (schema.required || []).filter((key) => !['images', 'mask', 'image'].includes(key));
+  const required = (schema.required || []).filter((key) => !['images', 'mask', 'image', 'inputReference', 'loraReference'].includes(key));
   delete properties.images;
   delete properties.mask;
   delete properties.image;
   delete properties.inputReference;
+  delete properties.loraReference;
   if (tool.name === 'edit_image') {
     properties.imageAssetIds = { type: 'array', minItems: 1, maxItems: 16, items: ASSET_ID, description: 'Saved image IDs to upload as edit references (32 MiB combined). The host resolves their bytes. Use list_media_assets or a capture result.' };
     properties.maskAssetId = { ...ASSET_ID, description: 'Optional saved PNG mask. Transparent pixels identify regions to edit; it must match the first image dimensions.' };
@@ -50,21 +51,31 @@ function mediaToolSchema(tool) {
     required.push('imageAssetId');
   } else {
     properties.inputReferenceAssetId = { ...ASSET_ID, type: ['string', 'null'], description: 'Optional saved PNG/JPEG/WebP reference. For text-only video OMIT this field or use null. Never use a placeholder or an all-zero ID. If the user requests a reference, copy a real ID from list_media_assets or a capture result.' };
+    if (schema.properties?.loraReference) properties.loraReferenceAssetId = { ...ASSET_ID, type: ['string', 'null'], description: 'Saved Ingredients reference sheet; requires the ingredients LoRA and at least 5 seconds. The host uploads bytes. Do not omit required conditioning after a lookup failure.' };
+    if (schema.properties?.guidingFrames) {
+      const guide = schema.properties.guidingFrames;
+      const { image, ...metadata } = guide.items.properties;
+      properties.guidingFrames = { ...guide, description: 'One to eight saved image anchors, with unique pixel-frame indices at 24 FPS in 0..seconds*24. Incompatible with first-image/Ingredients modes. No paths, URLs or raw bytes.', items: { ...guide.items, additionalProperties: false,
+        required: [...(guide.items.required || []).filter(key => key !== 'image'), 'assetId'], properties: { ...metadata, assetId: { ...ASSET_ID } } } };
+    }
+
   }
   return { ...schema, properties, required, additionalProperties: false };
 }
 
 async function resolveMediaToolArguments(name, args, readAsset, signal) {
   if (!['edit_image', 'create_image_variation', 'generate_video'].includes(name)) return args;
-  const { projectId, imageAssetIds, imageAssetId, maskAssetId, inputReferenceAssetId, ...wire } = args;
+  const { projectId, imageAssetIds, imageAssetId, maskAssetId, inputReferenceAssetId, loraReferenceAssetId, guidingFrames, ...wire } = args;
   let totalBytes = 0;
   function invalidReference(message) {
-    const error = new Error(`${message} The media API was not called. Use list_media_assets to choose an existing image${name === 'generate_video' ? ', or omit inputReferenceAssetId/use null for text-only video' : ''}.`);
+    const advancedReference = guidingFrames !== undefined || loraReferenceAssetId != null;
+    const error = new Error(`${message} The media API was not called. Use list_media_assets to choose an existing image${advancedReference ? ' for the required guidingFrames or Ingredients reference; keep the requested conditioning' : name === 'generate_video' ? ', or omit inputReferenceAssetId/use null for text-only video' : ''}.`);
     Object.assign(error, { code: 'INVALID_MEDIA_REFERENCE', stage: 'reference_resolution', requestSent: false });
     throw error;
   }
   async function image(assetId, pngOnly = false) {
     signal?.throwIfAborted();
+    if (typeof assetId !== 'string' || !new RegExp(ASSET_ID.pattern).test(assetId)) invalidReference('Copy an exact non-placeholder saved image asset ID.');
     let asset;
     try { asset = await readAsset({ assetId, projectId: projectId ?? undefined }); }
     catch (cause) {
@@ -84,7 +95,26 @@ async function resolveMediaToolArguments(name, args, readAsset, signal) {
     for (const id of imageAssetIds) wire.images.push(await image(id));
     if (maskAssetId) wire.mask = await image(maskAssetId, true);
   } else if (name === 'create_image_variation') wire.image = await image(imageAssetId);
-  else if (inputReferenceAssetId) wire.inputReference = await image(inputReferenceAssetId);
+  else {
+    if (Object.hasOwn(wire, 'inputReference') || Object.hasOwn(wire, 'loraReference')) invalidReference('In-app video tools accept saved asset IDs, not image upload objects.');
+    if (guidingFrames !== undefined) {
+      if (!Array.isArray(guidingFrames) || !guidingFrames.length || guidingFrames.length > 8) invalidReference('guidingFrames requires one to eight image anchors.');
+      if (inputReferenceAssetId || loraReferenceAssetId || wire.loras?.some(lora => lora.id === 'ingredients')) invalidReference('guidingFrames cannot be combined with first-image or Ingredients references.');
+      const seconds = wire.seconds ?? 4, indices = new Set();
+      if (!Number.isInteger(seconds) || seconds < 1 || seconds > 12) invalidReference('guidingFrames requires 1-12 seconds.');
+      for (const guide of guidingFrames) {
+        if (!guide || typeof guide !== 'object' || Array.isArray(guide) || Object.keys(guide).some(key => !['assetId', 'frameIndex', 'strength'].includes(key)) ||
+          !Number.isInteger(guide.frameIndex) || guide.frameIndex < 0 || guide.frameIndex > seconds * 24 || indices.has(guide.frameIndex) ||
+          (guide.strength !== undefined && (typeof guide.strength !== 'number' || !Number.isFinite(guide.strength) || guide.strength < 0 || guide.strength > 1))) invalidReference('guidingFrames needs strict assetId/frameIndex/strength objects with unique in-range positions and finite strength 0-1.');
+        if (typeof guide.assetId !== 'string' || !new RegExp(ASSET_ID.pattern).test(guide.assetId)) invalidReference('guidingFrames needs exact non-placeholder saved image IDs.');
+        indices.add(guide.frameIndex);
+      }
+      wire.guidingFrames = [];
+      for (const guide of guidingFrames) wire.guidingFrames.push({ image: await image(guide.assetId), frameIndex: guide.frameIndex, ...(guide.strength !== undefined ? { strength: guide.strength } : {}) });
+    }
+    if (inputReferenceAssetId) wire.inputReference = await image(inputReferenceAssetId);
+    if (loraReferenceAssetId) wire.loraReference = await image(loraReferenceAssetId);
+  }
   return wire;
 }
 

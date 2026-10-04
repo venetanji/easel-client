@@ -1,6 +1,7 @@
 import { MEDIA_JOB_ID_PATTERN, parseMediaJob, type MediaJob as VideoJob } from './media-job.js';
 import { setTimeout as delay } from 'node:timers/promises';
-import { appendImage, decodeImageUpload, type ImageUpload } from './image-upload.js';
+import { appendImage, decodeImageUpload, MAX_INPUT_BYTES, type ImageUpload } from './image-upload.js';
+import { validateVideoInput, invalidVideoArguments, type CAMERA_LORAS } from './video-input.js';
 import { headers, normalizeEaselBaseUrl, requestBinary, requestJson, requestSignal, type ProviderOptions } from './media-http.js';
 
 export const MAX_VIDEO_BYTES = 32 * 1_048_576;
@@ -12,6 +13,14 @@ export interface GenerateVideoInput {
   seconds?: number;
   size?: string;
   inputReference?: ImageUpload;
+  cameraLora?: typeof CAMERA_LORAS[number];
+  cameraLoraStrength?: number;
+  loras?: Array<{ id: string; strength?: number }>;
+  seed?: string;
+  motionSpeed?: number;
+  loraReference?: ImageUpload;
+  loraReferenceStrength?: number;
+  guidingFrames?: Array<{ image: ImageUpload; frameIndex: number; strength?: number }>;
   signal?: AbortSignal;
 }
 
@@ -30,20 +39,33 @@ export interface VideoResult { job: VideoJob; media?: { data: string; mimeType: 
 
 export async function generateVideo(options: GenerateVideoInput & ProviderOptions): Promise<VideoJob> {
   options.signal?.throwIfAborted();
-  const prompt = typeof options.prompt === 'string' ? options.prompt.trim() : '';
-  const model = typeof options.model === 'string' ? options.model.trim() : '';
-  if (!prompt || prompt.length > 5_000) throw new Error('Video prompt must contain 1-5000 characters.');
-  if (!model || model.length > 256) throw new Error('Choose a video generation model (at most 256 characters).');
-  const seconds = options.seconds ?? 4;
-  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 60) throw new Error('Video duration must be an integer from 1 to 60 seconds; supported durations depend on the model.');
-  const size = options.size;
-  if (size !== undefined && !/^\d{2,5}x\d{2,5}$/.test(size)) throw new Error('Video size must use WIDTHxHEIGHT format.');
+  const { baseUrl, apiKey: _apiKey, fetchImpl, signal, ...rawInput } = options;
+  const input = validateVideoInput(rawInput);
+  const { prompt, model, size } = input;
+  if (model.length > 256) invalidVideoArguments('Choose a video generation model (at most 256 characters).');
   const form = new FormData();
   form.append('prompt', prompt);
   form.append('model', model);
-  form.append('seconds', String(seconds));
+  form.append('seconds', String(input.seconds ?? 4));
   if (size !== undefined) form.append('size', size);
-  if (options.inputReference) appendImage(form, 'input_reference', decodeImageUpload(options.inputReference, 'Video reference image'));
+  for (const [key, field] of Object.entries({ cameraLora: 'camera_lora', cameraLoraStrength: 'camera_lora_strength', seed: 'seed', motionSpeed: 'motion_speed', loraReferenceStrength: 'lora_reference_strength' }) as Array<[keyof GenerateVideoInput, string]>) {
+    if (input[key as keyof typeof input] !== undefined) form.append(field, String(input[key as keyof typeof input]));
+  }
+  if (input.loras !== undefined) form.append('loras', JSON.stringify(input.loras));
+  let totalBytes = 0;
+  const upload = (field: string, image: ImageUpload, label: string) => {
+    try {
+      const decoded = decodeImageUpload(image, label, MAX_INPUT_BYTES - totalBytes);
+      totalBytes += decoded.bytes.length;
+      appendImage(form, field, decoded);
+    } catch (error) { invalidVideoArguments(error instanceof Error ? error.message : 'Invalid video image upload.'); }
+  };
+  if (input.inputReference) upload('input_reference', input.inputReference, 'Video reference image');
+  if (input.loraReference) upload('lora_reference', input.loraReference, 'Ingredients reference image');
+  if (input.guidingFrames) {
+    form.append('guiding_frames', JSON.stringify(input.guidingFrames.map((guide, index) => ({ image_index: index, frame_index: guide.frameIndex, strength: guide.strength ?? 1 }))));
+    for (const [index, guide] of input.guidingFrames.entries()) upload('guiding_images', guide.image, `Guiding image ${index + 1}`);
+  }
   const apiKey = options.apiKey || '';
   const result = await requestJson(`${normalizeEaselBaseUrl(options.baseUrl)}/v1/videos`, {
     method: 'POST', headers: headers(apiKey), body: form, signal: requestSignal(options.signal, 45_000),
@@ -91,3 +113,5 @@ export async function getVideo(options: GetVideoInput & ProviderOptions): Promis
   }
   return { job, media: { data: bytes.toString('base64'), mimeType: detected } };
 }
+
+export { discoverVideoCapabilities, listVideoLoras, type VideoDiscoveryInput, type VideoCapabilities, type VideoLora } from './video-discovery.js';

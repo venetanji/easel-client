@@ -44,9 +44,12 @@ test('tools run before the final reply and JavaScript media resolves offline', (
   assert.match(COMMON_INSTRUCTIONS, /In JavaScript use getUrl\(id\) or the returned \{\{asset:id\}\} placeholder; assets\/ paths resolve in HTML\/CSS only/);
 });
 
-test('current API guidance distinguishes discovery, explicit live checks and the narrow MCP surface', () => {
+test('current API guidance exposes typed advanced controls and separates discovery from paid checks', () => {
   assert.match(COMMON_INSTRUCTIONS, /Discovery does not prove generation/);
-  assert.match(COMMON_INSTRUCTIONS, /Server LoRA\/camera\/seed controls are not exposed/);
+  assert.match(COMMON_INSTRUCTIONS, /discover_video_capabilities/);
+  assert.match(COMMON_INSTRUCTIONS, /list_video_loras/);
+  assert.match(COMMON_INSTRUCTIONS, /guidingFrames/);
+  assert.match(COMMON_INSTRUCTIONS, /decimal string/);
   assert.match(COMMON_INSTRUCTIONS, /read-only --probe/);
   assert.match(COMMON_INSTRUCTIONS, /Never invent tools or use billed generation as a capability probe/);
 });

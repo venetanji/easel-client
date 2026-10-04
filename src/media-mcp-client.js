@@ -4,6 +4,8 @@ const { abortError, awaitAbortable, combinedSignal, isTurnAbort, throwIfAborted 
 
 const ALLOWED_MEDIA_TOOLS = Object.freeze(new Set([
   'list_models',
+  'discover_video_capabilities',
+  'list_video_loras',
   'generate_image',
   'edit_image',
   'create_image_variation',
