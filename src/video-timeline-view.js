@@ -36,7 +36,7 @@
     let projectId = '', timeline = null, selection = null, assets = [], generation = 0, readSequence = 0;
     let closed = true, destroyed = false, loading = false, mutating = false, explicitlyBusy = false;
     let history = null, libraryAssets = [], exportController = null, preparing = false, exporting = false, playhead = 0, playing = false, animation = null, playOrigin = 0, startedAt = 0;
-    let pixelsPerSecond = PIXELS_PER_SECOND, inspectedItemId = '', drag = null, dropTarget = null;
+    let pixelsPerSecond = PIXELS_PER_SECOND, inspectedItemId = '', drag = null, dropTarget = null, suppressClick = false;
     let cachedBytes = 0, itemCounter = 0, mediaFetchTail = Promise.resolve();
     const cache = new Map(), pendingMedia = new Map(), mediaErrors = new Map(), mediaNodes = new Map(), probeCleanups = new Set();
     const ui = {}, editControls = [];
@@ -83,7 +83,7 @@
       return { startFrame, endFrame };
     };
 
-    const shell = el('section', 'video-timeline'); shell.setAttribute('aria-label', 'Video timeline editor');
+    const shell = el('section', 'video-timeline'); shell.tabIndex = -1; shell.setAttribute('aria-label', 'Video timeline editor');
     const header = el('header', 'timeline-header');
     const heading = el('div', 'timeline-heading'); heading.append(el('h2', '', 'Timeline'), el('span', 'timeline-meta', '', 'meta'));
     const actions = el('div', 'timeline-actions');
@@ -123,10 +123,12 @@
     ui['add-asset'].addEventListener('change', updateAssetChoices);
     const inspector = el('section', 'timeline-inspector', undefined, 'inspector'); sidebar.append(add, inspector);
     workbench.append(preview, sidebar);
+    const exactRange = el('details', 'timeline-exact-range'); exactRange.open = false; exactRange.append(el('summary', '', 'Exact selection'));
     const rangeBar = el('section', 'timeline-rangebar'); rangeBar.setAttribute('aria-label', 'Exact frame range');
     rangeBar.append(field('Start frame', 'range-start', 'number', 0), field('End frame (exclusive)', 'range-end', 'number', 24), field('Selection track', 'range-track', 'select'), button('Select range', 'select-range', selectRange), button('Clear', 'clear-selection', clearSelection, 'button quiet small'));
+    exactRange.append(rangeBar); sidebar.append(exactRange);
     const selectionSummary = el('p', 'timeline-selection-summary', 'Select a clip or frame range to attach it to your next message.', 'selection-summary'); selectionSummary.setAttribute('aria-live', 'polite');
-    const timelineToolbar = el('div', 'timeline-track-toolbar'); timelineToolbar.append(selectionSummary, field('Zoom', 'zoom', 'range', PIXELS_PER_SECOND));
+    const timelineToolbar = el('div', 'timeline-track-toolbar'); timelineToolbar.append(selectionSummary, button('Add video track', 'add-video-track', addVideoTrack), button('Clear selection', 'clear-range', clearSelection, 'button quiet small'), field('Zoom', 'zoom', 'range', PIXELS_PER_SECOND));
     ui.zoom.min = '24'; ui.zoom.max = '160'; ui.zoom.step = '8'; ui.zoom.addEventListener('input', () => { pixelsPerSecond = Number(ui.zoom.value); renderTracks(); });
     const tracksViewport = el('div', 'timeline-tracks-viewport', undefined, 'tracks-viewport');
     const tracks = el('div', 'timeline-tracks', undefined, 'tracks'); tracksViewport.append(tracks);
@@ -136,11 +138,13 @@
       if (event.clientX < box.left || event.clientX >= box.left + box.width || event.clientY < box.top || event.clientY >= box.top + box.height) clearDropTarget();
     });
     const statusNode = el('p', 'timeline-status', '', 'status'); statusNode.setAttribute('role', 'status'); statusNode.setAttribute('aria-live', 'polite');
-    shell.append(header, workbench, rangeBar, timelineToolbar, tracksViewport, statusNode); container.replaceChildren(shell); container.hidden = true;
-    editControls.push(ui['import-media'], ui['media-source'], ui['media-filter'], ui['media-search'], ui['add-asset'], ui['add-track'], ui['image-duration'], ui['add-clip']);
+    shell.append(header, workbench, timelineToolbar, tracksViewport, statusNode); container.replaceChildren(shell); container.hidden = true;
+    editControls.push(ui['add-video-track'], ui['import-media'], ui['media-source'], ui['media-filter'], ui['media-search'], ui['add-asset'], ui['add-track'], ui['image-duration'], ui['add-clip']);
     shell.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') { event.preventDefault(); if (drag) cancelRangeDrag(); else clearSelection(); clearDropTarget(); return; }
-      if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(event.target?.tagName)) return;
+      if (event.defaultPrevented || ['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target?.tagName) || event.target?.isContentEditable) return;
+      if (event.target?.tagName === 'BUTTON' && !['clip-body', 'track-select', 'clip-trim-start', 'clip-trim-end', 'range-start-handle', 'range-end-handle'].includes(event.target.dataset?.role)) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); mutate(event.shiftKey ? 'redoTimeline' : 'undoTimeline'); return; }
       if (event.key === ' ') { event.preventDefault(); togglePlayback(); }
       if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); seek(playhead + (event.key === 'ArrowLeft' ? -1 : 1)); }
     });
@@ -160,10 +164,13 @@
       ui['previous-frame'].disabled = !timeline || playhead <= 0;
       ui['next-frame'].disabled = !timeline || playhead >= durationFrames(timeline);
       ui['select-range'].disabled = !timeline || loading;
-      ui['clear-selection'].disabled = !selection;
+      ui['clear-selection'].disabled = !selection; ui['clear-range'].disabled = !selection;
       ui['save-clip'] && (ui['save-clip'].disabled = !editable);
       ui['remove-clip'] && (ui['remove-clip'].disabled = !editable);
-      walk(tracks, (node) => { if (['range-start-handle', 'range-end-handle'].includes(node.dataset?.role)) node.disabled = !editable || !selectionCurrent(); });
+      walk(tracks, (node) => {
+        if (node.dataset?.role === 'track-up' || node.dataset?.role === 'track-down') node.disabled = !editable || (node.dataset.role === 'track-up' ? timeline?.tracks.at(-1)?.id : timeline?.tracks[0]?.id) === node.dataset.trackId;
+        if (['clip-trim-start', 'clip-trim-end'].includes(node.dataset?.role)) node.disabled = !editable;
+        if (['range-start-handle', 'range-end-handle'].includes(node.dataset?.role)) node.disabled = !editable || !selectionCurrent(); });
       shell.setAttribute('aria-busy', String(loading || mutating || preparing || exporting));
     }
     function pickerAssets() { return ui['media-source'].value === 'library' ? libraryAssets : assets; }
@@ -197,19 +204,32 @@
       const width = frameToPixels(end, timeline.frameRate, pixelsPerSecond);
       const rows = [];
       const rulerRow = el('div', 'timeline-ruler-row'); rulerRow.append(el('span', 'timeline-track-label', 'Frames'));
-      const ruler = el('div', 'timeline-ruler'); ruler.style.width = `${width}px`;
+      const ruler = el('div', 'timeline-ruler', undefined, 'ruler'); ruler.tabIndex = 0; ruler.setAttribute('role', 'slider'); ruler.setAttribute('aria-label', 'Timeline playhead'); ruler.setAttribute('aria-valuenow', playhead); ruler.setAttribute('aria-valuetext', `Frame ${playhead}`); ruler.setAttribute('aria-valuemin', '0'); ruler.setAttribute('aria-valuemax', String(durationFrames(timeline)));
+      ruler.addEventListener('pointerdown', (event) => beginSeekDrag(event, ruler)); bindRangeGesture(ruler); ruler.style.width = `${width}px`;
       const spacing = Math.max(1, Math.ceil(64 / pixelsPerSecond), Math.ceil(end / fps(timeline.frameRate) / 500));
       for (let seconds = 0; seconds < end / fps(timeline.frameRate); seconds += spacing) {
         const tick = el('span', 'timeline-ruler-tick', String(Math.round(seconds * fps(timeline.frameRate)))); tick.style.left = `${seconds * pixelsPerSecond}px`; ruler.append(tick);
       }
+      const rulerMarker = el('div', 'timeline-playhead'); rulerMarker.dataset.role = 'playhead'; rulerMarker.style.left = `${frameToPixels(playhead, timeline.frameRate, pixelsPerSecond)}px`; ruler.append(rulerMarker);
       rulerRow.append(ruler); rows.push(rulerRow);
-      for (const track of timeline.tracks) {
+      for (const track of [...timeline.tracks].reverse()) {
         const row = el('div', `timeline-track-row timeline-track-${track.type}`);
-        const trackButton = button(track.name || track.type, '', () => selectSpan([track.id], 0, Math.max(1, durationFrames(timeline))), 'timeline-track-label');
+        const trackHeader = el('div', 'timeline-track-label');
+        const trackButton = button(track.name || track.type, '', () => { if (suppressClick) { suppressClick = false; return; } selectSpan([track.id], 0, Math.max(1, durationFrames(timeline))); }, 'timeline-track-name');
+        trackButton.title = 'Drag the track header to change layer order. Highest track appears in front.';
+        trackButton.addEventListener('pointerdown', (event) => beginTrackDrag(event, track, trackButton)); bindRangeGesture(trackButton);
+        const trackActions = el('div', 'timeline-track-order');
+        for (const [direction, label] of [[1, 'up'], [-1, 'down']]) {
+          const control = button(label === 'up' ? 'Up' : 'Down', '', () => reorderTrack(track.id, direction), 'timeline-track-order-button');
+          control.dataset.role = `track-${label}`; control.dataset.trackId = track.id; control.setAttribute('aria-label', `Move ${track.name || track.type} ${label}`);
+          control.disabled = !canEdit() || (direction === 1 ? timeline.tracks.at(-1)?.id : timeline.tracks[0]?.id) === track.id; trackActions.append(control);
+        }
+        trackHeader.append(trackButton, trackActions);
         trackButton.dataset.role = 'track-select'; trackButton.dataset.trackId = track.id; trackButton.setAttribute('aria-label', `Select ${track.name || track.type} track`);
-        const lane = el('div', 'timeline-track-lane'); lane.dataset.role = 'track-lane'; lane.dataset.trackId = track.id; lane.style.width = `${width}px`; lane.style.backgroundSize = `${pixelsPerSecond}px 100%`; lane.setAttribute('aria-label', `${track.name || track.type} clips`);
+        const lane = el('div', 'timeline-track-lane'); lane.tabIndex = 0; lane.dataset.role = 'track-lane'; lane.dataset.trackId = track.id; lane.style.width = `${width}px`; lane.style.backgroundSize = `${pixelsPerSecond}px 100%`; lane.setAttribute('aria-label', `${track.name || track.type} clips`);
         lane.addEventListener('pointerdown', (event) => {
-          if (event.target === lane) beginRangeDrag(event, lane, track.id);
+          if (event.altKey && insideSelection(event, lane, track.id)) beginRangeDrag(event, lane, track.id, 'move');
+          else if (event.target === lane) beginRangeDrag(event, lane, track.id);
         });
         bindRangeGesture(lane);
         lane.addEventListener('dragover', (event) => previewMediaDrop(event, lane, track));
@@ -228,15 +248,24 @@
         }
         const dropMarker = el('div', 'timeline-drop-marker'); dropMarker.dataset.role = 'drop-marker'; dropMarker.hidden = true; lane.append(dropMarker);
         for (const item of timeline.items.filter((entry) => entry.trackId === track.id)) {
-          const clip = button('', '', () => selectClip(item.id), 'timeline-clip'); clip.dataset.itemId = item.id;
-          clip.style.left = `${frameToPixels(item.startFrame, timeline.frameRate, pixelsPerSecond)}px`; clip.style.width = `${frameToPixels(item.endFrame - item.startFrame, timeline.frameRate, pixelsPerSecond)}px`;
+          const clip = button('', '', () => { if (suppressClick) { suppressClick = false; return; } selectClip(item.id); }, 'timeline-clip'); clip.dataset.itemId = item.id; clip.dataset.role = 'clip-body'; clip.draggable = false;
+          clip.addEventListener('pointerdown', (event) => { if (event.altKey && insideSelection(event, lane, track.id)) beginRangeDrag(event, lane, track.id, 'move', clip); else beginClipDrag(event, lane, item, clip); });
+          clip.addEventListener('keydown', (event) => adjustClipKey(event, item)); bindRangeGesture(clip);
+          const clipWidth = frameToPixels(item.endFrame - item.startFrame, timeline.frameRate, pixelsPerSecond);
+          clip.style.left = `${frameToPixels(item.startFrame, timeline.frameRate, pixelsPerSecond)}px`; clip.style.width = `${clipWidth}px`; clip.style.paddingInline = `${Math.min(12, Math.max(0, (clipWidth - 4) / 4))}px`; clip.style.borderWidth = `${Math.min(1, clipWidth / 4)}px`;
           const name = item.name || assets.find((asset) => asset.id === item.assetId)?.name || 'Untitled clip';
           clip.append(el('strong', '', name), el('span', '', `${item.startFrame}–${item.endFrame}`));
           clip.title = `${name} · frames ${item.startFrame} to ${item.endFrame} (exclusive)`; clip.setAttribute('aria-label', clip.title); clip.setAttribute('aria-pressed', String(selection?.itemIds.includes(item.id) || false));
           lane.append(clip);
+          for (const edge of ['start', 'end']) {
+            const handle = button('', '', () => {}, `timeline-clip-trim timeline-clip-trim-${edge}`); handle.dataset.role = `clip-trim-${edge}`; handle.dataset.clipId = item.id;
+            handle.setAttribute('role', 'slider'); handle.setAttribute('aria-label', `Trim ${name} ${edge}`); handle.setAttribute('aria-valuenow', item[`${edge}Frame`]); handle.title = `Drag to trim clip ${edge}. Arrow keys: 1 frame; Shift + arrow: 10 frames.`;
+            handle.style.left = `${frameToPixels(item[`${edge}Frame`], timeline.frameRate, pixelsPerSecond)}px`; handle.style.width = `${Math.min(12, frameToPixels(item.endFrame - item.startFrame, timeline.frameRate, pixelsPerSecond) / 4)}px`;
+            handle.addEventListener('pointerdown', (event) => { if (event.altKey && insideSelection(event, lane, track.id, true)) beginRangeDrag(event, lane, track.id, 'move', handle); else beginClipDrag(event, lane, item, handle, edge); }); handle.addEventListener('keydown', (event) => adjustClipKey(event, item, edge)); bindRangeGesture(handle); lane.append(handle);
+          }
         }
         const marker = el('div', 'timeline-playhead'); marker.dataset.role = 'playhead'; marker.style.left = `${frameToPixels(playhead, timeline.frameRate, pixelsPerSecond)}px`; lane.append(marker);
-        row.append(trackButton, lane); rows.push(row);
+        row.append(trackHeader, lane); rows.push(row);
       }
       tracks.replaceChildren(...rows); renderSelection();
     }
@@ -247,32 +276,168 @@
     function frameAt(event, lane, end = visibleEndFrame()) {
       return clamp(pixelToFrame(event.clientX - lane.getBoundingClientRect().left, timeline.frameRate, pixelsPerSecond), 0, end);
     }
+    function laneAt(event, fallback) {
+      if (!Number.isFinite(event.clientY)) return fallback;
+      if (fallback) { const box = fallback.getBoundingClientRect(); if (event.clientY >= box.top && event.clientY < box.top + box.height) return fallback; }
+      const lanes = []; walk(tracks, node => { if (node.dataset?.role === 'track-lane') lanes.push(node); });
+      return lanes.find(node => { const box = node.getBoundingClientRect(); return event.clientY >= box.top && event.clientY < box.top + box.height; }) || fallback;
+    }
+    function crossedTracks(first, last) {
+      const ids = [...timeline.tracks].reverse().map(track => track.id);
+      const a = ids.indexOf(first), b = ids.indexOf(last);
+      return ids.slice(Math.min(a, b), Math.max(a, b) + 1);
+    }
+    function insideSelection(event, lane, trackId, includeEnd = false) {
+      const frame = frameAt(event, lane);
+      return selectionCurrent() && selection.trackIds.includes(trackId) && frame >= selection.startFrame && (includeEnd ? frame <= selection.endFrame : frame < selection.endFrame);
+    }
+    function beginSeekDrag(event, ruler) {
+      if (!timeline || drag || loading || event.button !== undefined && event.button !== 0) return;
+      event.preventDefault(); event.stopPropagation(); ruler.focus?.();
+      drag = { kind: 'seek', target: ruler, lane: ruler, pointerId: event.pointerId, token: generation, revision: timeline.revision, end: durationFrames(timeline) };
+      ruler.setPointerCapture?.(event.pointerId); seek(frameAt(event, ruler, drag.end));
+    }
+    function snapFrame(frame, item, edge, event) {
+      if (event?.shiftKey) return frame;
+      const span = item.endFrame - item.startFrame, targets = [0, playhead];
+      for (const other of timeline.items) if (other.id !== item.id) targets.push(other.startFrame, other.endFrame);
+      const tolerance = Math.max(1, pixelToFrame(6, timeline.frameRate, pixelsPerSecond));
+      let best = frame, distance = tolerance + 1;
+      for (const target of targets) for (const candidate of edge ? [target] : [target, target - span]) {
+        const delta = Math.abs(candidate - frame);
+        if (delta < distance && delta <= tolerance) { best = candidate; distance = delta; }
+      }
+      return best;
+    }
+    function clipEdit(item, frameDelta, trackId, edge, event) {
+      const candidate = copy(item), sourceTrack = timeline.tracks.find(track => track.id === item.trackId);
+      const asset = assets.find(entry => entry.id === item.assetId);
+      const still = asset?.mimeType?.startsWith('image/') || sourceTrack.type === 'overlay';
+      const secondsPerFrame = (item.sourceEndSeconds - item.sourceStartSeconds) / (item.endFrame - item.startFrame);
+      const limit = Math.min(MAX_FRAME, Math.floor(86400 * fps(timeline.frameRate)));
+      if (!edge) {
+        candidate.startFrame = clamp(snapFrame(item.startFrame + frameDelta, item, null, event), 0, limit - (item.endFrame - item.startFrame));
+        candidate.endFrame = candidate.startFrame + item.endFrame - item.startFrame; candidate.trackId = trackId;
+      } else {
+        const minimum = edge === 'start' ? Math.max(0, still ? 0 : item.startFrame - Math.floor(item.sourceStartSeconds / secondsPerFrame + 1e-6)) : item.startFrame + 1;
+        const maximum = edge === 'start' ? item.endFrame - 1 : still ? limit : Math.min(limit, item.endFrame + Math.floor(((item.sourceDurationSeconds ?? asset?.duration ?? item.sourceEndSeconds) - item.sourceEndSeconds) / secondsPerFrame + 1e-6));
+        const value = clamp(snapFrame(item[`${edge}Frame`] + frameDelta, item, edge, event), minimum, maximum);
+        candidate[`${edge}Frame`] = value;
+        if (still) { candidate.sourceStartSeconds = 0; candidate.sourceEndSeconds = (candidate.endFrame - candidate.startFrame) / fps(timeline.frameRate); }
+        else {
+          const key = edge === 'start' ? 'sourceStartSeconds' : 'sourceEndSeconds';
+          candidate[key] = clamp(candidate[key] + (value - item[`${edge}Frame`]) * secondsPerFrame, 0, item.sourceDurationSeconds ?? asset?.duration ?? item.sourceEndSeconds);
+        }
+      }
+      const target = timeline.tracks.find(track => track.id === candidate.trackId);
+      if (!compatibleAsset(asset, target)) return { candidate, error: 'Choose a compatible track for this clip.' };
+      if (timeline.items.some(other => other.id !== item.id && other.trackId === candidate.trackId && other.startFrame < candidate.endFrame && other.endFrame > candidate.startFrame)) return { candidate, error: 'That move overlaps another clip. Use an empty gap or another video track.' };
+      const operation = edge ? {type: 'trim', itemId: item.id, startFrame: candidate.startFrame, endFrame: candidate.endFrame, sourceStartSeconds: candidate.sourceStartSeconds, sourceEndSeconds: candidate.sourceEndSeconds} : {type: 'move', itemId: item.id, trackId: candidate.trackId, startFrame: candidate.startFrame};
+      const operations = [operation], span = candidate.endFrame - candidate.startFrame, fades = (item.fadeInFrames || 0) + (item.fadeOutFrames || 0);
+      if (edge && fades > span) {
+        const fadeInFrames = Math.floor((item.fadeInFrames || 0) * span / fades);
+        operations.push({type: 'set-audio-level', itemId: item.id, fadeInFrames, fadeOutFrames: span - fadeInFrames});
+      }
+      if (['trackId', 'startFrame', 'endFrame', 'sourceStartSeconds', 'sourceEndSeconds'].every(key => candidate[key] === item[key])) return {candidate, operations: []};
+      return {candidate, operations};
+    }
+    function beginClipDrag(event, lane, item, target, edge) {
+      if (!canEdit() || drag || event.button !== undefined && event.button !== 0) return;
+      event.preventDefault(); event.stopPropagation(); target.focus?.(); pause(); suppressClick = false;
+      drag = {kind: 'clip', item: copy(item), lane, target, edge, pointerId: event.pointerId, x: event.clientX, y: event.clientY, token: generation, revision: timeline.revision, moved: false};
+      target.setPointerCapture?.(event.pointerId);
+    }
+    function previewClipDrag(event) {
+      if (Math.abs(event.clientX - drag.x) < 3 && (!Number.isFinite(event.clientY) || Math.abs(event.clientY - drag.y) < 3) && !drag.moved) return;
+      drag.moved = true;
+      const lane = drag.edge ? drag.lane : laneAt(event, drag.lane);
+      const delta = Math.round((event.clientX - drag.x) / pixelsPerSecond * fps(timeline.frameRate));
+      const edit = clipEdit(drag.item, delta, lane.dataset.trackId, drag.edge, event);
+      drag.operations = edit.operations; drag.error = edit.error;
+      if (!drag.ghost) { drag.ghost = el('div', 'timeline-clip-ghost'); drag.ghost.dataset.role = 'clip-ghost'; }
+      // Reparent the visual only. The captured clip and durable timeline stay put until pointerup.
+      if (drag.ghost.parentNode !== lane) { drag.ghost.remove(); lane.append(drag.ghost); }
+      drag.ghost.style.left = `${frameToPixels(edit.candidate.startFrame, timeline.frameRate, pixelsPerSecond)}px`;
+      drag.ghost.style.width = `${frameToPixels(edit.candidate.endFrame - edit.candidate.startFrame, timeline.frameRate, pixelsPerSecond)}px`;
+      drag.ghost.dataset.invalid = String(!!edit.error); drag.ghost.textContent = `${edit.candidate.startFrame}–${edit.candidate.endFrame}`;
+      status(edit.error || `${drag.edge ? 'Trim' : 'Move'} to frames ${edit.candidate.startFrame}–${edit.candidate.endFrame}. Shift bypasses snapping. Escape cancels.`, !!edit.error);
+    }
+    async function adjustClipKey(event, item, edge) {
+      if (!canEdit() || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+      event.preventDefault(); event.stopPropagation();
+      const result = clipEdit(item, (event.key === 'ArrowLeft' ? -1 : 1) * (event.shiftKey ? 10 : 1), item.trackId, edge, {shiftKey:true});
+      if (result.error) status(result.error, true); else await mutate('applyTimeline', result.operations);
+    }
+    async function addVideoTrack() {
+      if (!canEdit()) return;
+      if (timeline.tracks.length >= 128) { status('The timeline has reached its 128-track limit.', true); return; }
+      let index = 1; while (timeline.tracks.some(track => track.id === `video-${index}`)) index++;
+      await mutate('applyTimeline', [{type:'add-track', track:{id:`video-${index}`, type:'video', name:`Video ${index}`}}]);
+    }
+    function reorderTrack(trackId, direction) {
+      const index = timeline?.tracks.findIndex(track => track.id === trackId) + direction;
+      if (!canEdit() || index < 0 || index >= timeline.tracks.length) return;
+      return mutate('applyTimeline', [{type:'reorder-track', trackId, index}]);
+    }
+    function beginTrackDrag(event, track, target) {
+      if (!canEdit() || drag || event.button !== undefined && event.button !== 0) return;
+      event.preventDefault(); event.stopPropagation(); target.focus?.(); suppressClick = false;
+      drag = {kind:'track', trackId:track.id, target, pointerId:event.pointerId, y:event.clientY, token:generation, revision:timeline.revision, moved:false};
+      target.setPointerCapture?.(event.pointerId);
+    }
+    function clearTrackFeedback() { walk(tracks, node => { if (node.dataset?.role === 'track-lane') delete node.dataset.reorderTarget; }); }
+    function previewTrackDrag(event) {
+      if (Math.abs(event.clientY - drag.y) < 4 && !drag.moved) return;
+      drag.moved = true; clearTrackFeedback();
+      const lane = laneAt(event, null); if (!lane) { drag.operations = null; return; }
+      const index = timeline.tracks.findIndex(track => track.id === lane.dataset.trackId);
+      drag.operations = lane.dataset.trackId === drag.trackId ? null : [{type:'reorder-track',trackId:drag.trackId,index}];
+      lane.dataset.reorderTarget = 'true';
+    }
     function beginRangeDrag(event, lane, trackId, edge, target = lane) {
       if (!canEdit() || drag || event.button !== undefined && event.button !== 0 || edge && !selectionCurrent()) return;
       event.preventDefault(); event.stopPropagation();
-      drag = { trackId, lane, target, edge, pointerId: event.pointerId, frame: frameAt(event, lane), previous: copy(selection), fields: ['range-start', 'range-end', 'range-track'].map((role) => ui[role].value), token: generation, revision: timeline.revision, end: visibleEndFrame() };
+      target.focus?.();
+      drag = { kind: 'range', trackId, lane, target, edge, pointerId: event.pointerId, frame: frameAt(event, lane), previous: copy(selection), fields: ['range-start', 'range-end', 'range-track'].map((role) => ui[role].value), token: generation, revision: timeline.revision, end: visibleEndFrame() };
       target.setPointerCapture?.(event.pointerId);
       if (!edge) previewRangeDrag(event);
     }
     function previewRangeDrag(event) {
       if (!drag || drag.pointerId !== event.pointerId) return;
       if (!active(drag.token) || timeline?.revision !== drag.revision) { cancelRangeDrag(); return; }
+      if (drag.kind === 'clip') { previewClipDrag(event); return; }
+      if (drag.kind === 'track') { previewTrackDrag(event); return; }
+      if (drag.kind === 'seek') { seek(frameAt(event, drag.lane, drag.end)); return; }
       const last = frameAt(event, drag.lane, drag.end);
       let start = drag.previous?.startFrame, end = drag.previous?.endFrame;
-      if (drag.edge === 'start') start = clamp(start + last - drag.frame, 0, end - 1);
+      if (drag.edge === 'move') { const delta = clamp(last - drag.frame, -start, drag.end - end); start += delta; end += delta; }
+      else if (drag.edge === 'start') start = clamp(start + last - drag.frame, 0, end - 1);
       else if (drag.edge === 'end') end = clamp(end + last - drag.frame, start + 1, drag.end);
       else { start = Math.min(drag.frame, last, drag.end - 1); end = Math.max(drag.frame, last, start + 1); }
-      selectSpan(drag.edge ? drag.previous.trackIds : [drag.trackId], start, end, undefined, false);
+      selectSpan(drag.edge ? drag.previous.trackIds : crossedTracks(drag.trackId, laneAt(event, drag.lane).dataset.trackId), start, end, undefined, false);
     }
-    function finishRangeDrag(event) {
+    async function finishRangeDrag(event) {
+      setTimeout(() => { suppressClick = false; }, 0);
       if (!drag || drag.pointerId !== event.pointerId) return;
       previewRangeDrag(event); if (!drag) return;
       const gesture = drag; drag = null; gesture.target.releasePointerCapture?.(gesture.pointerId);
+      gesture.ghost?.remove(); clearTrackFeedback();
+      if (gesture.kind === 'seek') return;
+      if (gesture.kind === 'clip' || gesture.kind === 'track') {
+        suppressClick = gesture.moved;
+        if (gesture.moved && gesture.operations?.length && !gesture.error) { await mutate('applyTimeline', gesture.operations); }
+        else if (gesture.error) status(gesture.error, true);
+        return;
+      }
+      if (gesture.edge === 'move') suppressClick = true;
       inspectedItemId = selection?.itemIds.length === 1 ? selection.itemIds[0] : ''; renderInspector(); onSelection(copy(selection));
     }
     function cancelRangeDrag() {
       if (!drag) return;
-      const gesture = drag; drag = null; selection = gesture.previous;
+      const gesture = drag; drag = null; gesture.ghost?.remove(); clearTrackFeedback();
+      if (gesture.kind !== 'range') { suppressClick = !!gesture.moved; gesture.target.releasePointerCapture?.(gesture.pointerId); return; }
+      if (gesture.edge === 'move') suppressClick = true;
+      selection = gesture.previous;
       gesture.target.releasePointerCapture?.(gesture.pointerId);
       ['range-start', 'range-end', 'range-track'].forEach((role, index) => { ui[role].value = gesture.fields[index]; }); renderSelection();
     }
@@ -280,7 +445,7 @@
       target.addEventListener('pointermove', previewRangeDrag);
       target.addEventListener('pointerup', finishRangeDrag);
       target.addEventListener('pointercancel', (event) => { if (drag?.pointerId === event.pointerId) cancelRangeDrag(); });
-      target.addEventListener('lostpointercapture', cancelRangeDrag);
+      target.addEventListener('lostpointercapture', (event) => { if (drag?.target === target && drag.pointerId === event.pointerId) cancelRangeDrag(); });
     }
     function adjustRangeKey(event, edge) {
       if (!canEdit() || !selectionCurrent() || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
@@ -341,7 +506,7 @@
     function renderSelection() {
       const stale = !!selection && (selection.timelineRevision !== timeline?.revision || selection.timelineId !== timeline?.id);
       if (selection) { ui['range-start'].value = String(selection.startFrame); ui['range-end'].value = String(selection.endFrame); ui['range-track'].value = selection.trackIds.length === 1 ? selection.trackIds[0] : ''; }
-      ui['selection-summary'].textContent = selection ? stale ? `Timeline changed after selection (revision ${selection.timelineRevision}). Select again before sending.` : `Selected frames [${selection.startFrame}, ${selection.endFrame}) · ${selection.trackIds.length} track${selection.trackIds.length === 1 ? '' : 's'} · ${selection.endFrame - selection.startFrame} frames · drag handles to adjust · next message` : 'Click a clip or drag a range. Drop media from the Media drawer onto a track.';
+      ui['selection-summary'].textContent = selection ? stale ? `Timeline changed after selection (revision ${selection.timelineRevision}). Select again before sending.` : `Selected frames [${selection.startFrame}, ${selection.endFrame}) · ${selection.trackIds.length} track${selection.trackIds.length === 1 ? '' : 's'} · ${selection.endFrame - selection.startFrame} frames · drag handles to adjust · next message` : 'Drag clips to move · edges to trim · empty space to select · Alt/Option + drag moves the range · drag headers to stack';
       ui['selection-summary'].dataset.stale = String(stale);
       walk(tracks, (node) => {
         if (node.dataset?.itemId) node.setAttribute('aria-pressed', String(selection?.itemIds.includes(node.dataset.itemId) || false));
@@ -385,8 +550,8 @@
     function renderInspector() {
       const inspector = ui.inspector; const item = timeline?.items.find((entry) => entry.id === inspectedItemId);
       delete ui['save-clip']; delete ui['remove-clip'];
-      if (!item) { sidebar.replaceChildren(add, inspector); inspector.replaceChildren(el('h3', '', 'Clip details'), el('p', 'timeline-help', 'Select one clip to trim, move or adjust its audio.')); return; }
-      sidebar.replaceChildren(inspector, add);
+      if (!item) { sidebar.replaceChildren(add, inspector, exactRange); inspector.replaceChildren(el('h3', '', 'Clip details'), el('p', 'timeline-help', 'Select one clip to trim, move or adjust its audio.')); return; }
+      sidebar.replaceChildren(inspector, add, exactRange);
       const title = el('h3', '', item.name || assets.find((asset) => asset.id === item.assetId)?.name || 'Clip details');
       const grid = el('div', 'timeline-inspector-grid');
       grid.append(field('Clip track', 'clip-track', 'select'), field('Start frame', 'clip-start', 'number', item.startFrame), field('End frame (exclusive)', 'clip-end', 'number', item.endFrame), field('Source in (seconds)', 'source-start', 'number', item.sourceStartSeconds), field('Source out (seconds)', 'source-end', 'number', item.sourceEndSeconds));
@@ -396,7 +561,8 @@
         grid.append(field('Audio gain (0–1)', 'clip-gain', 'number', item.gain ?? 1), field('Fade in (frames)', 'fade-in', 'number', item.fadeInFrames || 0), field('Fade out (frames)', 'fade-out', 'number', item.fadeOutFrames || 0)); ui['clip-gain'].step = '0.05'; ui['clip-gain'].max = '1';
       }
       const buttons = el('div', 'timeline-actions'); buttons.append(button('Save clip', 'save-clip', () => saveClip(item.id, isStill), 'button primary small'), button('Remove', 'remove-clip', () => mutate('applyTimeline', [{ type: 'remove', itemId: item.id }]), 'button quiet small'));
-      inspector.replaceChildren(title, grid, buttons, el('p', 'timeline-help', 'Source timestamps are independent of project frames. Live preview maps the source span to the clip length.'));
+      const exactClip = el('details', 'timeline-exact-clip'); exactClip.open = false; exactClip.append(el('summary', '', 'Exact timing and audio'), grid, buttons);
+      inspector.replaceChildren(title, el('p', 'timeline-help', 'Drag the clip to move it. Drag its side grips to trim.'), exactClip, el('p', 'timeline-help', 'Source timestamps are independent of project frames. Live preview maps the source span to the clip length.'));
       updateControls();
     }
     async function saveClip(itemId, isStill) {
@@ -418,16 +584,23 @@
       try { const value = await client.getTimelineHistory(projectId); if (active(token)) { history = value; updateControls(); } } catch { if (active(token)) history = null; }
     }
     async function mutate(method, operations) {
-      if (!canEdit()) return;
+      if (!canEdit() || operations && !operations.length) return;
       cancelRangeDrag(); clearDropTarget();
       const token = generation, owner = projectId, revision = timeline.revision;
+      const focused = document.activeElement; let nextFocus;
       mutating = true; readSequence += 1; pause(); updateControls();
       try {
         const result = await client[method](owner, { expectedRevision: revision, ...(operations ? { operations } : {}) });
         if (!active(token)) return;
-        timeline = result; playhead = Math.min(playhead, durationFrames(timeline)); render(); status(method === 'undoTimeline' ? 'Edit undone.' : method === 'redoTimeline' ? 'Edit restored.' : 'Timeline saved. Source media is unchanged.'); await readHistory(token);
+        const restoreFocus = (document.activeElement === focused || document.activeElement === document.body) && ['clip-body', 'clip-trim-start', 'clip-trim-end', 'track-select', 'track-up', 'track-down'].includes(focused?.dataset?.role);
+        timeline = result; playhead = Math.min(playhead, durationFrames(timeline)); render();
+        if (restoreFocus) {
+          let replacement; walk(tracks, node => { if (node.dataset?.role === focused.dataset.role && ['itemId', 'clipId', 'trackId'].every(key => node.dataset[key] === focused.dataset[key])) replacement = node; });
+          nextFocus = replacement || ui.ruler;
+        }
+        status(method === 'undoTimeline' ? 'Edit undone.' : method === 'redoTimeline' ? 'Edit restored.' : 'Timeline saved. Source media is unchanged.'); await readHistory(token);
       } catch (error) { if (active(token)) status(`${error.message || 'Could not save the timeline.'}${/revision|conflict/i.test(error.message || '') ? ' Refresh, then select again.' : ''}`, true); }
-      finally { if (active(token)) { mutating = false; updateControls(); } }
+      finally { if (active(token)) { mutating = false; updateControls(); if (nextFocus && (!document.activeElement || document.activeElement === focused || document.activeElement === document.body)) nextFocus.focus?.(); } }
     }
     async function addClip(drop) {
       if (!canEdit()) return;
@@ -600,6 +773,7 @@
       previewEmpty.hidden = layers.some((layer) => layer.type !== 'audio') && !waiting && !failures.length;
       previewEmpty.textContent = failures.length ? 'Preview unavailable for this source.' : waiting ? 'Loading project media…' : layers.length ? 'Audio preview' : timeline.items.length ? 'No visual clip at this frame.' : 'Add project media to start your edit.';
       ui['preview-status'].textContent = failures[0] || ''; ui['retry-preview'].hidden = !failures.length;
+      if (ui.ruler) { ui.ruler.setAttribute('aria-valuenow', playhead); ui.ruler.setAttribute('aria-valuetext', `Frame ${playhead}`); }
       ui.seek.max = String(Math.max(1, durationFrames(timeline))); ui.seek.value = String(playhead);
       ui.timecode.textContent = `${playhead} / ${durationFrames(timeline)} f`; ui.timecode.setAttribute('aria-label', `Frame ${playhead} of ${durationFrames(timeline)}`);
       walk(tracks, (node) => { if (node.dataset?.role === 'playhead') node.style.left = `${frameToPixels(playhead, timeline.frameRate, pixelsPerSecond)}px`; });

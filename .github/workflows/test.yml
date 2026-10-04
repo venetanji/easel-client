@@ -32,3 +32,5 @@ jobs:
         run: xvfb-run -a sh -c 'EASEL_UI_TEST_DISPLAY="$DISPLAY" node --test --test-name-pattern="browser preview frame preserves" test/video-timeline-view.test.js'
       - name: Verify native editor selection and media drops
         run: xvfb-run -a node scripts/smoke-video-editor.cjs
+      - name: Verify native timeline direct controls and stacking parity
+        run: xvfb-run -a node scripts/smoke-timeline-controls.cjs

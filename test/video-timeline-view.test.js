@@ -20,7 +20,7 @@ function element(tagName = 'div') {
     removeEventListener(name, fn) { listeners.set(name, (listeners.get(name) || []).filter((entry) => entry !== fn)); },
     async dispatchEvent(event) { event.target ||= this; event.currentTarget = this; event.preventDefault ||= () => {}; event.stopPropagation ||= () => {}; for (const fn of [...(listeners.get(event.type) || [])]) await fn(event); },
     getBoundingClientRect() { return { left: 0, top: 0, width: 960, height: 56 }; },
-    focus() { this.focused = true; },
+    focus() { if (this.disabled) return; this.focused = true; if (this.ownerDocument) this.ownerDocument.activeElement = this; },
     setPointerCapture() {}, releasePointerCapture() {},
     load() {}, pause() { this.paused = true; }, play() { this.paused = false; return Promise.resolve(); },
   };
@@ -38,7 +38,7 @@ function fixture({ initial = timeline(), assets = [{ id: 'asset-video', mimeType
   const calls = [], selections = [], statuses = [], urls = [], revoked = [];
   const frames = new Map(); let frameId = 0;
   const window = { URL: { createObjectURL() { const url = `blob:test-${urls.length}`; urls.push(url); return url; }, revokeObjectURL(url) { revoked.push(url); } }, Blob, atob, performance: { now: () => 0 }, requestAnimationFrame(fn) { frames.set(++frameId, fn); return frameId; }, cancelAnimationFrame(id) { frames.delete(id); } };
-  const document = { createElement: element, defaultView: window };
+  const document = { createElement(tag) { const node = element(tag); node.ownerDocument = document; return node; }, defaultView: window };
   const container = element();
   const client = {
     async readTimeline(projectId) { calls.push(['read', projectId]); return clone(stored); },
@@ -51,6 +51,8 @@ function fixture({ initial = timeline(), assets = [{ id: 'asset-video', mimeType
       for (const operation of input.operations) {
         const item = stored.items.find((candidate) => candidate.id === operation.itemId);
         if (operation.type === 'insert') stored.items.push(clone(operation.item));
+        if (operation.type === 'add-track') stored.tracks.push(clone(operation.track));
+        if (operation.type === 'reorder-track') { const [track] = stored.tracks.splice(stored.tracks.findIndex(track => track.id === operation.trackId), 1); stored.tracks.splice(operation.index, 0, track); }
         if (operation.type === 'remove') stored.items = stored.items.filter((candidate) => candidate.id !== operation.itemId);
         if (operation.type === 'move') { item.endFrame += operation.startFrame - item.startFrame; item.startFrame = operation.startFrame; if (operation.trackId) item.trackId = operation.trackId; }
         if (operation.type === 'trim') Object.assign(item, Object.fromEntries(['startFrame', 'endFrame', 'sourceStartSeconds', 'sourceEndSeconds'].filter((key) => operation[key] !== undefined).map((key) => [key, operation[key]])));
@@ -427,7 +429,7 @@ test('empty-lane selection is visible during a gesture and stays within its lane
   const f = fixture(); await f.view.open('project-a'); const lane = laneFor(f);
   await lane.dispatchEvent({ type: 'pointerdown', clientX: 72, pointerId: 2 });
   await lane.dispatchEvent({ type: 'pointermove', clientX: 144, pointerId: 2 });
-  assert.equal(f.role('range-highlight').hidden, false); assert.equal(f.role('range-end').value, '48');
+  assert.equal(lane.children.find(node=>node.dataset.role==='range-highlight').hidden, false); assert.equal(f.role('range-end').value, '48');
   await lane.dispatchEvent({ type: 'pointerup', clientX: 1e12, pointerId: 2 });
   assert.equal(f.view.getSelection().endFrame, 192);
 });
@@ -545,4 +547,226 @@ test('leaving the timeline clears drag feedback and lets a new drag use the refr
   await freshLane.dispatchEvent({ type: 'dragover', clientX: 0, dataTransfer: mediaTransfer(id) });
   await freshLane.dispatchEvent({ type: 'drop', clientX: 0, dataTransfer: mediaTransfer(id) });
   assert.equal(f.calls.find(([method]) => method === 'apply')[2].expectedRevision, 2);
+});
+
+function laneGeometry(f) {
+  const lanes = f.all(node => node.dataset.role === 'track-lane');
+  lanes.forEach((lane, index) => { lane.getBoundingClientRect = () => ({left: 0, top: index * 72, width: 960, height: 72}); });
+  return lanes;
+}
+async function pointer(node, type, x, y, extra = {}) { await node.dispatchEvent({type, pointerId: 7, button: 0, clientX: x, clientY: y, ...extra}); }
+
+test('clip body drag moves its time once with source span unchanged', async () => {
+  const f = fixture(); await f.view.open('project-a');
+  const clip = f.item('clip-1');
+  await pointer(clip, 'pointerdown', 100); await pointer(clip, 'pointermove', 136); await pointer(clip, 'pointerup', 136);
+  const mutations = f.calls.filter(([method]) => method === 'apply');
+  assert.equal(mutations.length, 1);
+  assert.deepEqual(mutations[0][2], {expectedRevision:1, operations:[{type:'move', itemId:'clip-1', trackId:'video-1', startFrame:36}]});
+  assert.equal(f.item('clip-1').style.left, '108px');
+});
+
+test('clip moves across compatible tracks but rejects audio destinations and overlaps', async () => {
+  const doc = timeline(); doc.tracks.push({id:'video-2',type:'video',name:'Video 2'});
+  const f = fixture({initial:doc}); await f.view.open('project-a');
+  let lanes = laneGeometry(f), clip = f.item('clip-1');
+  let destination = lanes.find(node => node.dataset.trackId === 'video-2').getBoundingClientRect();
+  await pointer(clip,'pointerdown',100,230); await pointer(clip,'pointermove',136,destination.top+30); await pointer(clip,'pointerup',136,destination.top+30);
+  assert.equal(f.calls.find(([method]) => method === 'apply')?.[2].operations[0].trackId,'video-2');
+  lanes = laneGeometry(f); clip = f.item('clip-1'); destination = lanes.find(node=>node.dataset.trackId==='audio-1').getBoundingClientRect();
+  await pointer(clip,'pointerdown',130,30); await pointer(clip,'pointermove',150,destination.top+30); await pointer(clip,'pointerup',150,destination.top+30);
+  assert.equal(f.calls.filter(([method])=>method==='apply').length,1);
+  assert.match(f.role('status').textContent,/compatible/i);
+});
+
+test('clip trim changes source in proportion to its frame edge, with source bounds', async () => {
+  const f = fixture(); await f.view.open('project-a');
+  const handle = f.all(node=>node.dataset.role==='clip-trim-start')[0]; assert.ok(handle,'A clip has its own trim grip');
+  await pointer(handle,'pointerdown',72); await pointer(handle,'pointermove',108); await pointer(handle,'pointerup',108);
+  assert.deepEqual(f.calls.find(([method])=>method==='apply')[2].operations[0], {type:'trim',itemId:'clip-1',startFrame:36,endFrame:72,sourceStartSeconds:1.5,sourceEndSeconds:3});
+});
+
+test('Escape and stale refresh cancel pending clip moves without writes', async () => {
+  const f = fixture(); await f.view.open('project-a'); let clip = f.item('clip-1');
+  await pointer(clip,'pointerdown',100); await pointer(clip,'pointermove',136);
+  await f.container.children[0].dispatchEvent({type:'keydown',key:'Escape',target:clip});
+  await pointer(clip,'pointerup',136); assert.equal(f.calls.some(([method])=>method==='apply'),false);
+  clip = f.item('clip-1'); await pointer(clip,'pointerdown',100); await pointer(clip,'pointermove',136);
+  f.setStored(timeline('timeline-a',2)); await f.view.refresh(); await pointer(clip,'pointerup',136);
+  assert.equal(f.calls.some(([method])=>method==='apply'),false);
+});
+
+test('ruler seeks and Space starts playback at the chosen frame', async () => {
+  const f = fixture(); await f.view.open('project-a'); const ruler = f.role('ruler'); assert.ok(ruler,'A focusable timeline ruler is present');
+  await pointer(ruler,'pointerdown',150); await pointer(ruler,'pointerup',150);
+  assert.equal(f.role('seek').value,'50'); assert.equal(ruler.focused,true);
+  await f.container.children[0].dispatchEvent({type:'keydown',key:' ',target:ruler});
+  assert.equal(f.role('play').textContent,'Pause'); assert.equal(f.role('seek').value,'50');
+  await f.container.children[0].dispatchEvent({type:'keydown',key:' ',target:ruler}); assert.equal(f.role('play').textContent,'Play');
+});
+
+test('range drag spans the crossed tracks and exact inputs are secondary', async () => {
+  const f = fixture(); await f.view.open('project-a'); const lanes=laneGeometry(f); const first=lanes[0],last=lanes[2];
+  await pointer(first,'pointerdown',0,30); await pointer(first,'pointermove',60,174); await pointer(first,'pointerup',60,174);
+  assert.deepEqual(f.view.getSelection().trackIds,lanes.map(node=>node.dataset.trackId));
+  assert.equal(f.view.getSelection().startFrame,0); assert.equal(f.view.getSelection().endFrame,20);
+  assert.equal(f.role('range-start').parentNode.parentNode.parentNode.tagName,'DETAILS');
+  assert.equal(f.role('range-start').parentNode.parentNode.parentNode.open,false);
+});
+
+test('adding and reordering tracks makes the first visible row the top preview layer', async () => {
+  const f=fixture(); await f.view.open('project-a'); const add=f.role('add-video-track'); assert.ok(add,'Video tracks can be added');
+  await f.click(add);
+  const request=f.calls.find(([method])=>method==='apply')[2]; assert.equal(request.operations[0].type,'add-track'); assert.equal(request.operations[0].track.type,'video');
+  const trackId=request.operations[0].track.id;
+  assert.equal(f.all(node=>node.dataset.role==='track-lane')[0].dataset.trackId,trackId);
+  const down=f.all(node=>node.dataset.role==='track-down'&&node.dataset.trackId===trackId)[0]; assert.ok(down); await f.click(down);
+  assert.deepEqual(f.calls.filter(([method])=>method==='apply')[1][2].operations,[{type:'reorder-track',trackId,index:2}]);
+});
+
+test('Alt drag shifts the selected range over clips without editing clips', async () => {
+  const f=fixture(); await f.view.open('project-a'); await f.click(f.item('clip-1'));
+  const clip=f.item('clip-1'); await pointer(clip,'pointerdown',120,undefined,{altKey:true}); await pointer(clip,'pointermove',156,undefined,{altKey:true}); await pointer(clip,'pointerup',156,undefined,{altKey:true});
+  assert.equal(f.view.getSelection().startFrame,36); assert.equal(f.view.getSelection().endFrame,84);
+  assert.equal(f.calls.some(([method])=>method==='apply'),false);
+});
+
+test('clip snapping finds adjacent edges and Shift bypasses it', async () => {
+  const doc=timeline(); doc.items.push({...doc.items[0],id:'clip-2',startFrame:120,endFrame:144});
+  const f=fixture({initial:doc}); await f.view.open('project-a');
+  let clip=f.item('clip-1'); await pointer(clip,'pointerdown',100); await pointer(clip,'pointermove',241); await pointer(clip,'pointerup',241);
+  assert.equal(f.calls.find(([method])=>method==='apply')[2].operations[0].startFrame,72,'snap moving end to frame 120');
+  clip=f.item('clip-1'); await pointer(clip,'pointerdown',240); await pointer(clip,'pointermove',237,undefined,{shiftKey:true}); await pointer(clip,'pointerup',237,undefined,{shiftKey:true});
+  assert.equal(f.calls.filter(([method])=>method==='apply')[1][2].operations[0].startFrame,71);
+});
+
+test('overlap rejection and trim source bounds protect saved media', async () => {
+  const doc=timeline(); doc.items.push({...doc.items[0],id:'clip-2',startFrame:80,endFrame:104});
+  const f=fixture({initial:doc}); await f.view.open('project-a');
+  const clip=f.item('clip-1'); await pointer(clip,'pointerdown',100); await pointer(clip,'pointermove',142); await pointer(clip,'pointerup',142);
+  assert.equal(f.calls.some(([method])=>method==='apply'),false); assert.match(f.role('status').textContent,/overlap/i);
+  const trim=f.all(node=>node.dataset.role==='clip-trim-start'&&node.dataset.clipId==='clip-1')[0];
+  await pointer(trim,'pointerdown',72); await pointer(trim,'pointermove',-300); await pointer(trim,'pointerup',-300);
+  const op=f.calls.find(([method])=>method==='apply')[2].operations[0]; assert.equal(op.startFrame,0); assert.equal(op.sourceStartSeconds,0);
+});
+
+test('dragging a track header reorders its whole layer and Escape cancels reorder', async () => {
+  const f=fixture(); await f.view.open('project-a'); laneGeometry(f);
+  let header=f.all(node=>node.dataset.role==='track-select'&&node.dataset.trackId==='video-1')[0];
+  await pointer(header,'pointerdown',20,174); await pointer(header,'pointermove',20,30); await pointer(header,'pointerup',20,30);
+  assert.deepEqual(f.calls.find(([method])=>method==='apply')[2].operations,[{type:'reorder-track',trackId:'video-1',index:2}]);
+  laneGeometry(f); header=f.all(node=>node.dataset.role==='track-select'&&node.dataset.trackId==='video-1')[0];
+  await pointer(header,'pointerdown',20,30); await pointer(header,'pointermove',20,174); await f.container.children[0].dispatchEvent({type:'keydown',key:'Escape'}); await pointer(header,'pointerup',20,174);
+  assert.equal(f.calls.filter(([method])=>method==='apply').length,1);
+});
+
+test('keyboard clip movement and trimming commit single-frame edits', async () => {
+  const f=fixture(); await f.view.open('project-a');
+  await f.item('clip-1').dispatchEvent({type:'keydown',key:'ArrowRight'});
+  assert.equal(f.calls.find(([method])=>method==='apply')[2].operations[0].startFrame,25);
+  await f.all(node=>node.dataset.role==='clip-trim-end')[0].dispatchEvent({type:'keydown',key:'ArrowLeft',shiftKey:true});
+  const op=f.calls.filter(([method])=>method==='apply')[1][2].operations[0]; assert.equal(op.endFrame,63); assert.equal(op.sourceEndSeconds,3-10/24);
+});
+
+test('a canceled moved clip does not turn the trailing pointer click into a new selection', async () => {
+  const f=fixture(); await f.view.open('project-a'); const clip=f.item('clip-1');
+  await pointer(clip,'pointerdown',100); await pointer(clip,'pointermove',136); await f.container.children[0].dispatchEvent({type:'keydown',key:'Escape'}); await pointer(clip,'pointerup',136); await f.click(clip);
+  assert.equal(f.view.getSelection(),null); assert.equal(f.calls.some(([method])=>method==='apply'),false);
+});
+
+test('no-op clip keyboard edits at source bounds do not create undo entries', async () => {
+  const doc=timeline(); doc.items[0].startFrame=0; doc.items[0].endFrame=48;
+  const f=fixture({initial:doc}); await f.view.open('project-a'); await f.item('clip-1').dispatchEvent({type:'keydown',key:'ArrowLeft'});
+  assert.equal(f.calls.some(([method])=>method==='apply'),false);
+});
+
+
+test('keyboard focus survives clip mutations for repeated frame nudges', async () => {
+  const f=fixture(); await f.view.open('project-a'); f.item('clip-1').focus();
+  await f.document.activeElement.dispatchEvent({type:'keydown',key:'ArrowRight'});
+  assert.ok(f.document.activeElement===f.item('clip-1'), 'Focus must target the replacement clip node');
+  await f.document.activeElement.dispatchEvent({type:'keydown',key:'ArrowRight'});
+  assert.equal(f.calls.filter(([method])=>method==='apply')[1][2].operations[0].startFrame,26);
+});
+
+
+test('trim handle regains focus after it becomes editable for repeated keyboard trims', async () => {
+  const f=fixture(); await f.view.open('project-a'); f.all(node=>node.dataset.role==='clip-trim-end')[0].focus();
+  await f.document.activeElement.dispatchEvent({type:'keydown',key:'ArrowLeft'});
+  assert.ok(f.document.activeElement===f.all(node=>node.dataset.role==='clip-trim-end')[0]);
+  assert.equal(f.document.activeElement.disabled,false);
+});
+
+test('zoom preserves the ruler playhead and accessible current frame', async () => {
+  const f=fixture(); await f.view.open('project-a'); await f.change(f.role('seek'),36);
+  f.role('zoom').value='144'; await f.role('zoom').dispatchEvent({type:'input'});
+  assert.equal(f.role('ruler').getAttribute('aria-valuenow'),'36');
+  assert.equal(f.role('ruler').children.find(node=>node.dataset.role==='playhead').style.left,'216px');
+});
+
+test('native blur caused by temporarily disabling a trim grip still restores keyboard focus', async () => {
+  let finish;
+  const f=fixture({overrides:{applyTimeline(){ return new Promise(resolve=>{finish=resolve;}); }}});
+  await f.view.open('project-a'); const handle=f.all(node=>node.dataset.role==='clip-trim-end')[0]; handle.focus();
+  const pending=handle.dispatchEvent({type:'keydown',key:'ArrowLeft'});
+  f.document.body=element('body'); f.document.activeElement=f.document.body;
+  finish(timeline('timeline-a',2)); await pending;
+  assert.ok(f.document.activeElement===f.all(node=>node.dataset.role==='clip-trim-end')[0]);
+});
+
+test('source-bound trims remain valid despite floating point frame arithmetic', async () => {
+  const {applyTimelineOperations}=require('../src/video-timeline');
+  const doc=timeline(); Object.assign(doc.items[0], {assetId:'a'.repeat(64), startFrame:24,endFrame:36,sourceStartSeconds:13/24,sourceEndSeconds:25/24});
+  let committed;
+  const f=fixture({initial:doc,assets:[{id:'a'.repeat(64),mimeType:'video/mp4',duration:8}],overrides:{async applyTimeline(_project,request){committed=applyTimelineOperations(doc,request.operations).document; return committed;}}});
+  await f.view.open('project-a'); const handle=f.all(node=>node.dataset.role==='clip-trim-start')[0];
+  await pointer(handle,'pointerdown',72); await pointer(handle,'pointermove',-100); await pointer(handle,'pointerup',-100);
+  assert.ok(committed,'The source-bound trim must commit through real model validation');
+  assert.equal(committed.items[0].sourceStartSeconds,0); assert.equal(committed.items[0].startFrame,11);
+});
+
+test('Escape during Alt range drag over a clip preserves the prior custom range after click', async () => {
+  const f=fixture(); await f.view.open('project-a'); await f.change(f.role('range-start'),30); await f.change(f.role('range-end'),60); await f.change(f.role('range-track'),'video-1'); await f.click(f.role('select-range'));
+  const clip=f.item('clip-1'); await pointer(clip,'pointerdown',120,undefined,{altKey:true}); await pointer(clip,'pointermove',156,undefined,{altKey:true});
+  await f.container.children[0].dispatchEvent({type:'keydown',key:'Escape'}); await pointer(clip,'pointerup',156); await f.click(clip);
+  assert.equal(f.view.getSelection().startFrame,30); assert.equal(f.view.getSelection().endFrame,60);
+});
+
+test('Alt dragging a trim grip moves only the selection', async () => {
+  const f=fixture(); await f.view.open('project-a'); await f.click(f.item('clip-1'));
+  const handle=f.all(node=>node.dataset.role==='clip-trim-start')[0];
+  await pointer(handle,'pointerdown',74,undefined,{altKey:true}); await pointer(handle,'pointermove',110,undefined,{altKey:true}); await pointer(handle,'pointerup',110,undefined,{altKey:true});
+  assert.equal(f.calls.some(([method])=>method==='apply'),false);
+  assert.equal(f.view.getSelection().startFrame,36); assert.equal(f.view.getSelection().endFrame,84);
+});
+
+test('short clips keep a body hit target between proportionally sized trim grips', async () => {
+  const doc=timeline(); doc.items[0].endFrame=30; doc.items[0].sourceEndSeconds=1.25;
+  const f=fixture({initial:doc}); await f.view.open('project-a');
+  const width=parseFloat(f.item('clip-1').style.width);
+  assert.ok(parseFloat(f.item('clip-1').style.paddingInline) * 2 + 2 <= width, 'Padding must not expand the clip beyond its frame width');
+  for (const handle of f.all(node=>['clip-trim-start','clip-trim-end'].includes(node.dataset.role))) assert.ok(parseFloat(handle.style.width)<=width/4);
+});
+
+test('late capture loss from a different control cannot cancel a new track drag', async () => {
+  const f=fixture(); await f.view.open('project-a'); laneGeometry(f);
+  const header=f.all(node=>node.dataset.role==='track-select'&&node.dataset.trackId==='video-1')[0];
+  await pointer(header,'pointerdown',20,174);
+  await f.role('ruler').dispatchEvent({type:'lostpointercapture',pointerId:7});
+  await pointer(header,'pointermove',20,30); await pointer(header,'pointerup',20,30);
+  assert.equal(f.calls.filter(([method])=>method==='apply').length,1);
+});
+
+test('Alt on the selected part of a trim grip uses pointer position rather than clip edge', async () => {
+  const f=fixture(); await f.view.open('project-a'); await f.change(f.role('range-start'),26); await f.change(f.role('range-end'),60); await f.change(f.role('range-track'),'video-1'); await f.click(f.role('select-range'));
+  const handle=f.all(node=>node.dataset.role==='clip-trim-start')[0]; await pointer(handle,'pointerdown',80,undefined,{altKey:true}); await pointer(handle,'pointermove',116,undefined,{altKey:true}); await pointer(handle,'pointerup',116,undefined,{altKey:true});
+  assert.equal(f.calls.some(([method])=>method==='apply'),false); assert.equal(f.view.getSelection().startFrame,38);
+});
+
+
+test('one-frame clips at minimum zoom keep their authored width rather than border width', async () => {
+  const doc=timeline(); doc.items[0].endFrame=25; doc.items[0].sourceEndSeconds=1+1/24;
+  const f=fixture({initial:doc}); await f.view.open('project-a'); f.role('zoom').value='24'; await f.role('zoom').dispatchEvent({type:'input'});
+  const clip=f.item('clip-1'); assert.equal(clip.style.width,'1px');
+  assert.ok(parseFloat(clip.style.borderWidth)*2+parseFloat(clip.style.paddingInline)*2<=1);
 });

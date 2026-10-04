@@ -92,6 +92,38 @@ test('supports undo/redo after restart with monotonic revisions and one envelope
   assert.deepEqual(store.status(projectId), { undoAvailable: true, redoAvailable: false });
 });
 
+test('track reorder persists as one undoable edit and preserves clip source ranges after restart', (t) => {
+  const { store, options, filename } = setup(t);
+  const initial = store.create(projectId, { items: [clip] });
+  const reordered = store.apply(projectId, { expectedRevision: 0, operations: [
+    { type: 'reorder-track', trackId: 'video-1', index: 2 },
+    { type: 'reorder-track', trackId: 'overlay-1', index: 0 },
+  ] });
+  assert.deepEqual(reordered.tracks.map((track) => track.id), ['overlay-1', 'audio-1', 'video-1']);
+  assert.deepEqual(reordered.items, initial.items);
+  assert.equal(reordered.revision, 1);
+  assert.equal(JSON.parse(fs.readFileSync(filename, 'utf8')).undo.length, 1);
+  assert.deepEqual(createVideoTimelineStore(options).read(projectId), reordered);
+  const undone = createVideoTimelineStore(options).undo(projectId, { expectedRevision: 1 });
+  assert.deepEqual(undone, { ...initial, revision: 2 });
+  const redone = createVideoTimelineStore(options).redo(projectId, { expectedRevision: 2 });
+  assert.deepEqual(redone, { ...reordered, revision: 3 });
+});
+
+test('a failed reorder batch preserves persisted order, revision, and redo history', (t) => {
+  const { store, filename } = setup(t);
+  store.create(projectId, { items: [clip] });
+  store.apply(projectId, { expectedRevision: 0, operations: [{ type: 'reorder-track', trackId: 'video-1', index: 2 }] });
+  store.undo(projectId, { expectedRevision: 1 });
+  const before = fs.readFileSync(filename, 'utf8');
+  assert.throws(() => store.apply(projectId, { expectedRevision: 2, operations: [
+    { type: 'reorder-track', trackId: 'video-1', index: 2 },
+    { type: 'reorder-track', trackId: 'missing', index: 0 },
+  ] }), /track does not exist/i);
+  assert.equal(fs.readFileSync(filename, 'utf8'), before);
+  assert.deepEqual(store.status(projectId), { undoAvailable: false, redoAvailable: true });
+});
+
 test('a new edit after undo clears redo and empty history errors are actionable', (t) => {
   const { store } = setup(t);
   store.create(projectId);

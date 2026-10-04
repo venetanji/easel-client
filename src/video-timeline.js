@@ -155,6 +155,11 @@ function validateTimelineOperations(operations) {
         objectKeys(operation, ['type', 'track'], [], 'Add track operation');
         validateTrack(operation.track);
         break;
+      case 'reorder-track':
+        objectKeys(operation, ['type', 'trackId', 'index'], [], 'Reorder track operation');
+        id(operation.trackId, 'Track ID');
+        integer(operation.index, 0, MAX_TIMELINE_TRACKS - 1, 'Track index');
+        break;
       case 'remove-track':
         objectKeys(operation, ['type', 'trackId'], [], 'Remove track operation');
         id(operation.trackId, 'Track ID');
@@ -199,6 +204,13 @@ function applyTimelineOperations(input, operations) {
     if (operation.type === 'add-track') {
       if (document.tracks.some((track) => track.id === operation.track.id)) fail('Track ID already exists.');
       document.tracks.push(operation.track);
+    } else if (operation.type === 'reorder-track') {
+      const index = document.tracks.findIndex((track) => track.id === operation.trackId);
+      if (index < 0) fail('Track does not exist.');
+      integer(operation.index, 0, document.tracks.length - 1, 'Track index');
+      // Stored tracks remain bottom-to-top; index is the final stored position.
+      const [track] = document.tracks.splice(index, 1);
+      document.tracks.splice(operation.index, 0, track);
     } else if (operation.type === 'remove-track') {
       if (!document.tracks.some((track) => track.id === operation.trackId)) fail('Track does not exist.');
       if (document.items.some((item) => item.trackId === operation.trackId)) fail('Only empty tracks may be removed.');

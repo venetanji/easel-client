@@ -113,6 +113,71 @@ test('adds/removes empty tracks and rejects removing occupied tracks', () => {
   assert.throws(() => applyTimelineOperations(doc, [{ type: 'remove-track', trackId: 'unknown' }]));
 });
 
+test('reorders occupied tracks to the final stored index without changing clips or inputs', () => {
+  const doc = document({ items: [item({ name: 'Shot', sourceDurationSeconds: 2, gain: 0.5 }),
+    item({ id: 'title-1', trackId: 'overlay-1' })] });
+  const operations = [{ type: 'reorder-track', trackId: 'video-1', index: 2 }];
+  const before = structuredClone({ doc, operations });
+  const result = applyTimelineOperations(doc, operations);
+  assert.deepEqual(result.document.tracks, [doc.tracks[1], doc.tracks[2], doc.tracks[0]]);
+  assert.deepEqual(result.document.items, doc.items);
+  assert.deepEqual(result.changedItemIds, []);
+  assert.equal(result.document.revision, 1);
+  assert.deepEqual({ doc, operations }, before);
+
+  const restored = applyTimelineOperations(result.document, [{ type: 'reorder-track', trackId: 'video-1', index: 0 }]);
+  assert.deepEqual(restored.document.tracks, doc.tracks);
+  assert.deepEqual(restored.document.items, doc.items);
+  assert.equal(restored.document.revision, 2);
+});
+
+test('reordering a track to its existing index preserves order with the usual edit revision', () => {
+  const doc = document();
+  const result = applyTimelineOperations(doc, [{ type: 'reorder-track', trackId: 'audio-1', index: 1 }]);
+  assert.deepEqual(result.document, { ...doc, revision: 1 });
+  assert.deepEqual(result.changedItemIds, []);
+});
+
+test('validates bounded reorder indexes and rejects absent IDs or unsupported fields', () => {
+  const operations = [{ type: 'reorder-track', trackId: 'video-1', index: 0 },
+    { type: 'reorder-track', trackId: 'video-1', index: 127 }];
+  const checked = validateTimelineOperations(operations);
+  assert.deepEqual(checked, operations);
+  checked[0].index = 1;
+  assert.equal(operations[0].index, 0);
+  for (const index of [-1, 128, 0.5, NaN, Infinity, '1', null, undefined]) {
+    assert.throws(() => validateTimelineOperations([{ type: 'reorder-track', trackId: 'video-1', index }]), /index/i);
+  }
+  for (const operation of [
+    { type: 'reorder-track', trackId: 'video-1' },
+    { type: 'reorder-track', index: 0 },
+    { type: 'reorder-track', trackId: '../video-1', index: 0 },
+    { type: 'reorder-track', trackId: 'video-1', index: 0, extra: true },
+  ]) assert.throws(() => validateTimelineOperations([operation]), { code: 'TIMELINE_INVALID' });
+  const doc = document();
+  assert.throws(() => applyTimelineOperations(doc, [{ type: 'reorder-track', trackId: 'video-1', index: 3 }]), /index/i);
+  assert.throws(() => applyTimelineOperations(doc, [{ type: 'reorder-track', trackId: 'missing', index: 0 }]), /track does not exist/i);
+});
+
+test('reordering uses the current batch track order and leaves failed batches unchanged', () => {
+  const doc = document({ items: [item()] });
+  const operations = [
+    { type: 'add-track', track: { id: 'video-2', type: 'video', name: 'Second video' } },
+    { type: 'reorder-track', trackId: 'video-2', index: 0 },
+    { type: 'reorder-track', trackId: 'video-1', index: 3 },
+  ];
+  const before = structuredClone({ doc, operations });
+  const result = applyTimelineOperations(doc, operations);
+  assert.deepEqual(result.document.tracks.map((track) => track.id), ['video-2', 'audio-1', 'overlay-1', 'video-1']);
+  assert.deepEqual(result.document.items, doc.items);
+  assert.equal(result.document.revision, 1);
+  assert.throws(() => applyTimelineOperations(doc, [...operations,
+    { type: 'remove-track', trackId: 'audio-1' },
+    { type: 'reorder-track', trackId: 'video-1', index: 3 },
+  ]), /index/i);
+  assert.deepEqual({ doc, operations }, before);
+});
+
 test('trims source and timeline boundaries explicitly and preserves unrelated metadata', () => {
   const doc = document({ items: [item({ name: 'Shot', sourceDurationSeconds: 3 })] });
   const trimmed = applyTimelineOperations(doc, [{ type: 'trim', itemId: 'clip-1', startFrame: 6,
