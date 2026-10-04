@@ -73,10 +73,16 @@ longer/high-resolution jobs fit VRAM.
 
 ## Guiding videos: prepare, do not pretend to submit
 
-Current Easel API/MCP has no typed guide-video upload/control path. Most
-video-conditioned IC entries remain `supported:false`. Their weights may be
-installed while their workflow is still unavailable. A private ComfyUI graph
-experiment is not proof of API, MCP or UI support.
+The current client/MCP has no typed guide-video upload/control path. The LTX
+API accepts still-image guidance only; most of its video-conditioned IC entries
+remain `supported:false`. H3 server workflows can use temporal video/audio
+guides, but the current client cannot submit those fields. Installed weights
+or a private ComfyUI graph are not proof of client/MCP/UI support.
+
+For assembly, use the revision-safe timeline recipe in [Easel Media](../SKILL.md).
+Hard cuts do not synthesize a transition. Prefer downloaded managed assets for
+reuse: H3 receipts can disappear after a ComfyUI restart, and receipt loss never
+justifies blindly resubmitting a possibly billed job.
 
 Choose guidance by the constraint: depth for layout, occlusion and parallax;
 real Canny edges for silhouettes; pose for body motion. An RGB first frame is

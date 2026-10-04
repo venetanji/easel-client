@@ -35,6 +35,7 @@
     const now = () => host.performance?.now?.() ?? Date.now();
     let projectId = '', timeline = null, selection = null, assets = [], generation = 0, readSequence = 0;
     let closed = true, destroyed = false, loading = false, mutating = false, explicitlyBusy = false;
+    let pickerSequence = 0;
     let history = null, libraryAssets = [], exportController = null, preparing = false, exporting = false, playhead = 0, playing = false, animation = null, playOrigin = 0, startedAt = 0;
     let pixelsPerSecond = PIXELS_PER_SECOND, inspectedItemId = '', drag = null, dropTarget = null, suppressClick = false;
     let cachedBytes = 0, itemCounter = 0, mediaFetchTail = Promise.resolve();
@@ -94,7 +95,7 @@
     const previewViewport = el('div', 'timeline-preview-viewport');
     const stage = el('div', 'timeline-preview-stage', undefined, 'preview-stage');
     previewViewport.append(stage);
-    const previewEmpty = el('p', 'timeline-preview-empty', 'Add project media to start your edit.', 'preview-empty');
+    const previewEmpty = el('p', 'timeline-preview-empty', 'Drag media from the Media drawer onto a track to start your edit.', 'preview-empty');
     const mediaSurface = el('div', 'timeline-preview-media', undefined, 'preview-media'); stage.append(mediaSurface, previewEmpty);
     const transport = el('div', 'timeline-transport');
     transport.append(button('Play', 'play', () => togglePlayback(), 'button primary small'), button('Previous frame', 'previous-frame', () => seek(playhead - 1), 'button quiet small'), button('Next frame', 'next-frame', () => seek(playhead + 1), 'button quiet small'));
@@ -104,29 +105,22 @@
     const previewFooter = el('div', 'timeline-preview-footer');
     previewFooter.append(el('span', '', 'Live preview · browser timing'), el('span', '', '', 'preview-status'), button('Retry media', 'retry-preview', () => { mediaErrors.clear(); disposeMediaNodes(); renderPreview(); })); ui['retry-preview'].hidden = true;
     preview.append(previewViewport, transport, previewFooter);
-    const sidebar = el('aside', 'timeline-sidebar');
-    const add = el('section', 'timeline-add'); add.append(el('h3', '', 'Add media'), button('Import media', 'import-media', importMedia));
-    add.append(field('Media source', 'media-source', 'select'), field('Media type', 'media-filter', 'select'), field('Search media', 'media-search', 'search'), field('Media', 'add-asset', 'select'), field('Destination track', 'add-track', 'select'), field('Still image length (seconds)', 'image-duration', 'number', 5));
+    const contextBar = el('section', 'timeline-context'); contextBar.setAttribute('aria-label', 'Timeline editing controls');
+    const add = el('details', 'timeline-add', undefined, 'add-picker'); add.open = false;
+    add.append(el('summary', '', 'Add clip'));
+    const addFields = el('div', 'timeline-add-fields');
+    addFields.append(field('Media', 'add-asset', 'select'), field('Destination track', 'add-track', 'select'), field('Still image length (seconds)', 'image-duration', 'number', 5));
     ui['image-duration'].min = '0.1'; ui['image-duration'].step = '0.1';
-    const addNote = el('p', 'timeline-help', 'Clips append to the selected track. Source files stay unchanged.', 'add-note');
-    add.append(button('Add clip', 'add-clip', addClip, 'button primary small'), addNote);
-    ui['media-source'].append(option('This project', 'project'), option('Media library', 'library')); ui['media-source'].value = 'project';
-    ui['media-filter'].append(option('All media', ''), option('Video', 'video'), option('Audio', 'audio'), option('Images', 'image')); ui['media-filter'].value = '';
-    ui['media-source'].addEventListener('change', async () => {
-      const token = generation;
-      if (ui['media-source'].value === 'library' && client.listAssets) {
-        try { const result = await client.listAssets(); if (!active(token)) return; libraryAssets = Array.isArray(result) ? result : result?.assets || []; renderAssets(); }
-        catch (error) { if (active(token)) status(`Could not load the Media library. ${error.message}`, true); }
-      } else renderAssets();
-    });
-    ui['media-filter'].addEventListener('change', renderAssets); ui['media-search'].addEventListener('input', renderAssets); ui['media-search'].addEventListener('change', renderAssets);
+    const addNote = el('p', 'timeline-help', 'Drag from the Media drawer, or choose a clip here.', 'add-note');
+    add.append(addFields, button('Add clip', 'add-clip', addClip, 'button primary small'), addNote);
+    add.addEventListener('toggle', async () => { if (add.open) await refreshPicker(); });
     ui['add-asset'].addEventListener('change', updateAssetChoices);
-    const inspector = el('section', 'timeline-inspector', undefined, 'inspector'); sidebar.append(add, inspector);
-    workbench.append(preview, sidebar);
+    const inspector = el('details', 'timeline-inspector', undefined, 'inspector'); inspector.open = false; inspector.hidden = true;
+    workbench.append(preview);
     const exactRange = el('details', 'timeline-exact-range'); exactRange.open = false; exactRange.append(el('summary', '', 'Exact selection'));
     const rangeBar = el('section', 'timeline-rangebar'); rangeBar.setAttribute('aria-label', 'Exact frame range');
     rangeBar.append(field('Start frame', 'range-start', 'number', 0), field('End frame (exclusive)', 'range-end', 'number', 24), field('Selection track', 'range-track', 'select'), button('Select range', 'select-range', selectRange), button('Clear', 'clear-selection', clearSelection, 'button quiet small'));
-    exactRange.append(rangeBar); sidebar.append(exactRange);
+    exactRange.append(rangeBar); contextBar.append(add, inspector, exactRange);
     const selectionSummary = el('p', 'timeline-selection-summary', 'Select a clip or frame range to attach it to your next message.', 'selection-summary'); selectionSummary.setAttribute('aria-live', 'polite');
     const timelineToolbar = el('div', 'timeline-track-toolbar'); timelineToolbar.append(selectionSummary, button('Add video track', 'add-video-track', addVideoTrack), button('Clear selection', 'clear-range', clearSelection, 'button quiet small'), field('Zoom', 'zoom', 'range', PIXELS_PER_SECOND));
     ui.zoom.min = '24'; ui.zoom.max = '160'; ui.zoom.step = '8'; ui.zoom.addEventListener('input', () => { pixelsPerSecond = Number(ui.zoom.value); renderTracks(); });
@@ -138,11 +132,11 @@
       if (event.clientX < box.left || event.clientX >= box.left + box.width || event.clientY < box.top || event.clientY >= box.top + box.height) clearDropTarget();
     });
     const statusNode = el('p', 'timeline-status', '', 'status'); statusNode.setAttribute('role', 'status'); statusNode.setAttribute('aria-live', 'polite');
-    shell.append(header, workbench, timelineToolbar, tracksViewport, statusNode); container.replaceChildren(shell); container.hidden = true;
-    editControls.push(ui['add-video-track'], ui['import-media'], ui['media-source'], ui['media-filter'], ui['media-search'], ui['add-asset'], ui['add-track'], ui['image-duration'], ui['add-clip']);
+    shell.append(header, workbench, contextBar, timelineToolbar, tracksViewport, statusNode); container.replaceChildren(shell); container.hidden = true;
+    editControls.push(ui['add-video-track'], ui['add-asset'], ui['add-track'], ui['image-duration'], ui['add-clip']);
     shell.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') { event.preventDefault(); if (drag) cancelRangeDrag(); else clearSelection(); clearDropTarget(); return; }
-      if (event.defaultPrevented || ['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target?.tagName) || event.target?.isContentEditable) return;
+      if (event.defaultPrevented || ['INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY'].includes(event.target?.tagName) || event.target?.isContentEditable) return;
       if (event.target?.tagName === 'BUTTON' && !['clip-body', 'track-select', 'clip-trim-start', 'clip-trim-end', 'range-start-handle', 'range-end-handle'].includes(event.target.dataset?.role)) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); mutate(event.shiftKey ? 'redoTimeline' : 'undoTimeline'); return; }
       if (event.key === ' ') { event.preventDefault(); togglePlayback(); }
@@ -173,7 +167,11 @@
         if (['range-start-handle', 'range-end-handle'].includes(node.dataset?.role)) node.disabled = !editable || !selectionCurrent(); });
       shell.setAttribute('aria-busy', String(loading || mutating || preparing || exporting));
     }
-    function pickerAssets() { return ui['media-source'].value === 'library' ? libraryAssets : assets; }
+    function pickerAssets() {
+      const found = new Map(assets.map(asset => [asset.id, asset]));
+      for (const asset of libraryAssets) if (!found.has(asset.id)) found.set(asset.id, asset);
+      return [...found.values()];
+    }
     function updateAssetChoices() {
       const asset = pickerAssets().find((entry) => entry.id === ui['add-asset'].value);
       const isImage = asset?.mimeType?.startsWith('image/');
@@ -183,13 +181,20 @@
     }
     function renderAssets() {
       const previous = ui['add-asset'].value;
-      const query = ui['media-search'].value.trim().toLocaleLowerCase();
-      const supported = pickerAssets().filter((asset) => MEDIA_TYPE.test(asset.mimeType || '') && asset.id && (!ui['media-filter'].value || asset.mimeType.startsWith(`${ui['media-filter'].value}/`)) && (!query || String(asset.name || asset.id).toLocaleLowerCase().includes(query)));
-      ui['media-source'].parentNode.hidden = !client.listAssets; ui['import-media'].hidden = !client.importMedia;
+      const supported = pickerAssets().filter((asset) => MEDIA_TYPE.test(asset.mimeType || '') && asset.id);
       ui['add-asset'].replaceChildren(...supported.map((asset) => option(asset.name || asset.id, asset.id)));
       ui['add-asset'].value = supported.some((asset) => asset.id === previous) ? previous : supported[0]?.id || '';
-      ui['add-note'].textContent = supported.length ? ui['media-source'].value === 'library' ? 'Add clip attaches this library source to your project and appends it to the track.' : 'Clips append to the selected track. Source files stay unchanged.' : query || ui['media-filter'].value ? 'No matching media. Try another name or media type.' : 'No media yet. Import or generate media in the Media library, then Refresh.';
+      ui['add-note'].textContent = supported.length ? 'Append to the chosen track. Library media is attached automatically; source files stay unchanged.' : 'Import or generate media in the Media drawer, then Refresh. You can also drag media directly onto a track.';
       updateAssetChoices();
+    }
+    async function refreshPicker() {
+      if (!client.listAssets || closed || destroyed) return;
+      const token = generation, owner = projectId, request = ++pickerSequence;
+      try {
+        const result = await client.listAssets();
+        if (!active(token) || owner !== projectId || request !== pickerSequence) return;
+        libraryAssets = Array.isArray(result) ? result : result?.assets || []; renderAssets();
+      } catch (error) { if (active(token) && request === pickerSequence) status(`Could not load library media. Use Refresh to retry. ${error.message}`, true); }
     }
     function render() {
       if (!timeline) { ui.meta.textContent = loading ? 'Opening…' : ''; updateControls(); return; }
@@ -481,7 +486,7 @@
       const token = generation, revision = timeline.revision, owner = projectId;
       try {
         if (target && (target.token !== token || target.revision !== revision)) throw new Error('The timeline changed during the drag. Drag the media again.');
-        if (!Array.from(event.dataTransfer?.types || []).includes(MEDIA_DRAG_TYPE)) throw new Error('Drag media from the Media drawer. Use Import media for files.');
+        if (!Array.from(event.dataTransfer?.types || []).includes(MEDIA_DRAG_TYPE)) throw new Error('Drag media from the Media drawer. Import files in that drawer first.');
         const raw = event.dataTransfer.getData(MEDIA_DRAG_TYPE);
         if (typeof raw !== 'string' || raw.length > 160) throw new Error('Invalid managed media payload. Drag the media again.');
         let payload; try { payload = JSON.parse(raw); } catch { throw new Error('Invalid managed media payload. Drag the media again.'); }
@@ -550,9 +555,9 @@
     function renderInspector() {
       const inspector = ui.inspector; const item = timeline?.items.find((entry) => entry.id === inspectedItemId);
       delete ui['save-clip']; delete ui['remove-clip'];
-      if (!item) { sidebar.replaceChildren(add, inspector, exactRange); inspector.replaceChildren(el('h3', '', 'Clip details'), el('p', 'timeline-help', 'Select one clip to trim, move or adjust its audio.')); return; }
-      sidebar.replaceChildren(inspector, add, exactRange);
-      const title = el('h3', '', item.name || assets.find((asset) => asset.id === item.assetId)?.name || 'Clip details');
+      inspector.hidden = !item;
+      if (!item) { inspector.open = false; inspector.replaceChildren(); return; }
+      const title = el('summary', '', `Clip details · ${item.name || assets.find((asset) => asset.id === item.assetId)?.name || 'Selected clip'}`);
       const grid = el('div', 'timeline-inspector-grid');
       grid.append(field('Clip track', 'clip-track', 'select'), field('Start frame', 'clip-start', 'number', item.startFrame), field('End frame (exclusive)', 'clip-end', 'number', item.endFrame), field('Source in (seconds)', 'source-start', 'number', item.sourceStartSeconds), field('Source out (seconds)', 'source-end', 'number', item.sourceEndSeconds));
       trackOptions(ui['clip-track']); ui['clip-track'].value = item.trackId; ui['source-start'].step = '0.001'; ui['source-end'].step = '0.001';
@@ -561,8 +566,7 @@
         grid.append(field('Audio gain (0–1)', 'clip-gain', 'number', item.gain ?? 1), field('Fade in (frames)', 'fade-in', 'number', item.fadeInFrames || 0), field('Fade out (frames)', 'fade-out', 'number', item.fadeOutFrames || 0)); ui['clip-gain'].step = '0.05'; ui['clip-gain'].max = '1';
       }
       const buttons = el('div', 'timeline-actions'); buttons.append(button('Save clip', 'save-clip', () => saveClip(item.id, isStill), 'button primary small'), button('Remove', 'remove-clip', () => mutate('applyTimeline', [{ type: 'remove', itemId: item.id }]), 'button quiet small'));
-      const exactClip = el('details', 'timeline-exact-clip'); exactClip.open = false; exactClip.append(el('summary', '', 'Exact timing and audio'), grid, buttons);
-      inspector.replaceChildren(title, el('p', 'timeline-help', 'Drag the clip to move it. Drag its side grips to trim.'), exactClip, el('p', 'timeline-help', 'Source timestamps are independent of project frames. Live preview maps the source span to the clip length.'));
+      inspector.replaceChildren(title, el('p', 'timeline-help', 'Drag the clip to move it. Drag its side grips to trim.'), grid, buttons, el('p', 'timeline-help', 'Source timestamps are independent of project frames. Live preview maps the source span to the clip length.'));
       updateControls();
     }
     async function saveClip(itemId, isStill) {
@@ -638,19 +642,6 @@
       finally { if (active(token)) { preparing = false; updateControls(); } }
     }
 
-    async function importMedia() {
-      if (!canEdit() || !client.importMedia) return;
-      const token = generation, owner = projectId; preparing = true; updateControls();
-      try {
-        const result = await client.importMedia(owner);
-        if (!active(token)) return;
-        assets = await readAssets(owner, token);
-        if (!active(token)) return;
-        ui['media-source'].value = 'project'; renderAssets();
-        if (!result?.canceled) status('Media imported. Choose a track and add a clip.');
-      } catch (error) { if (active(token)) status(`Could not import media. ${error.message}`, true); }
-      finally { if (active(token)) { preparing = false; updateControls(); } }
-    }
     async function readAssets(owner, token) {
       const found = new Map(); let offset = 0, pages = 0;
       while (found.size < 2000 && pages++ < 10) {
@@ -771,7 +762,7 @@
       }
       const failures = layers.map((layer) => mediaErrors.get(layer.item.assetId)).filter(Boolean);
       previewEmpty.hidden = layers.some((layer) => layer.type !== 'audio') && !waiting && !failures.length;
-      previewEmpty.textContent = failures.length ? 'Preview unavailable for this source.' : waiting ? 'Loading project media…' : layers.length ? 'Audio preview' : timeline.items.length ? 'No visual clip at this frame.' : 'Add project media to start your edit.';
+      previewEmpty.textContent = failures.length ? 'Preview unavailable for this source.' : waiting ? 'Loading project media…' : layers.length ? 'Audio preview' : timeline.items.length ? 'No visual clip at this frame.' : 'Drag media from the Media drawer onto a track to start your edit.';
       ui['preview-status'].textContent = failures[0] || ''; ui['retry-preview'].hidden = !failures.length;
       if (ui.ruler) { ui.ruler.setAttribute('aria-valuenow', playhead); ui.ruler.setAttribute('aria-valuetext', `Frame ${playhead}`); }
       ui.seek.max = String(Math.max(1, durationFrames(timeline))); ui.seek.value = String(playhead);
@@ -814,12 +805,12 @@
     async function open(nextProjectId) {
       if (destroyed) throw new Error('Timeline view has been destroyed.');
       if (typeof nextProjectId !== 'string' || !nextProjectId) throw new Error('Open a project before using Timeline.');
-      cancelRangeDrag(); clearDropTarget(); generation += 1; exportController?.abort(); exportController = null; exporting = false; preparing = false; disposePreview(); closed = false; projectId = nextProjectId; timeline = null; assets = []; libraryAssets = []; ui['media-source'].value = 'project'; ui['media-search'].value = ''; ui['media-filter'].value = ''; history = null; inspectedItemId = ''; playhead = 0; mutating = false;
+      cancelRangeDrag(); clearDropTarget(); generation += 1; exportController?.abort(); exportController = null; exporting = false; preparing = false; disposePreview(); closed = false; projectId = nextProjectId; timeline = null; assets = []; libraryAssets = []; add.open = false; inspector.open = false; exactRange.open = false; history = null; inspectedItemId = ''; playhead = 0; mutating = false;
       if (selection) { selection = null; onSelection(null); }
       container.hidden = false; tracks.replaceChildren(); ui.inspector.replaceChildren(); ui['add-asset'].replaceChildren(); status('Opening timeline…'); render();
       await load(generation, true);
     }
-    async function refresh() { if (closed || destroyed || mutating || preparing || exporting) return; cancelRangeDrag(); pause(); await load(generation, true); }
+    async function refresh() { if (closed || destroyed || mutating || preparing || exporting) return; cancelRangeDrag(); pause(); await load(generation, true); if (add.open) await refreshPicker(); }
     function close() { cancelRangeDrag(); clearDropTarget(); generation += 1; exportController?.abort(); exportController = null; exporting = false; preparing = false; closed = true; loading = false; mutating = false; disposePreview(); projectId = ''; timeline = null; assets = []; history = null; clearSelection(); container.hidden = true; }
     function destroy() { if (destroyed) return; close(); destroyed = true; container.replaceChildren(); }
     function setBusy(value) { explicitlyBusy = !!value; if (value) { cancelRangeDrag(); clearDropTarget(); } updateControls(); renderSelection(); }

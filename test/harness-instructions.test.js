@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { COMMON_INSTRUCTIONS, BUILTIN_INSTRUCTIONS, CODEX_INSTRUCTIONS, EXTERNAL_INSTRUCTIONS } = require('../src/harness-instructions');
 const { PROJECT_CANVAS_TOOLS } = require('../src/canvas-project-tools');
+const { TIMELINE_TOOLS } = require('../src/video-timeline-tools');
 
 test('backend guidance shares one compact set of source, media and lifecycle contracts', () => {
   for (const instructions of [BUILTIN_INSTRUCTIONS, CODEX_INSTRUCTIONS, EXTERNAL_INSTRUCTIONS]) {
@@ -48,4 +49,25 @@ test('current API guidance distinguishes discovery, explicit live checks and the
   assert.match(COMMON_INSTRUCTIONS, /Server LoRA\/camera\/seed controls are not exposed/);
   assert.match(COMMON_INSTRUCTIONS, /read-only --probe/);
   assert.match(COMMON_INSTRUCTIONS, /Never invent tools or use billed generation as a capability probe/);
+});
+
+
+test('shared stitching guidance uses real revision-safe timeline tools', () => {
+  for (const name of ['inspect_timeline', 'apply_timeline_edit']) {
+    assert.ok(TIMELINE_TOOLS.some(({ function: tool }) => tool.name === name));
+    assert.ok(COMMON_INSTRUCTIONS.includes(name));
+  }
+  assert.match(COMMON_INSTRUCTIONS, /inspect_timeline.*list_media_assets.*attach_canvas_assets.*before apply_timeline_edit/);
+  assert.match(COMMON_INSTRUCTIONS, /expectedRevision/);
+  assert.match(COMMON_INSTRUCTIONS, /integer half-open \[startFrame,endFrame\)/);
+  assert.match(COMMON_INSTRUCTIONS, /sourceStartSeconds\/sourceEndSeconds are seconds/);
+  assert.match(COMMON_INSTRUCTIONS, /[Rr]einspect revision conflicts/);
+  assert.match(COMMON_INSTRUCTIONS, /fresh.*selection/);
+});
+
+test('shared stitching guidance separates hard cuts, synthesis, review and user export', () => {
+  assert.match(COMMON_INSTRUCTIONS, /Hard cuts only.*generative/);
+  assert.match(COMMON_INSTRUCTIONS, /server features require exposed tool fields/);
+  assert.match(COMMON_INSTRUCTIONS, /boundary frames, continuity and audio/);
+  assert.match(COMMON_INSTRUCTIONS, /Export video button; no agent export tool/);
 });
