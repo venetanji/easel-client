@@ -117,15 +117,17 @@ Generating a transition, extension or gap-fill means synthesizing new content;
 putting two clips next to each other is not that capability. Plan the missing
 shot and continuity constraints, then check the actual enabled tool schema.
 Do not promise exact motion, seamless joins or audio alignment from a still
-reference. Current `generate_video` accepts one saved still-image reference,
-not a selected timeline range, guide video or source audio. If a usable boundary
-still is already saved, inspect and use its real ID; otherwise ask the user to
-capture/import the intended still. There is no agent frame-extraction tool.
+reference. For LTX, `guidingFrames` accepts 1–8 saved still-image anchors,
+including first/last positions, as soft conditioning. Alternatively use one
+`inputReferenceAssetId`; these modes are mutually exclusive. Inputs are stills,
+not a selected timeline range, guide video or source audio. If usable boundary
+stills are already saved, inspect and use their real IDs; otherwise ask the user
+to capture/import the intended stills. There is no agent frame-extraction tool.
 
 H3 server workflows support temporal video/audio guides, but the current client
 schema cannot submit them. LTX's current API guidance is still-image-only;
-temporal video guidance and continuation/first-last controls are not exposed
-by this client. Do not infer callable support from model discovery, installed
+temporal video guidance and source-video continuation are not exposed
+by this client. Timed stills do not guarantee exact first/last pixels. Do not infer callable support from model discovery, installed
 weights, a server feature or a successful text/image-to-video job. Do not invent
 fields, tools or direct API/shell bypasses to bridge this gap.
 

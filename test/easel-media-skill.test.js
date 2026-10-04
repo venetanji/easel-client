@@ -148,3 +148,11 @@ test('injected stitching recipes separate local cuts from unsupported temporal g
   assert.match(instructions, /never.*resubmit.*billed/);
   assert.doesNotMatch(instructions, /prepare_timeline_guides/);
 });
+
+test('integrated stitching guidance preserves timed still guides without promising temporal uploads', () => {
+  const instructions = injectedMediaInstructions();
+  assert.doesNotMatch(instructions, /Current `generate_video` accepts one saved still-image reference/);
+  assert.doesNotMatch(instructions, /continuation\/first-last controls are not exposed/);
+  assert.match(instructions, /For LTX.*`guidingFrames`.*1–8.*first\/last.*soft/);
+  assert.match(instructions, /not a selected timeline range, guide video or source audio/);
+});
