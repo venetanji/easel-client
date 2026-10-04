@@ -10,6 +10,7 @@ const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const JOBS = 2, SECONDS = 1, SIZE = '512x320', MODEL = 'ltx-2.5';
+const SCENARIOS = new Set(['baseline', 'camera', 'guided-frames']);
 const STATUSES = new Set(['queued', 'in_progress', 'completed', 'failed', 'cancelled']);
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const redact = (value, secret = '') => [secret, secret.trim()].filter(Boolean).reduce((text, key) => text.split(key).join('[redacted]'), String(value));
@@ -25,6 +26,9 @@ function parseOptions(args) {
         if (!args[i + 1] || args[i + 1].startsWith('--')) throw new Error('--resume requires an evidence directory.');
         options.directory = path.resolve(args[++i]);
       }
+    } else if (arg === '--scenario') {
+      if (options.scenario || !SCENARIOS.has(args[i + 1])) throw new Error('--scenario requires one of baseline, camera, guided-frames, selected only once.');
+      options.scenario = args[++i];
     } else if (arg === '--allow-generation-cost') consent = true;
     else if (arg === '--timeout-seconds') {
       const value = Number(args[++i]);
@@ -32,6 +36,7 @@ function parseOptions(args) {
       options.timeoutSeconds = value;
     } else throw new Error(`Unknown option: ${arg}`);
   }
+  if (options.scenario && options.mode !== 'live') throw new Error('--scenario applies only to --live; resume uses the saved scenario.');
   if (consent && !modes) throw new Error('Choose a mode; consent alone never starts a run.');
   if (options.mode === 'live' && !consent) throw new Error('--live requires --allow-generation-cost: exactly two 1-second 512x320 generations may incur provider/GPU charges.');
   if (consent && options.mode !== 'live') throw new Error('--allow-generation-cost applies only to --live.');
@@ -61,9 +66,58 @@ function recordSubmissionReceipt(manifest, index, job, filename, secret) {
   if (manifest.jobs.some((other, offset) => offset !== index && other.id === job.id)) throw new Error('Duplicate receipt ID returned for two submissions. Both responses are saved; inspect the server and do not generate replacements.');
   return checkReceipt(job, undefined, secret);
 }
+function scenarioRequests(name = 'baseline') {
+  if (!SCENARIOS.has(name)) throw new Error('Unknown live scenario.');
+  const base = { model: MODEL, seconds: SECONDS, size: SIZE };
+  if (name === 'baseline') return [
+    { ...base, prompt: 'A red wooden toy boat floating gently on blue water, fixed camera, daylight.' },
+    { ...base, prompt: 'A blue paper kite moving gently against a warm orange sky, fixed camera, daylight.' },
+  ];
+  if (name === 'camera') return [
+    { ...base, prompt: 'A red wooden toy boat floating gently on blue water. The camera dollies toward the boat, daylight.', seed: '0', cameraLora: 'dolly-in', cameraLoraStrength: 0.8 },
+    { ...base, prompt: 'A blue paper kite moving gently against a warm orange sky, fixed camera, daylight.', seed: '18446744073709551614', loras: [{ id: 'camera-static', strength: 0.8 }] },
+  ];
+  // A committed, synthetic still only: no URL fetching, user path, or extra generation.
+  const image = { data: fs.readFileSync(path.join(root, 'test/fixtures/video-export/overlay.png')).toString('base64'), mimeType: 'image/png', name: 'synthetic-guide.png' };
+  return ['0', '18446744073709551614'].map(seed => ({ ...base,
+    prompt: 'A simple geometric composition with a gently moving colored shape, clean flat background, fixed camera.', seed,
+    guidingFrames: [0, SECONDS * 24].map(frameIndex => ({ image: { ...image }, frameIndex, strength: 0.7 })),
+  }));
+}
+function validateScenarioPreflight(name, discovery) {
+  if (!SCENARIOS.has(name)) throw new Error('Unknown live scenario.');
+  if (name === 'baseline') return;
+  const c = discovery.capabilities;
+  if (!c || c.object !== 'video.capabilities' || c.schema_version !== 1 || c.model !== MODEL || c.fps !== 24 ||
+      c.seconds?.min !== 1 || c.seconds?.max !== 12 || !c.sizes?.includes(SIZE) ||
+      c.seed?.encoding !== 'decimal_string' || c.seed?.min !== '0' || c.seed?.max !== '18446744073709551614') {
+    throw new Error('Advanced scenario requires the current validated video capabilities contract, model, size and exact seed encoding. No generation was submitted.');
+  }
+  if (name === 'camera') {
+    for (const id of ['camera-dolly-in', 'camera-static']) {
+      const adapter = discovery.adapters?.find(item => item.id === id);
+      if (!adapter || adapter.supported !== true || adapter.installed !== true || !Array.isArray(adapter.requires) || adapter.requires.length) {
+        throw new Error(`Camera scenario requires supported, installed ${id} with no additional input requirements. No generation was submitted.`);
+      }
+    }
+  } else {
+    const guides = c.guiding_frames;
+    if (guides?.supported !== true || guides.available !== true || guides.frame_index_multiple !== 1 || guides.max_count < 2 ||
+        !c.uploads?.mime_types?.includes('image/png') || c.uploads.max_total_bytes !== 33554432) {
+      throw new Error('Guided-frames scenario requires available guiding-frame nodes, pixel-frame positions and PNG upload support. No generation was submitted.');
+    }
+  }
+}
 function validateResume(manifest, baseUrl) {
-  if (!manifest || manifest.schemaVersion !== 1 || manifest.mode !== 'live') throw new Error('Unsupported live-run receipt.');
+  if (!manifest || ![1, 2].includes(manifest.schemaVersion) || manifest.mode !== 'live') throw new Error('Unsupported live-run receipt.');
   if (manifest.baseUrl !== baseUrl) throw new Error('Resume endpoint differs from the saved endpoint; select the original EASEL_BASE_URL.');
+  if (manifest.schemaVersion === 1) {
+    if (manifest.scenario !== undefined || manifest.expectedJobs !== undefined) throw new Error('Legacy receipts cannot select an advanced scenario or change the job count.');
+    if ((manifest.model !== undefined && manifest.model !== MODEL) || (manifest.seconds !== undefined && manifest.seconds !== SECONDS) || (manifest.size !== undefined && manifest.size !== SIZE)) throw new Error('Legacy receipt model or generation bounds differ from baseline.');
+  } else {
+    if (!SCENARIOS.has(manifest.scenario) || manifest.expectedJobs !== JOBS) throw new Error('Saved scenario or expected receipt count is invalid. Never submit replacements.');
+    if (manifest.model !== MODEL || manifest.seconds !== SECONDS || manifest.size !== SIZE) throw new Error('Saved scenario bounds differ from the fixed model, duration or size.');
+  }
   if (!Array.isArray(manifest.jobs) || manifest.jobs.length !== JOBS) throw new Error('Resume needs two saved receipts. Recover known IDs individually with the CLI; missing receipts must not trigger replacement generation.');
   manifest.jobs.forEach(job => checkReceipt(job));
   if (new Set(manifest.jobs.map(job => job.id)).size !== JOBS) throw new Error('Receipt IDs must be distinct.');
@@ -77,12 +131,14 @@ function saveJson(filename, value) {
 const help = `Easel local video integration test (Node 22+, npm ci && npm run build)
   node scripts/test-live-video-workflow.cjs --probe
   node scripts/test-live-video-workflow.cjs --offline
-  node scripts/test-live-video-workflow.cjs --live --allow-generation-cost
+  node scripts/test-live-video-workflow.cjs --live --allow-generation-cost [--scenario baseline|camera|guided-frames]
   node scripts/test-live-video-workflow.cjs --resume /path/printed/by/run
 Optional: --timeout-seconds 1200 (30–3600; polling only, no replacement submissions)
 Probe/live/resume require EASEL_API_KEY and EASEL_BASE_URL (HTTPS, or loopback HTTP).
 No key argument, settings decryption, persisted credential, auto-generation retry, or remote render.
-Live submits exactly 2 × 1 second, 512x320, ltx-2.5. No price is advertised by the API;
+Each live scenario submits exactly 2 × 1 second, 512x320, ltx-2.5; default: baseline.
+Advanced cases require current read-only capabilities and use exact decimal-string seeds.
+Guided frames use only the committed synthetic PNG. No price is advertised by the API;
 check your provider/host cost before opting in. Stop/timeout does NOT cancel accepted jobs.
 Offline uses committed synthetic clips. It makes no network requests and proves no live API behavior.
 Linux render modes need a desktop DISPLAY, or xvfb-run -a before the command.
@@ -118,9 +174,10 @@ async function probe(provider, config) {
     result.schemaAvailable = true;
   } catch (error) { result.schemaAvailable = false; result.schemaNote = redact(error.message, config.apiKey); }
   try {
-    const adapters = await read('/v1/videos/loras');
-    if (!Array.isArray(adapters.data)) throw new Error('Unexpected adapter discovery response.');
-    result.adapters = adapters.data.map(({ id, supported, installed, requires }) => ({ id, supported, installed, requires }));
+    result.capabilities = await provider.discoverVideoCapabilities({ ...config, model: MODEL });
+  } catch (error) { result.capabilityNote = redact(error.message, config.apiKey); }
+  try {
+    result.adapters = await provider.listVideoLoras({ ...config, model: MODEL });
   } catch (error) { result.adapterNote = redact(error.message, config.apiKey); }
   return guardPublicResponse(result, config.apiKey);
 }
@@ -291,16 +348,17 @@ async function localWorkflow(directory, sources) {
     stages: ['managed import', 'library save', 'project attachment', 'typed trim/reorder', 'timeline reload', 'WebCodecs render', 'decoded cut verification', 'render library save', 'render project attachment', 'source hash verification'] };
 }
 
-async function run(args = process.argv.slice(2)) {
+async function run(args = process.argv.slice(2), dependencies = {}) {
+  const runtime = { loadProvider, electronRun, localWorkflow, ...dependencies };
   const options = parseOptions(args);
   if (options.mode === 'help') { process.stdout.write(help); return; }
-  const provider = options.mode !== 'offline' ? await loadProvider() : null;
+  const provider = options.mode !== 'offline' ? await runtime.loadProvider() : null;
   const config = provider ? endpoint(provider) : null;
   if (options.mode === 'probe') { console.log(JSON.stringify(await probe(provider, config), null, 2)); return; }
   const directory = options.directory || fs.mkdtempSync(path.join(os.tmpdir(), 'easel-video-integration-'));
   console.log(`Evidence directory: ${directory}`);
   const fixture = name => path.join(root, 'test/fixtures/video-export', name);
-  electronRun(directory, { action: 'preflight', fixture: fs.readFileSync(fixture('red.mp4')).toString('base64') });
+  runtime.electronRun(directory, { action: 'preflight', fixture: fs.readFileSync(fixture('red.mp4')).toString('base64') });
   let manifest, sources;
   const receiptFile = path.join(directory, 'receipts.json');
   if (options.mode === 'offline') sources = ['red.mp4', 'blue.mp4'].map(filename => {
@@ -313,13 +371,16 @@ async function run(args = process.argv.slice(2)) {
     } else {
       const discovery = await probe(provider, config);
       saveJson(path.join(directory, 'discovery.json'), discovery);
-      manifest = { schemaVersion: 1, mode: 'live', createdAt: new Date().toISOString(), baseUrl: config.baseUrl, model: MODEL, size: SIZE, seconds: SECONDS, jobs: [] };
+      const scenario = options.scenario || 'baseline';
+      validateScenarioPreflight(scenario, discovery);
+      const requests = scenarioRequests(scenario);
+      assert.equal(requests.length, JOBS, 'Scenario must keep the fixed two-job budget.');
+      manifest = { schemaVersion: 2, mode: 'live', scenario, expectedJobs: JOBS, createdAt: new Date().toISOString(), baseUrl: config.baseUrl, model: MODEL, size: SIZE, seconds: SECONDS, jobs: [] };
       saveJson(receiptFile, manifest);
-      console.log('Submitting exactly two 1-second 512x320 jobs. Charges are provider-dependent; generation POSTs will never be retried.');
+      console.log(`Submitting scenario ${scenario}: exactly two 1-second 512x320 jobs. Charges are provider-dependent; generation POSTs will never be retried.`);
       for (let index = 0; index < JOBS; index++) {
         manifest.jobs.push({ submissionStarted: true }); saveJson(receiptFile, manifest);
-        const prompt = index === 0 ? 'A red wooden toy boat floating gently on blue water, fixed camera, daylight.' : 'A blue paper kite moving gently against a warm orange sky, fixed camera, daylight.';
-        const job = recordSubmissionReceipt(manifest, index, await provider.generateVideo({ ...config, model: MODEL, prompt, seconds: SECONDS, size: SIZE }), receiptFile, config.apiKey);
+        const job = recordSubmissionReceipt(manifest, index, await provider.generateVideo({ ...config, ...requests[index] }), receiptFile, config.apiKey);
         console.log(`Accepted source ${index + 1}: ${job.id}`);
       }
     }
@@ -345,13 +406,14 @@ async function run(args = process.argv.slice(2)) {
       }
     }
   }
-  const evidence = { mode: options.mode === 'offline' ? 'offline-fixtures' : 'live-api', liveGenerationVerified: options.mode !== 'offline',
-    ...(manifest ? { baseUrl: manifest.baseUrl, jobs: manifest.jobs.map(({ id, status }) => ({ id, status })) } : {}),
-    ...await localWorkflow(directory, sources) };
+  const evidence = { directory, mode: options.mode === 'offline' ? 'offline-fixtures' : 'live-api', liveGenerationVerified: options.mode !== 'offline',
+    ...(manifest ? { scenario: manifest.scenario || 'baseline', baseUrl: manifest.baseUrl, jobs: manifest.jobs.map(({ id, status }) => ({ id, status })) } : {}),
+    ...await runtime.localWorkflow(directory, sources) };
   saveJson(path.join(directory, 'evidence.json'), evidence);
   console.log(JSON.stringify(evidence, null, 2)); console.log(`Verified output: ${path.join(directory, 'stitched.webm')}`);
+  return evidence;
 }
-module.exports = { parseOptions, checkReceipt, validateResume, redact, probe, recordSubmissionReceipt, run };
+module.exports = { parseOptions, checkReceipt, validateResume, redact, probe, recordSubmissionReceipt, scenarioRequests, validateScenarioPreflight, run };
 if (require.main === module || (process.versions.electron && process.env.EASEL_VIDEO_TEST_RENDERER)) {
   const start = process.versions.electron ? electronMain : run;
   start().catch(error => { console.error(redact(error.message, process.env.EASEL_API_KEY || '')); if (process.versions.electron) require('electron').app.exit(1); else process.exitCode = 1; });

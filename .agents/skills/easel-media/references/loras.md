@@ -7,8 +7,9 @@ execution-validation record. Use registered IDs, not filenames or arbitrary
 paths. Live authenticated `/v1/videos/loras` discovery supersedes this snapshot.
 
 `supported:true` here means enabled by the inspected **server workflow**, not
-exposed by v0.0.2 MCP or installed everywhere. None of the advanced adapter
-selection fields are currently exposed by `generate_video`. Require all three:
+installed everywhere or visually guaranteed. `list_video_loras({model})`
+and `discover_video_capabilities({model})` expose current discovery;
+`generate_video` accepts typed adapter selections. Require all three:
 supported workflow, installed asset and callable tool path. See
 [advanced video](advanced-video.md) before planning a recipe.
 

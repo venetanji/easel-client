@@ -214,6 +214,10 @@ function isOfflineReferenceFailure(error) {
 
 function toolCorrection(name, descriptor, error, code) {
   const schema = descriptor?.function?.parameters;
+  if (name === 'generate_video' && validationFailure(error, code, name) && /guidingFrames|loraReference|Ingredients/i.test(error)) return {
+    correction: 'This advanced reference failed locally before the video API was called. Use list_media_assets to copy real saved image IDs into guidingFrames or loraReferenceAssetId for Ingredients. Keep the requested conditioning; fix missing assets, positions, strengths or incompatible modes instead of silently changing the generation recipe.',
+    exampleNote: 'Guides need unique frameIndex values in 0..seconds*24 and strength 0-1. Ingredients requires its LoRA, a reference sheet and at least 5 seconds. Check discover_video_capabilities and list_video_loras before an advanced retry.',
+  };
   if (name === 'generate_video' && validationFailure(error, code, name) && /reference|inputReferenceAssetId|projectId/i.test(error)) return {
     correction: 'This reference failed locally before the video API was called. For text-only video, omit inputReferenceAssetId or set it to null; omit projectId too unless resolving a real project image. Never invent IDs or use all-zero placeholders. Corrected arguments may be retried.',
     example: { model: schema?.properties?.model?.enum?.[0] || 'MODEL_ID_FROM_list_models', prompt: 'A cat blinking in warm morning light.', seconds: 4 },
@@ -358,7 +362,12 @@ async function resolveCanvasAssets(assetStore, assets = [], signal) {
 async function handleMcpResult(result, mediaAssetStore, onEvent, { generated = false, projectId = '', kits = [], attachGeneratedAssets } = {}) {
   if (result?.isError) {
     const detail = (result.content || []).filter((item) => item.type === 'text' && typeof item.text === 'string').map((item) => item.text).join('\n').slice(0, 2000);
-    throw new Error(detail || 'Media MCP tool failed.');
+    const error = new Error(detail || 'Media MCP tool failed.');
+    const validation = result.structuredContent;
+    if (validation?.code === 'INVALID_TOOL_ARGUMENTS' && validation.stage === 'argument_validation' && validation.requestSent === false) {
+      Object.assign(error, { code: validation.code, stage: validation.stage, requestSent: false });
+    }
+    throw error;
   }
   const text = Array.isArray(result?.structuredContent?.text) ? result.structuredContent.text.filter((value) => typeof value === 'string') : [];
   const assets = Array.isArray(result?.structuredContent?.assets) ? result.structuredContent.assets : [];
@@ -574,7 +583,11 @@ async function executeEaselTool(name, args, {
       throwIfAborted(signal);
       content = name === 'list_models' && !result.isError && Array.isArray(result.structuredContent?.models)
         ? JSON.stringify({ models: result.structuredContent.models })
-        : await handleMcpResult(result, mediaAssetStore, onEvent, { generated: MEDIA_OUTPUT_TOOLS.has(name), projectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets });
+        : name === 'discover_video_capabilities' && !result.isError && result.structuredContent?.capabilities
+          ? JSON.stringify({ modelId: result.structuredContent.modelId, capabilities: result.structuredContent.capabilities })
+          : name === 'list_video_loras' && !result.isError && Array.isArray(result.structuredContent?.loras)
+            ? JSON.stringify({ modelId: result.structuredContent.modelId, loras: result.structuredContent.loras })
+            : await handleMcpResult(result, mediaAssetStore, onEvent, { generated: MEDIA_OUTPUT_TOOLS.has(name), projectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets });
       if (awaitingMediaJob) {
         const fields = ['id', 'remoteId', 'modelId', 'mediaType', 'projectId', 'status', 'estimatedWaitSeconds', 'estimatedCompletionAt'];
         const monitoredJob = Object.fromEntries(fields.filter((field) => awaitingMediaJob[field] !== undefined).map((field) => [field, awaitingMediaJob[field]]));

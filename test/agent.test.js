@@ -426,3 +426,12 @@ test('completed video is stored and attached once, then reused without binary hi
   assert.equal(results[1].cached, true);
   assert.deepEqual(results[1].assets, results[0].assets);
 });
+
+test('advanced reference corrections preserve guide and Ingredients conditioning', () => {
+  for (const error of ['Saved guidingFrames asset could not be resolved locally.', 'arguments.loraReferenceAssetId must match the asset pattern.']) {
+    const correction = toolCorrection('generate_video', {}, error, 'INVALID_MEDIA_REFERENCE');
+    assert.match(correction.correction, /guidingFrames|Ingredients/);
+    assert.match(correction.correction, /keep|preserve/i);
+    assert.doesNotMatch(correction.correction, /text-only|omit inputReferenceAssetId/);
+  }
+});
