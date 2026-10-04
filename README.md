@@ -12,6 +12,8 @@ New installations open a three-step setup wizard: choose an agent, add credentia
 
 Keys are encrypted with Electron `safeStorage` and are decrypted in the main process for API requests and the local Media MCP process. The app fails closed if secure storage is unavailable. Credentials are shared by all models from their endpoint; categories are assigned per model. Video and audio generation models are not exposed as image generators solely because they share a media endpoint. Changing an endpoint URL or key clears its saved capability checks.
 
+On Linux, Easel selects Secret Service/libsecret on non-KDE desktops, including Hyprland and Sway. KDE retains its wallet selection, and an explicit `--password-store` option takes precedence. The system keyring must be running and unlocked; restart Easel after unlocking it if secure storage was unavailable at launch. Easel does not enable plaintext key storage.
+
 Saving credentials refreshes discovery automatically; **Refresh models** can repeat it. A successful refresh replaces that endpoint's catalog and removes models it no longer returns, preserving settings for models that remain. A failed refresh keeps the previous catalog and displays the error. OpenRouter discovery uses its authenticated `/models/user?output_modalities=all` catalog, which applies the key's provider, privacy and guardrail restrictions, rather than the public model list.
 
 Assistant chat messages render Markdown, including lists, headings, code blocks, and tables. Raw HTML is displayed as text, generated asset links use local previews, and HTTP(S) links open in your browser.

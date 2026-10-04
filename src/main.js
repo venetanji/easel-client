@@ -9,10 +9,13 @@ const {
   ipcMain,
   nativeImage,
   safeStorage,
+  screen,
   session,
   shell,
   protocol,
 } = require('electron');
+const { configureSecureStorage } = require('./secure-storage');
+configureSecureStorage(app);
 protocol.registerSchemesAsPrivileged([{ scheme: 'easel-canvas', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
 const {
   IPC_CHANNELS,
@@ -32,6 +35,7 @@ const {
   validateSettingsInput,
 } = require('./ipc-contract');
 const { createSettingsStore } = require('./settings-store');
+const { getMainWindowGeometry } = require('./main-window-geometry');
 const { createAssetStore } = require('./asset-store');
 const { createCanvasStore } = require('./canvas-store');
 const { createCanvasView } = require('./canvas-view');
@@ -1198,11 +1202,9 @@ async function createWindow() {
   await MCP_SERVER.start();
   const appIcon = app.isPackaged ? path.join(process.resourcesPath, 'app-icon.png') : path.join(__dirname, '..', 'build', 'icon.png');
   if (process.platform === 'darwin') app.dock?.setIcon(appIcon);
+  const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 900,
-    minWidth: 960,
-    minHeight: 720,
+    ...getMainWindowGeometry(workArea),
     icon: appIcon,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

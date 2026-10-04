@@ -265,15 +265,15 @@
       .canvas-empty[data-composing="false"] { gap: 20px; }
       .canvas-empty[data-composing="false"] .canvas-start-heading h3 { font-size: 28px; }
       .canvas-start-composer:empty { display: none; }
-      dialog { width: min(520px, calc(100% - 28px)); max-height: calc(100% - 28px); overflow: auto; border: 0; border-radius: 13px; padding: 0; color: var(--ink); background: var(--paper); box-shadow: 0 18px 60px #17251f38; }
+      dialog { width: min(520px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); overflow: auto; border: 0; border-radius: 13px; padding: 0; color: var(--ink); background: var(--paper); box-shadow: 0 18px 60px #17251f38; }
       dialog::backdrop { background: #17251f75; }
-      dialog.settings-dialog { width: min(980px, calc(100% - 28px)); height: min(720px, calc(100% - 28px)); max-height: calc(100% - 28px); overflow: hidden; }
+      dialog.settings-dialog { width: min(980px, calc(100vw - 28px)); height: min(720px, calc(100dvh - 28px)); max-height: calc(100dvh - 28px); overflow: hidden; }
       dialog.settings-dialog[open] { display: flex; flex-direction: column; }
       .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 17px; border-bottom: 1px solid #e0e5dd; }
       .dialog-head h2 { font: 600 20px/1.1 var(--display); letter-spacing: -.02em; }
       .dialog-description { max-width: 58ch; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
       .settings-dialog .dialog-head { flex: 0 0 auto; }
-      dialog.canvas-files-dialog { width: min(900px, calc(100% - 28px)); height: min(680px, calc(100% - 28px)); overflow: hidden; }
+      dialog.canvas-files-dialog { width: min(900px, calc(100vw - 28px)); height: min(680px, calc(100dvh - 28px)); overflow: hidden; }
       dialog.canvas-files-dialog[open] { display: flex; flex-direction: column; }
       .canvas-files-dialog .dialog-head { flex: 0 0 auto; }
       .canvas-files-summary { flex: 0 0 auto; margin: 0; padding: 10px 17px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }
@@ -293,13 +293,13 @@
       .settings-shell { flex: 1; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 164px minmax(0, 1fr); }
       .settings-dialog[data-setup="true"] .settings-shell { grid-template-columns: minmax(0, 1fr); }
       .settings-dialog[data-setup="true"] .settings-nav { display: none; }
-      .setup-header { padding: 16px 24px 0; }
+      .setup-header { flex: 0 0 auto; padding: 16px 24px 0; }
       .setup-header p { max-width: 62ch; color: var(--muted); }
       .setup-steps { display: flex; gap: 22px; list-style: none; padding: 0; margin: 18px 0 0; border-bottom: 1px solid var(--line); }
       .setup-steps li { padding: 0 0 10px; color: var(--muted); }
       .setup-steps li[aria-current="step"] { color: var(--green-deep); border-bottom: 2px solid var(--green); font-weight: 600; }
-      .setup-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 24px; border-top: 1px solid var(--line); }
-      .setup-footer #setup-status { flex: 1 1 180px; font-size: 12px; }
+      .setup-footer { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 24px; border-top: 1px solid var(--line); }
+      .setup-footer #setup-status { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
       .setup-footer #setup-progress { color: var(--muted); font-size: 12px; }
       .setup-model-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 18px; }
       .setup-model-body { padding: 16px 19px; }
