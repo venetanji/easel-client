@@ -1,19 +1,22 @@
 # Generation-control rollout and local verification
 
 This is a coordinated change across `venetanji/easel` (server), `easel-cli`,
-`easel-client` and `creative-skills`. Review the linked draft PRs before merging.
+`easel-client` and `creative-skills`. Review the relevant source revisions before
+rollout. The server generation-controls and H3 changes were merged in server
+PRs #2/#3; this does not prove the selected endpoint runs those revisions.
 A pushed branch or passed test does not deploy the API, publish a client release,
 or establish GPU/visual validation.
 
 ## One client checkout
 
-The `feat/agent-generation-controls-20261003` client branch includes the video
-editor and its reviewed UI polish plus typed generation controls and local
-verification. After the branch is published, use a clean checkout:
+The `integrate/client-open-prs-20261004` client branch combines the published
+editor, direct controls, simplified media UI, setup/keyring fixes and typed
+generation controls. See [the exact source manifest](client-integration-2026-10-04.md).
+Use a clean checkout:
 
 ```sh
 git fetch origin
-git switch --track origin/feat/agent-generation-controls-20261003
+git switch --track origin/integrate/client-open-prs-20261004
 npm ci
 npm run build
 npm test
