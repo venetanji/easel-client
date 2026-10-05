@@ -272,7 +272,7 @@
           clip.addEventListener('pointerdown', (event) => { if (event.altKey && insideSelection(event, lane, track.id)) beginRangeDrag(event, lane, track.id, 'move', clip); else beginClipDrag(event, lane, item, clip); });
           clip.addEventListener('keydown', (event) => adjustClipKey(event, item)); bindRangeGesture(clip);
           const clipWidth = frameToPixels(item.endFrame - item.startFrame, timeline.frameRate, pixelsPerSecond);
-          clip.style.left = `${frameToPixels(item.startFrame, timeline.frameRate, pixelsPerSecond)}px`; clip.style.width = `${clipWidth}px`; clip.style.paddingInline = `${Math.min(12, Math.max(0, (clipWidth - 4) / 4))}px`; clip.style.borderWidth = `${Math.min(1, clipWidth / 4)}px`;
+          clip.style.left = `${frameToPixels(item.startFrame, timeline.frameRate, pixelsPerSecond)}px`; clip.style.width = `${clipWidth}px`; clip.style.paddingInline = `${Math.min(24, Math.max(0, (clipWidth - 4) / 4))}px`; clip.style.borderWidth = `${Math.min(1, clipWidth / 4)}px`;
           const name = item.name || assets.find((asset) => asset.id === item.assetId)?.name || 'Untitled clip';
           clip.append(el('strong', '', name), el('span', '', `${item.startFrame}–${item.endFrame}`));
           clip.title = `${name} · frames ${item.startFrame} to ${item.endFrame} (exclusive)`; clip.setAttribute('aria-label', clip.title); clip.setAttribute('aria-pressed', String(selection?.itemIds.includes(item.id) || false));
@@ -280,7 +280,7 @@
           for (const edge of ['start', 'end']) {
             const handle = button('', '', () => {}, `timeline-clip-trim timeline-clip-trim-${edge}`); handle.dataset.role = `clip-trim-${edge}`; handle.dataset.clipId = item.id;
             handle.setAttribute('role', 'slider'); handle.setAttribute('aria-label', `Trim ${name} ${edge}`); handle.setAttribute('aria-valuenow', item[`${edge}Frame`]); handle.title = `Drag to trim clip ${edge}. Arrow keys: 1 frame; Shift + arrow: 10 frames.`;
-            handle.style.left = `${frameToPixels(item[`${edge}Frame`], timeline.frameRate, pixelsPerSecond)}px`; handle.style.width = `${Math.min(12, frameToPixels(item.endFrame - item.startFrame, timeline.frameRate, pixelsPerSecond) / 4)}px`;
+            handle.style.left = `${frameToPixels(item[`${edge}Frame`], timeline.frameRate, pixelsPerSecond)}px`; handle.style.width = `${Math.min(24, clipWidth / 4)}px`;
             handle.addEventListener('pointerdown', (event) => { if (event.altKey && insideSelection(event, lane, track.id, true)) beginRangeDrag(event, lane, track.id, 'move', handle); else beginClipDrag(event, lane, item, handle, edge); }); handle.addEventListener('keydown', (event) => adjustClipKey(event, item, edge)); bindRangeGesture(handle); lane.append(handle);
           }
         }

@@ -36,7 +36,7 @@
       * { scrollbar-color: #aab8ac transparent; scrollbar-width: thin; }
       *::-webkit-scrollbar { width: 9px; height: 9px; }
       *::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 8px; background: #aab8ac; background-clip: padding-box; }
-      .studio { --left-column-width: 360px; width: 100%; height: 100%; min-width: 0; min-height: 0; display: grid; grid-template-columns: 44px minmax(280px, var(--left-column-width)) 1px minmax(300px, 1fr); grid-template-rows: 48px minmax(0, 1fr); }
+      .studio { --left-column-width: 360px; width: 100%; height: 100%; min-width: 0; min-height: 0; display: grid; grid-template-columns: 68px minmax(280px, var(--left-column-width)) 1px minmax(300px, 1fr); grid-template-rows: 48px minmax(0, 1fr); }
       .topbar { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; gap: 20px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--paper); }
       .brand { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 0 0 auto; }
       .brand-mark { width: 26px; height: 26px; display: block; flex-shrink: 0; color: var(--green); }
@@ -64,10 +64,13 @@
       .activity-button[aria-pressed="true"] { color: var(--green-deep); background: var(--green-wash); }
       .activity-button[aria-pressed="true"]::after { position: absolute; left: -4px; width: 2px; height: 20px; background: var(--green); content: ""; }
       .activity-button svg { width: 19px; height: 19px; }
+      #nav-templates { width: 60px; height: 50px; align-content: center; gap: 3px; }
+      .activity-label { font-size: 10px; font-weight: 650; line-height: 1.2; }
+      #nav-templates[aria-pressed="true"] { font-weight: 700; box-shadow: inset 0 0 0 1px #aabdab; }
       .chat-unread { position: absolute; top: 0; right: -1px; min-width: 17px; height: 17px; display: grid; place-items: center; border-radius: 9px; padding: 0 4px; color: white; background: var(--coral); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; pointer-events: none; }
       .media-generating { position: absolute; bottom: 0; right: 0; width: 15px; height: 15px; display: grid; place-items: center; border-radius: 50%; color: var(--green); background: var(--paper-deep); pointer-events: none; }
       .media-generating::after { width: 9px; height: 9px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: media-job-turn 1s linear infinite; content: ""; }
-      .studio[data-sidebar="closed"] { grid-template-columns: 44px 0 0 minmax(0, 1fr); }
+      .studio[data-sidebar="closed"] { grid-template-columns: 68px 0 0 minmax(0, 1fr); }
       .studio[data-sidebar="closed"] .left-column, .studio[data-sidebar="closed"] .workbench-splitter { display: none; }
       .left-column { position: relative; grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
       .workbench-splitter { position: relative; z-index: 5; grid-column: 3; grid-row: 2; width: 9px; margin-left: -4px; cursor: col-resize; touch-action: none; }
@@ -119,6 +122,9 @@
       .template-entry p { grid-column: 1 / -1; margin: 3px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
       .template-detail { margin-top: 22px; color: var(--ink); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
       .template-detail-title { margin: 0 0 10px; font: 600 20px/1.2 var(--display); }
+      .template-technical, .template-planned { margin-top: 18px; }
+      .template-technical summary, .template-planned summary { min-height: 32px; padding-block: 7px; color: var(--green); cursor: pointer; font-size: 12px; font-weight: 600; }
+      .template-technical summary:focus-visible, .template-planned summary:focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
       .template-detail h4 { margin: 16px 0 4px; font-size: 12px; }
       .template-detail p { margin: 7px 0; }
       .template-detail ul { margin: 4px 0; padding-left: 18px; }
@@ -541,8 +547,10 @@
         .topbar { grid-column: 1; gap: 12px; }
         .activity-bar { grid-column: 1; grid-row: 2; flex-direction: row; padding: 2px 8px; border-right: 0; border-bottom: 1px solid var(--line); }
         .activity-spacer { flex: 1; }
+        #nav-templates { width: 90px; height: 36px; grid-auto-flow: column; gap: 5px; }
+        .activity-label { font-size: 11px; }
         .activity-button[aria-pressed="true"]::after { right: auto; top: auto; bottom: -2px; left: calc(50% - 10px); width: 20px; height: 2px; }
-        .left-column { grid-column: 1; grid-row: 3; height: 580px; }
+        .left-column { grid-column: 1; grid-row: 3; height: min(580px, 60vh); height: min(580px, 60dvh); }
         .workbench-splitter { display: none; }
         .canvas-panel { grid-column: 1; grid-row: 4; min-height: 470px; }
         .studio[data-sidebar="closed"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 42px minmax(0, 1fr); }
@@ -559,7 +567,7 @@
         .project-switcher > label { display: none; }
         .project-switcher .button { padding-inline: 5px; }
         .topbar-actions { gap: 4px; }
-        .left-column { height: 560px; }
+        .left-column { height: min(560px, 60vh); height: min(560px, 60dvh); }
         .canvas-panel { min-height: 390px; }
         .settings-shell { grid-template-columns: 1fr; }
         .settings-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid var(--line); padding: 7px; }
@@ -607,6 +615,7 @@
         </button>
         <button id="nav-templates" class="activity-button" type="button" aria-label="Show templates" title="Templates" aria-pressed="false" aria-expanded="false" aria-controls="templates-drawer">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h14v14H3V3Zm0 5h14M8 8v9"/></svg>
+          <span class="activity-label">Templates</span>
         </button>
         <span class="activity-spacer"></span>
         <button id="settings-open" class="activity-button" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-pressed="false">
@@ -696,7 +705,7 @@
         </section>
       </section>
       <div id="workbench-splitter" class="workbench-splitter" role="separator" aria-label="Resize sidebar and canvas panels" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="55" aria-valuenow="36" tabindex="0"></div>
-      <section class="panel canvas-panel" aria-label="HTML canvas workspace">
+      <section class="panel canvas-panel" aria-label="HTML canvas workspace" tabindex="-1">
         <h2 id="canvas-title" hidden>Canvas</h2>
         <div class="canvas-tabs"><div id="open-canvas-tabs" class="canvas-tab-list" role="group" aria-label="Open project files and images"></div><button id="open-video-editor" class="button quiet small" type="button" title="Open the editable video editor template">Video editor</button><button id="new-canvas-open" class="canvas-tab-add" type="button" aria-label="New HTML canvas" title="New HTML canvas"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button></div>
         <div id="canvas-host" class="canvas-host">

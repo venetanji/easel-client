@@ -125,13 +125,6 @@ function createTemplatesDrawer({ document, client, onOpen, onPrompt, onStatus, i
     heading.setAttribute('tabindex', '-1');
     detail.append(back, heading, node('p', '', entry.purpose));
     if (!available(entry)) detail.append(node('p', 'template-unavailable', entry.availability?.reason || 'This template is unavailable in this build.'));
-    detail.append(node('p', 'template-kits', `Required kits: ${(entry.requiredKits || []).join(', ') || 'None'}`));
-    for (const [title, values] of [['Outputs', entry.outputs], ['Limits', entry.limitations]]) {
-      if (!values?.length) continue;
-      const items = node('ul');
-      for (const value of values) items.append(node('li', '', value));
-      detail.append(node('h4', '', title), items);
-    }
     const actions = node('div', 'template-actions');
     const createButton = button('Create project', () => create('new-project'), 'detail', 'button primary');
     const add = button('Add to current project', () => create('current-project'), 'detail');
@@ -142,6 +135,17 @@ function createTemplatesDrawer({ document, client, onOpen, onPrompt, onStatus, i
     contextHint.id = 'template-context';
     add.setAttribute('aria-describedby', 'template-context');
     detail.append(actions, contextHint);
+    const technical = node('details', 'template-technical');
+    technical.open = false;
+    technical.append(node('summary', '', 'Outputs and technical details'));
+    technical.append(node('p', 'template-kits', `Required kits: ${(entry.requiredKits || []).join(', ') || 'None'}`));
+    for (const [title, values] of [['Outputs', entry.outputs], ['Limits', entry.limitations]]) {
+      if (!values?.length) continue;
+      const items = node('ul');
+      for (const value of values) items.append(node('li', '', value));
+      technical.append(node('h4', '', title), items);
+    }
+    detail.append(technical);
     if (entry.questions?.length) {
       const explore = button('Explore this idea', () => {
         if (blocked() || !available(selected())) return;
@@ -158,6 +162,9 @@ function createTemplatesDrawer({ document, client, onOpen, onPrompt, onStatus, i
     clear('list');
     list.replaceChildren();
     const ordered = [...entries].sort((a, b) => Number(available(b)) - Number(available(a)) || Number(a.status === 'planned') - Number(b.status === 'planned'));
+    const planned = node('details', 'template-planned');
+    planned.open = false;
+    planned.append(node('summary', '', 'Coming later'));
     for (const entry of ordered) {
       const row = node('div', 'template-entry');
       row.dataset.templateId = entry.id;
@@ -175,8 +182,10 @@ function createTemplatesDrawer({ document, client, onOpen, onPrompt, onStatus, i
         choice.setAttribute('aria-pressed', String(selectedId === entry.id));
         row.append(choice, node('span', 'template-state', available(entry) ? 'Ready' : 'Unavailable'), node('p', '', entry.purpose));
       }
-      list.append(row);
+      if (entry.status === 'planned') planned.append(row);
+      else list.append(row);
     }
+    if (planned.children.length > 1) list.append(planned);
     if (!entries.length && loaded) list.append(node('p', 'empty-library', 'No templates are available in this build.'));
     renderDetails();
   }

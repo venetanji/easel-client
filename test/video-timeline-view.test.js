@@ -763,6 +763,47 @@ test('Alt dragging a trim grip moves only the selection', async () => {
   assert.equal(f.view.getSelection().startFrame,36); assert.equal(f.view.getSelection().endFrame,84);
 });
 
+// Source-contract checks are deliberate: native hit testing lives in the CI
+// smoke fixture; the ordinary node suite does not render CSS.
+function timelineStyle(selector) {
+  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/video-timeline.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, selectors]) => selectors.trim().split(/,\s*/).includes(selector));
+  return Object.fromEntries(rules.flatMap(([, , declarations]) => declarations.split(';').filter(part => part.includes(':')).map(part => part.trim().split(/:\s*/, 2))));
+}
+
+test('timeline stylesheet reserves a full selection target above the clip drag band', () => {
+  const range = timelineStyle('.timeline-range-handle');
+  const clip = timelineStyle('.timeline-clip');
+  const trim = timelineStyle('.timeline-clip-trim');
+  assert.ok(parseFloat(range.width) >= 24 && parseFloat(range.height) >= 24, 'Selection handles need at least a 24 × 24 px target');
+  assert.ok(parseFloat(clip.top) >= parseFloat(range.height), 'Selection handles must not intercept the clip drag band');
+  assert.equal(trim.top, clip.top); assert.equal(trim.bottom, clip.bottom);
+  assert.equal(timelineStyle('.timeline-track-lane').height, '72px', 'Enlarging targets must retain compact track rows');
+});
+
+test('timeline stylesheet keeps readable track actions in a compact two-line header', () => {
+  const header = timelineStyle('.timeline-track-label');
+  const row = timelineStyle('.timeline-track-row > .timeline-track-label');
+  const action = timelineStyle('.timeline-track-order-button');
+  assert.ok(parseFloat(header.width) <= 160, 'Track labels should leave more of the narrow timeline available for clips');
+  assert.equal(row.display, 'grid', 'Track name and clip count share a line above the actions');
+  assert.ok(parseFloat(action['min-height']) >= 28 && parseFloat(action['min-width']) >= 28);
+  assert.ok(parseFloat(action['font-size']) >= 11, 'Actions must remain readable without hover');
+  assert.equal(timelineStyle('.timeline-track-order')['grid-column'], '1 / -1');
+});
+
+test('normal clips have 24 px trim targets without changing frame positions or body geometry', async () => {
+  const f = fixture(); await f.view.open('project-a');
+  const clip = f.item('clip-1');
+  assert.equal(clip.style.left, '72px'); assert.equal(clip.style.width, '144px');
+  assert.equal(clip.style.paddingInline, '24px', 'Clip text stays clear of the enlarged trim grips');
+  for (const edge of ['start', 'end']) {
+    const handle = f.all(node => node.dataset.role === `clip-trim-${edge}`)[0];
+    assert.equal(handle.style.width, '24px');
+    assert.equal(handle.style.left, edge === 'start' ? '72px' : '216px');
+  }
+});
+
 test('short clips keep a body hit target between proportionally sized trim grips', async () => {
   const doc=timeline(); doc.items[0].endFrame=30; doc.items[0].sourceEndSeconds=1.25;
   const f=fixture({initial:doc}); await f.view.open('project-a');

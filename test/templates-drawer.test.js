@@ -373,3 +373,32 @@ test('matching deletion during a pending retry invalidates its late opened resul
   assert.equal(f.button('templates-detail', 'Create project').disabled, false);
   assert.deepEqual(f.calls.onOpen, []);
 });
+
+// Moving destination actions below documentation must break this order check.
+test('template detail puts creation destinations before expandable technical details', async () => {
+  const f = fixture(); await f.drawer.refresh(); f.drawer.setOpen(true); await f.choose('video-editor');
+  const detail = f.nodes.get('templates-detail');
+  const actions = detail.children.findIndex(node => node.className === 'template-actions');
+  const technical = detail.children.findIndex(node => node.tagName === 'details');
+  assert.ok(actions >= 0 && technical > actions);
+  assert.equal(detail.children[technical].open, false);
+  assert.match(detail.children[technical].textContent, /Required kits.*Outputs.*Limits/);
+  assert.match(detail.textContent, /60 seconds.*32 MiB/);
+});
+
+test('planned templates are grouped in a collapsed non-actionable disclosure', async () => {
+  const f = fixture(); await f.drawer.refresh();
+  const list = f.nodes.get('templates-list');
+  const planned = list.children.find(node => node.tagName === 'details');
+  assert.ok(planned); assert.equal(planned.open, false);
+  assert.match(planned.children[0].textContent, /Coming later/);
+  assert.match(planned.textContent, /Presentations.*Games.*Image editor.*SVG editor.*Voxel soundscape/);
+  assert.equal(planned.querySelectorAll('button').length, 0);
+  assert.equal(list.children.filter(node => node.className === 'template-entry').length, 2);
+});
+
+test('Templates has a persistent visible label in the activity rail', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/index.html'), 'utf8');
+  const button = html.match(/<button id="nav-templates"[\s\S]*?<\/button>/)[0];
+  assert.match(button, /<span class="activity-label">Templates<\/span>/);
+});

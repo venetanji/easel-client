@@ -1020,6 +1020,32 @@ function canvasInputDisplayText(message, request) {
   return text;
 }
 
+function getWorkbenchWidthLimits(studioWidth, railWidth) {
+  // The rail becomes horizontal below this breakpoint. Preserve the desktop split.
+  if (studioWidth <= 850) return { min: 280, max: 580 };
+  const available = studioWidth - railWidth - 1 - 300;
+  return { min: 280, max: Math.max(280, Math.min(580, Math.floor(available))) };
+}
+
+// Adopt the saved instance once; narrow windows should show the result, not a tall chat column.
+async function adoptCreatedTemplate({ document, workspace, result, isCurrentView, isDisposed, updateCanvasBounds }) {
+  await workspace.changed(result);
+  if (isDisposed()) return;
+  if (isCurrentView()) {
+    const narrow = Boolean(document.defaultView?.matchMedia?.('(max-width: 850px)').matches);
+    if (narrow) document.querySelector('.studio').dataset.sidebar = 'closed';
+    workspace.setDrawer(false, !narrow, 'templates');
+    updateCanvasBounds();
+    if (narrow) {
+      const canvas = document.querySelector('.canvas-panel');
+      canvas.focus({ preventScroll: true });
+      canvas.scrollIntoView({ block: 'start', behavior: 'auto' });
+    }
+    return;
+  }
+  updateCanvasBounds();
+}
+
 function wireRenderer({ document, client }) {
   for (const button of document.querySelectorAll('[data-action-icon]')) {
     RendererActionIcons.setActionIcon(document, button, button.dataset.actionIcon, button.getAttribute('aria-label'));
@@ -1193,10 +1219,7 @@ function wireRenderer({ document, client }) {
     onOpen: async (result, { isCurrentView }) => {
       // The service already opened the host document. Adopt its metadata and reload
       // Files/Media without opening a second time or losing the instance identity.
-      await workspace.changed(result);
-      if (rendererDisposed) return;
-      if (isCurrentView()) workspace.setDrawer(false, true, 'templates');
-      updateCanvasBounds();
+      await adoptCreatedTemplate({ document, workspace, result, isCurrentView, isDisposed: () => rendererDisposed, updateCanvasBounds });
     },
     onPrompt: (prompt) => {
       if (agentControlUi?.isExternal()) {
@@ -1358,8 +1381,7 @@ function wireRenderer({ document, client }) {
   }
 
   function workbenchWidthLimits() {
-    const available = studio.getBoundingClientRect().width - 44 - 1 - 300;
-    return { min: 280, max: Math.max(280, Math.min(580, Math.floor(available))) };
+    return getWorkbenchWidthLimits(studio.getBoundingClientRect().width, document.querySelector('.activity-bar').getBoundingClientRect().width);
   }
 
   function applyWorkbenchWidth(value) {
@@ -2850,6 +2872,8 @@ function wireRenderer({ document, client }) {
 
 if (typeof module !== 'undefined') {
   module.exports = {
+    adoptCreatedTemplate,
+    getWorkbenchWidthLimits,
     appendTextMessage,
     appendMediaPreviewMessage,
     appendReadyMediaCards,
