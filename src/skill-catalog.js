@@ -9,6 +9,7 @@ const HARNESS_SKILLS = Object.freeze({
   'easel-audio': ['tone'],
   'easel-p5': ['p5'],
   'easel-three': ['three'],
+  'qwen-transparent-images': [],
 });
 const HYPERFRAMES_SKILLS = new Set([
   'canopy-part-title', 'code-slice-hero', 'cuboid-carousel', 'embedded-captions',
