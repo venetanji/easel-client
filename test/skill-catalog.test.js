@@ -6,8 +6,8 @@ const { availableCanvasKits, assertInstalledKits } = require('../src/canvas-kit-
 
 test('installed skill shortlist contains only self-contained Easel workflows', () => {
   const catalog = readInstalledSkills(path.join(__dirname, '../.agents/skills'));
-  assert.deepEqual(catalog.filter((skill) => skill.compatibility === 'supported').map((skill) => skill.name).sort(), ['easel-audio', 'easel-canvas', 'easel-media', 'easel-p5', 'easel-three']);
-  assert.equal(catalog.length, 5);
+  assert.deepEqual(catalog.filter((skill) => skill.compatibility === 'supported').map((skill) => skill.name).sort(), ['easel-audio', 'easel-canvas', 'easel-media', 'easel-p5', 'easel-three', 'qwen-transparent-images']);
+  assert.equal(catalog.length, 6);
   assert.ok(catalog.filter((skill) => skill.compatibility === 'supported').every((skill) => skill.description && !skill.truncated));
   assert.throws(() => assertHarnessSkills([{ name: 'hyperframes', instructions: 'Previously saved instructions' }], catalog), /unavailable in Easel/);
   assert.equal(assertHarnessSkills([{ name: 'My creative brief', instructions: 'Use warm colors.' }], catalog).length, 1);

@@ -116,7 +116,9 @@ The current asset library supports PNG, JPEG, and WebP images, MP4/WebM video, a
 
 ## Creative skills
 
-Open **Skills** to write a reusable instruction, edit one, or import a Codex `SKILL.md`. Easel stores imported skills on this device and includes only the selected skills with a request. The reviewed in-app shortlist is **Easel Canvas**, **Easel Media**, **Easel Audio**, **Easel p5**, and **Easel Three**. Audio, p5, and Three require their installed kit to be enabled for the project. Custom skills remain editable and are marked as unreviewed.
+Open **Skills** to write a reusable instruction, edit one, or import a Codex `SKILL.md`. Easel stores imported skills on this device and includes only the selected skills with a request. The reviewed in-app shortlist is **Easel Canvas**, **Easel Media**, **Easel Audio**, **Easel p5**, **Easel Three**, and **Qwen Transparent Images**. Audio, p5, and Three require their installed kit to be enabled for the project. Custom skills remain editable and are marked as unreviewed.
+
+For Qwen overlays, cutouts, stickers, or sprites, enable **Qwen Transparent Images** for the focused workflow, or **Easel Media** for the broader media recipes. Both include Qwen's official RGBA prompt format and a read-only check of the saved PNG's alpha channel. Preview background color alone does not establish opacity, and Qwen can leave faint residual alpha. See [transparency guidance and live test results](docs/qwen-transparency.md).
 
 The imported HyperFrames workflows and their bundled assets have been removed from this repository and app distribution. Easel-native skills remain available. Previously saved copies stay disabled with an explanation; their text is retained in user storage. This removal does not add a replacement animation engine.
 

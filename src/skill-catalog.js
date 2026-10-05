@@ -10,6 +10,7 @@ const HARNESS_SKILLS = Object.freeze({
   'easel-audio': ['tone'],
   'easel-p5': ['p5'],
   'easel-three': ['three'],
+  'qwen-transparent-images': [],
 });
 
 

@@ -463,7 +463,8 @@
     "easel-canvas",
     "easel-media",
     "easel-p5",
-    "easel-three"
+    "easel-three",
+    "qwen-transparent-images"
   ],
   "distribution_gates": [
     "Validate license/source materials for the exact transitive dependency tree and Electron/Chromium build in each final artifact.",

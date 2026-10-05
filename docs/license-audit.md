@@ -174,3 +174,15 @@ upstream license is replaced, no release clearance is claimed, and no binary
 release is authorized by this integration. See
 [strudel-compatibility.md](strudel-compatibility.md) for source provenance,
 packaging contracts and the remaining runtime/source gates.
+
+## Latest-main Qwen guidance addendum (5 October 2026)
+
+The subsequent main revision `6044a6b861f8f10d439fa47abdac8d872d8067d6`
+merged the Qwen transparency guidance originally introduced by
+`c31fa867de5c13b05b6934c82a063b8ccf13f5c2`. The retained-skill inventory now also
+lists `.agents/skills/qwen-transparent-images/SKILL.md`; that source and the
+matching alpha-verification recipe in `.agents/skills/easel-media/SKILL.md`
+are preserved byte-for-byte from the merged main. This records source provenance,
+not an independent ownership or licensing determination. The original five-skill
+audit above remains historical evidence. Existing license/notice files and their
+hashes are unchanged; no new grant or vendor relabeling is asserted.

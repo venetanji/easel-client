@@ -87,6 +87,12 @@ test('current inventory has no imported skills or obsolete preserved notice path
   }
 });
 
+test('current retained-skill inventory includes the latest main skill tree', () => {
+  const directory = path.join(root, '.agents/skills');
+  const retained = fs.readdirSync(directory).filter((name) => fs.existsSync(path.join(directory, name, 'SKILL.md'))).sort();
+  assert.deepEqual(json('docs/license-inventory.json').remaining_native_skills, retained);
+});
+
 test('retained creative-skills adaptations carry the original MIT grant and attribution', () => {
   assert.ok(fs.existsSync(path.join(root, 'licenses/creative-skills-MIT.txt')));
   const license = read('licenses/creative-skills-MIT.txt');
