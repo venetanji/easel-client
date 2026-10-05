@@ -15,7 +15,7 @@ const ENTRIES = [
     purpose: 'Explore editable synthesized rhythms and melodies with Strudel.',
     requiredKits: ['strudel'], actions: ['create-project', 'add-to-current-project'],
     outputs: ['Editable HTML and native-synth pattern source'],
-    limitations: ['The native kit passed compatibility checks; this build keeps creation gated until the editable starter lifecycle passes its runtime fixture.', 'Synth-only patterns; no remote samples, microphone or full REPL.', 'WAV export is not available yet.'],
+    limitations: ['Native synth playback and editable starter lifecycle passed compatibility checks; creation requires the installed Strudel kit.', 'Synth-only patterns; no remote samples, microphone or full REPL.', 'WAV export is not available yet.'],
     questions: ['Do you want to begin with a rhythm or a melody?', 'Should it feel calm, playful or tense?'],
     availability: { available: false, reason: 'The editable Strudel starter runtime compatibility gate has not passed.' },
   },

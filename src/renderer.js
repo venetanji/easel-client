@@ -2627,6 +2627,11 @@ function wireRenderer({ document, client }) {
       if (timelineSelection?.projectId === event.projectId && timelineSelection.timelineId === event.timelineId && (!timelineSelection.instanceId || timelineSelection.instanceId === event.instanceId) && timelineSelection.timelineRevision !== event.revision) setTimelineSelection(null);
       return;
     }
+    if (event.type === 'strudel-exported') {
+      refreshAssets();
+      setStatus(statusElement, event.warning || 'Loop saved in Media. Select it there to play, attach or download.');
+      return;
+    }
     if (event.type === 'timeline-exported') {
       refreshAssets();
       setStatus(statusElement, event.warning || 'Video exported to Media. Select it there to play or download.');

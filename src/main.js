@@ -46,6 +46,9 @@ const { createVideoTimelineStore } = require('./video-timeline-store');
 const { createVideoTimelineController } = require('./video-timeline-controller');
 const { timelineContextText } = require('./video-timeline-tools');
 const { createVideoTimelineBridge } = require('./video-timeline-bridge');
+const { createStrudelExportRenderer } = require('./strudel-export-renderer');
+const { createStrudelExportController } = require('./strudel-export-controller');
+const { createStrudelExportBridge, assertStrudelScope } = require('./strudel-export-bridge');
 const { createTemplateService } = require('./template-service');
 const { registerTemplateIpc, chooseTemplateInstance } = require('./template-ipc');
 const { importMediaFiles } = require('./media-import');
@@ -163,8 +166,9 @@ const TEMPLATES = createTemplateService({
       throw error;
     }
   },
-  // The native kit passed CI; enable strudelReady only after the editable
-  // starter lifecycle passes the extended disposable runtime fixture.
+  // Actual editable starter lifecycle passed CI run 37299938626 at 2657bd4.
+  // Required kit installation is still checked by the shared template service.
+  strudelReady: true,
 });
 
 function withCanvas(action) {
@@ -260,11 +264,11 @@ function emitCanvasSaved(canvas) {
   recordControlChange({ type: 'canvas', canvasId, projectId: canvasId, title: document.projectTitle || document.title, documentPath: document.documentPath, documentTitle: document.documentTitle });
 }
 
-async function attachProjectAssets(controller, projectId, assetIds, { kits } = {}) {
+async function attachProjectAssets(controller, projectId, assetIds, { kits, beforeCommit } = {}) {
   const selected = projectId ? { id: projectId } : await controller.ensureProject({ kits });
   const id = validateOpaqueId(selected.id, 'Project ID');
   const before = CANVASES.get(id).html;
-  const result = await CANVASES.attachAssets(id, { assetIds });
+  const result = await CANVASES.attachAssets(id, { assetIds }, { beforeCommit });
   if (result.changed) CANVAS_HISTORY.record(id, before);
   let runtimeAssetsUpdated = false;
   let runtimeWarning = '';
@@ -808,13 +812,35 @@ const JOB_MONITOR = createMediaJobMonitor({
   onReady: (job) => CHAT.notifyMediaJob(job),
 });
 
+// Remains false until the exact production-route WAV fixture passes in CI.
+const STRUDEL_EXPORT_READY = false;
+const STRUDEL_EXPORT_OPTIONS = { getView: () => requireCanvasView(), projectStore: CANVASES, instances: TEMPLATE_INSTANCES };
+const STRUDEL_EXPORT_RENDERER = createStrudelExportRenderer({
+  BrowserWindow,
+  sessionFactory: async (partition) => ({ partition, session: session.fromPartition(partition, { cache: false }) }),
+});
+const STRUDEL_EXPORT_CONTROLLER = createStrudelExportController({
+  render: STRUDEL_EXPORT_RENDERER.renderStrudelSnapshot,
+  saveMedia: (media) => CAPTURE_MEDIA.save(media),
+  findExport: (identity) => CAPTURE_MEDIA.findExport(identity),
+  isAttached: async (projectId, assetId) => CANVASES.getProject(projectId).manifest.assets.some((asset) => asset.id === assetId),
+  attach: (projectId, assetIds, beforeCommit) => attachProjectAssets(requireCanvasView(), projectId, assetIds, { beforeCommit }),
+  assertScope: (scope) => assertStrudelScope(scope, STRUDEL_EXPORT_OPTIONS),
+  captureDependency: (scope) => CANVASES.getProjectKitSource(scope.projectId, 'strudel'),
+  onExport: (receipt) => emitAgentEvent({ type: 'strudel-exported', ...receipt }),
+});
+const STRUDEL_EXPORT_BRIDGE = createStrudelExportBridge({
+  ...STRUDEL_EXPORT_OPTIONS, controller: STRUDEL_EXPORT_CONTROLLER, exportReady: STRUDEL_EXPORT_READY,
+  isBusy: () => CHAT.isBusy() || AGENT_CONTROL.isToolBusy(),
+});
+
 function registerIpcHandlers() {
   registerTemplateIpc({ ipcMain, assertSender: (event) => assertTrustedSender(event, mainWindow), withCanvas, service: TEMPLATES });
   const canvasHandle = (channel, handler) => ipcMain.handle(channel, (...args) => withCanvas(() => handler(...args)));
   function requireCanvasSender(event) {
     const controller = requireCanvasView();
     const contract = controller.getContract();
-    if (event.sender !== controller.view.webContents || event.senderFrame !== controller.view.webContents.mainFrame || !controller.getCurrentCanvasId() || contract.loading || contract.previewHidden || event.senderFrame.url !== contract.url) throw new Error('Canvas bridge request was rejected.');
+    if (event.sender !== controller.view.webContents || event.senderFrame !== controller.view.webContents.mainFrame || !controller.getCurrentCanvasId() || contract.loading || contract.previewHidden || event.senderFrame.url.split('#', 1)[0] !== contract.url.split('#', 1)[0]) throw new Error('Canvas bridge request was rejected.');
     return controller;
   }
   const timelineBridge = createVideoTimelineBridge({
@@ -833,6 +859,10 @@ function registerIpcHandlers() {
     saveMedia: (media) => CAPTURE_MEDIA.save(media),
     onExport: (receipt) => emitAgentEvent({ type: 'timeline-exported', ...receipt }),
     isBusy: () => CHAT.isBusy() || AGENT_CONTROL.isToolBusy(),
+  });
+  ipcMain.handle('canvas:strudel-export', (event, request) => {
+    requireCanvasSender(event);
+    return STRUDEL_EXPORT_BRIDGE.handle(request);
   });
   ipcMain.handle('canvas:timeline', (event, request) => {
     const canvas = requireCanvasSender(event);
@@ -1363,6 +1393,7 @@ async function createWindow() {
     sessionFactory: async (partition) => ({ partition, session: session.fromPartition(partition, { cache: false }) }),
     assetStore: ASSETS,
     mediaAssetStore: CAPTURE_MEDIA,
+    onRuntimeInvalidated: (reason) => STRUDEL_EXPORT_CONTROLLER.invalidate(reason),
     onMediaSaved: (capture) => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, { type: 'media', ...capture });
@@ -1382,6 +1413,11 @@ async function createWindow() {
         if (scope) canvasView.view.webContents.send('canvas:timeline-changed', { ...scope, ready: true });
       } catch (error) {
         canvasView.view.webContents.send('canvas:timeline-changed', { projectId: canvasId, documentPath, ready: true, error: error.message });
+      }
+      const soundInstance = TEMPLATE_INSTANCES.resolveDocument(canvasId, documentPath);
+      if (soundInstance?.templateId === 'strudel-sound') {
+        try { canvasView.view.webContents.send('canvas:strudel-export-context', await STRUDEL_EXPORT_BRIDGE.handle({ action: 'context' })); }
+        catch (error) { canvasView.view.webContents.send('canvas:strudel-export-context', { exportReady: false, reason: error.message }); }
       }
       const defaultPath = CANVASES.getProject(canvasId).manifest.entry;
       const pending = CANVAS_INPUTS.list({ canvasId, status: 'pending', limit: 200, raw: true }).find((request) => request.documentPath ? request.documentPath === documentPath : documentPath === defaultPath);
@@ -1410,6 +1446,7 @@ async function createWindow() {
       // Keep the native view alive until the stopped turn finishes its host edits.
       await CHAT.shutdown();
       await JOB_MONITOR.stop();
+      STRUDEL_EXPORT_CONTROLLER.invalidate('The application window is closing.');
       await VIDEO_METADATA.close();
       await withCanvas(async (controller) => {
         if (controller.getCurrentCanvasId()) await controller.saveCurrent();

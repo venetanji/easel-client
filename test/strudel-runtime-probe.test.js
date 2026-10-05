@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
+const fs = require('node:fs');
 const runtime = require('../scripts/probe-strudel-runtime.cjs');
 
 async function restartSimulation({ brokenRestart }) {
@@ -170,4 +171,27 @@ test('initial_silence_failure_identifies_the_exact_invariant_without_weakening_i
   assert.throws(() => runtime.assertTemplateInitialSilence({ ...silent, gain: 1 }), /initial output gain.*"gain":1.*"playing":false/i);
   assert.throws(() => runtime.assertTemplateInitialSilence({ ...silent, plays: 1 }), /scheduled playback before Play/);
   assert.throws(() => runtime.assertTemplateInitialSilence({ ...silent, settings: { playing: true } }), /restored playback/);
+});
+
+test('wav_fixture_decodes_saved_pcm_and_keeps_live_context_identity', () => {
+  assert.equal(typeof runtime.decodeExportWav, 'function', 'the single fixture must decode real exported WAV bytes');
+  const html = runtime.templateFixtureHtml('window.strudel={};', { exportEnabled: true });
+  assert.match(html, /installExportFixtureHost/);
+  assert.match(html, /~ c4 ~ g4/);
+  const source = fs.readFileSync(require('node:path').join(__dirname, '../scripts/probe-strudel-runtime.cjs'), 'utf8');
+  assert.match(source, /createStrudelExportRenderer/);
+  assert.match(source, /createStrudelExportController/);
+  assert.match(source, /findExport/);
+  assert.match(source, /liveContextIdentity/);
+  assert.match(source, /volumeRatio/);
+});
+
+test('long_offline_score_gate_rejects_native_stealing_and_reports_only_reopened_bytes', () => {
+  assert.equal(typeof runtime.assertNativeLongNoteEvidence, 'function');
+  const result = {sampleRate:48000,channels:2,frames:408000,duration:8.5,latePeaks:[0.02,0.02]};
+  runtime.assertNativeLongNoteEvidence(result,201);
+  assert.throws(() => runtime.assertNativeLongNoteEvidence({...result,latePeaks:[0,0]},201), /late|steal/i);
+  assert.throws(() => runtime.assertNativeLongNoteEvidence(result,128), /128|event/i);
+  const source = fs.readFileSync(require('node:path').join(__dirname,'../scripts/probe-strudel-runtime.cjs'),'utf8');
+  assert.match(source,/fast\(50\)/); assert.match(source,/savedReopenedBytes/); assert.doesNotMatch(source,/savedReopenedDownloaded/);
 });

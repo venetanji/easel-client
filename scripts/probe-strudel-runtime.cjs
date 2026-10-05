@@ -259,19 +259,181 @@ function monitorTemplate(instanceId) {
   };
 }
 
-function templateFixtureHtml(bundle, { instanceId = 'c'.repeat(32), preserved, saved, edited = false } = {}) {
+// Test-only transport observes the real editable export action. No preload,
+// Node, devices, network or general application bridge is added to a renderer.
+function installExportFixtureHost() {
+  window.EaselHost = {
+    onStrudelExportContext(callback) { probe.exportContextListener = callback; return () => { delete probe.exportContextListener; }; },
+    strudelExport(request) {
+      if (request.action === 'cancel') { probe.cancelRequest = request; return Promise.resolve({ cancelled: true }); }
+      probe.exportRequest = JSON.parse(JSON.stringify(request));
+      return new Promise((resolve, reject) => { probe.exportResolve = resolve; probe.exportReject = reject; });
+    },
+  };
+}
+
+async function decodeExportWav(base64, snapshot) {
+  const bytes = Uint8Array.from(atob(base64), character => character.charCodeAt(0));
+  const decoder = new OfflineAudioContext(2, 1, 48000);
+  const audio = await decoder.decodeAudioData(bytes.buffer);
+  const peak = (begin, end) => {
+    const channels = [];
+    for (let channel = 0; channel < audio.numberOfChannels; channel++) {
+      const data = audio.getChannelData(channel); let value = 0;
+      for (let i = Math.ceil(begin * audio.sampleRate); i < Math.min(data.length, Math.floor(end * audio.sampleRate)); i++) value = Math.max(value, Math.abs(data[i]));
+      channels.push(value);
+    }
+    return channels;
+  };
+  return { sampleRate: audio.sampleRate, channels: audio.numberOfChannels, frames: audio.length, duration: audio.duration,
+    peaks: peak(0, audio.duration), latePeaks: peak(audio.duration - 1.2, audio.duration - 0.8),
+    eventPeaks: snapshot.events.map(event => peak(event.timeSeconds + 0.03, event.timeSeconds + event.durationSeconds - 0.03)),
+    // The fixture pattern deliberately has initial/interior rests and short tails.
+    quietPeaks: [peak(0.05, 0.3), peak(1.15, 1.3), peak(2.15, 2.4)] };
+}
+
+function assertNativeLongNoteEvidence(result, eventCount) {
+  if (eventCount <= 128 || result.sampleRate !== 48000 || result.channels !== 2 || result.frames !== 408000 || result.duration !== 8.5 || !Array.isArray(result.latePeaks) || result.latePeaks.length !== 2 || !result.latePeaks.every(peak => peak > 0.001)) throw new Error('The >128-event offline score lost its long note late segment through native stealing.');
+}
+
+async function proveProductionWavExport({ BrowserWindow, session, open, until, read, windows, requests, directory, decoderWindow, stage, check }) {
+  const { createCanvasStore } = require('../src/canvas-store');
+  const { createTemplateInstanceStore } = require('../src/template-instance-store');
+  const { createCanvasMediaStore } = require('../src/canvas-media-store');
+  const { createStrudelExportRenderer } = require('../src/strudel-export-renderer');
+  const { createStrudelExportController } = require('../src/strudel-export-controller');
+  const { createStrudelExportBridge, assertStrudelScope } = require('../src/strudel-export-bridge');
+  const { validateStrudelWav } = require('../src/strudel-export-policy');
+  const userDataPath = path.join(directory, 'wav-media-proof');
+  const media = createCanvasMediaStore({ userDataPath });
+  const bundle = fs.readFileSync(path.join(root, 'canvas-kits/strudel.js'), 'utf8');
+  const store = createCanvasStore({ userDataPath, kitBundles: { strudel: bundle }, assetStore: media });
+  const instances = createTemplateInstanceStore({ userDataPath, projectStore: store });
+  const instanceId = 'e'.repeat(32), documentPath = `sketches/${instanceId}/index.html`;
+  const source = createStrudelTemplate({ instanceId });
+  const project = store.createTemplateDocument({ title: 'WAV proof', path: documentPath, kits: ['strudel'],
+    html: source.files[source.entry].replace("note('c4 e4 g4 b4')", "note('~ c4 ~ g4')") },
+  ({ projectId }) => instances.create({ projectId, instanceId, documentPath, templateId: 'strudel-sound', templateVersion: 1 }));
+  const scopeOptions = { projectStore: store, instances, view: { getCurrentCanvasId: () => project.id, getCurrentDocumentPath: () => documentPath,
+    getContract: () => ({ runtimeGeneration: 1, loading: false, previewHidden: false, sourcePendingReload: false }) } };
+  const renderer = createStrudelExportRenderer({ BrowserWindow: function ExportWindow(options) { const win = new BrowserWindow(options); windows.push(win); return win; },
+    sessionFactory: async partition => {
+      const isolated = session.fromPartition(partition, { cache: false });
+      return { partition, session: { protocol: isolated.protocol,
+        setPermissionCheckHandler: handler => isolated.setPermissionCheckHandler(handler),
+        setPermissionRequestHandler: handler => isolated.setPermissionRequestHandler(handler),
+        webRequest: { onBeforeRequest: (filter, handler) => isolated.webRequest.onBeforeRequest(filter, (details, callback) => handler(details, decision => { if (decision.cancel) requests.push(details.url); callback(decision); })) } } };
+    } });
+  const controller = createStrudelExportController({ render: renderer.renderStrudelSnapshot, saveMedia: media.save, findExport: media.findExport,
+    isAttached: async (projectId, assetId) => store.getProject(projectId).manifest.assets.some(asset => asset.id === assetId),
+    attach: (projectId, assetIds, beforeCommit) => store.attachAssets(projectId, { assetIds }, { beforeCommit }),
+    assertScope: captured => assertStrudelScope(captured, scopeOptions), captureDependency: captured => store.getProjectKitSource(captured.projectId, 'strudel') });
+  const bridge = createStrudelExportBridge({ ...scopeOptions, controller, exportReady: true });
+  const sound = await open('export.html');
+  await until(sound, state => state.ready, 'wav-template-ready');
+  const context = await bridge.handle({ action: 'context' });
+  await sound.webContents.executeJavaScript(`probe.exportContextListener(${JSON.stringify(context)}); document.getElementById('strudel-${instanceId}-bpm').value = '120'; document.getElementById('strudel-${instanceId}-bpm').dispatchEvent(new Event('input')); void 0;`);
+  await sendKeyboardActivation(sound, `strudel-${instanceId}-play`);
+  await until(sound, state => state.schedulerStarted && state.peaks.some(value => value > 0.001), 'wav-live-playing');
+  await sound.webContents.executeJavaScript('window.__exportLiveIdentity = { context: strudel.getAudioContext(), controller: strudel.getSuperdoughAudioController(), time: strudel.getAudioContext().currentTime }; void 0;');
+  const decoded = [], receipts = [];
+  for (const volume of [1, 0.5, 0]) {
+    await sound.webContents.executeJavaScript(`probe.exportRequest = null; document.getElementById('strudel-${instanceId}-volume').value = '${volume}'; document.getElementById('strudel-${instanceId}-volume').dispatchEvent(new Event('input')); EaselStrudel.exportLoop(); void 0;`);
+    const request = (await until(sound, state => !!state.exportRequest, `wav-snapshot-volume-${volume}`)).exportRequest;
+    const receipt = await bridge.handle(request);
+    check(receipt.attachmentStatus === 'attached' && receipt.projectId === project.id, 'WAV was not attached to its captured project.');
+    await sound.webContents.executeJavaScript(`probe.exportResolve(${JSON.stringify(receipt)}); void 0;`);
+    const asset = await media.get(receipt.assetId);
+    const timing = validateStrudelWav(Buffer.from(asset.data, 'base64'), request.input.snapshot);
+    const reopened = await createCanvasMediaStore({ userDataPath }).getPlaybackSource(receipt.assetId);
+    check(fs.readFileSync(reopened.filename).equals(Buffer.from(asset.data, 'base64')), 'Saved/reopened byte integrity differs.');
+    const result = await decoderWindow.webContents.executeJavaScript(`(${decodeExportWav.toString()})(${JSON.stringify(asset.data)},${JSON.stringify(request.input.snapshot)})`);
+    check(result.sampleRate === 48000 && result.channels === 2 && result.frames === timing.frames && result.duration === 2.5, 'Decoded WAV frame/header contract failed.');
+    if (volume) {
+      check(result.eventPeaks.every(peaks => peaks.every(value => value > 0.001)), 'A queried onset is silent or shifted.');
+      check(result.quietPeaks.every(peaks => peaks.every(value => value < 0.00001)), 'WAV has sound in its expected rests/tail.');
+    } else check(result.peaks.every(value => value === 0), 'Volume zero was not baked once into offline gain.');
+    const retry = await bridge.handle(request);
+    check(retry.assetId === receipt.assetId, 'An identical export request created another asset.');
+    decoded.push(result); receipts.push(receipt);
+    stage(`wav-saved-decoded-volume-${volume}`);
+  }
+  const volumeRatio = decoded[1].peaks[0] / decoded[0].peaks[0];
+  check(Math.abs(volumeRatio - 0.5) < 0.005, 'Volume is missing or applied twice.');
+  check((await media.list()).length === 3, 'Idempotent WAV retry duplicated a saved capture.');
+  // Query actual pinned patterns without a scheduler/audio context. The same
+  // production bridge/controller/renderer saves and decodes these plain scores.
+  const { validateStrudelSnapshot, queryStrudelSnapshot } = require('../src/strudel-export-policy');
+  const queryScore = async expression => decoderWindow.webContents.executeJavaScript(`(() => {
+    const validateStrudelSnapshot = ${validateStrudelSnapshot.toString()};
+    const queryStrudelSnapshot = ${queryStrudelSnapshot.toString()};
+    return queryStrudelSnapshot(${expression}, { bpm: 120, volume: 1 }, 1, '${'d'.repeat(64)}', strudel);
+  })()`);
+  const synthProofs = [];
+  for (const [name, expression] of [
+    ['omitted-gain-default-envelope', "strudel.note('c4').s('sine')"],
+    ['explicit-equivalent-gain', "strudel.note('c4').s('sine').gain(0.8)"],
+    ['explicit-default-valued-envelope', "strudel.note('c4').s('sine').gain(0.8).attack(0.001).release(0.01)"],
+    ['attack-only-envelope', "strudel.note('c4').s('sine').gain(0.8).attack(0.001)"],
+    ['release-only-envelope', "strudel.note('c4').s('sine').gain(0.8).release(0.01)"],
+  ]) {
+    const snapshot = await queryScore(expression);
+    const receipt = await bridge.handle({ action: 'export', input: { exportId: name, expectedSourceRevision: context.sourceRevision, snapshot } });
+    const asset = await media.get(receipt.assetId);
+    const result = await decoderWindow.webContents.executeJavaScript(`(${decodeExportWav.toString()})(${JSON.stringify(asset.data)},${JSON.stringify(snapshot)})`);
+    check(result.latePeaks.every(peak => peak > 0.001), `${name}: late envelope segment is silent.`);
+    synthProofs.push({ name, latePeaks: result.latePeaks });
+  }
+  check(Math.abs(synthProofs[0].latePeaks[0] - synthProofs[1].latePeaks[0]) < 0.00004, 'Omitted gain differs from the native explicit 0.8 equivalent.');
+  const nativeSustainRatio = synthProofs[0].latePeaks[0] / synthProofs[2].latePeaks[0];
+  check(Math.abs(nativeSustainRatio - 0.6) < 0.005, 'The all-omitted native envelope branch lost its default sustain.');
+  check(synthProofs.slice(3).every(proof => Math.abs(proof.latePeaks[0] - synthProofs[2].latePeaks[0]) < 0.00004), 'One-sided explicit envelopes differ from their native branch.');
+  const longSnapshot = await decoderWindow.webContents.executeJavaScript(`(() => {
+    const validateStrudelSnapshot = ${validateStrudelSnapshot.toString()};
+    const queryStrudelSnapshot = ${queryStrudelSnapshot.toString()};
+    const pattern = strudel.stack(strudel.note('c4').s('sine').gain(0.3).attack(0.01).release(0.01).slow(4), strudel.note('g4').s('sine').gain(0).attack(0.01).release(0.01).fast(50));
+    return queryStrudelSnapshot(pattern, { bpm: 120, volume: 1 }, 4, '${'d'.repeat(64)}', strudel);
+  })()`);
+  const longReceipt = await bridge.handle({ action: 'export', input: { exportId: 'long-native-score', expectedSourceRevision: context.sourceRevision, snapshot: longSnapshot } });
+  const longAsset = await media.get(longReceipt.assetId);
+  const longResult = await decoderWindow.webContents.executeJavaScript(`(${decodeExportWav.toString()})(${JSON.stringify(longAsset.data)},${JSON.stringify(longSnapshot)})`);
+  assertNativeLongNoteEvidence(longResult, longSnapshot.events.length);
+  stage('wav-native-defaults-and-long-score-proven');
+
+  await sound.webContents.executeJavaScript(`probe.liveContextIdentity = strudel.getAudioContext() === __exportLiveIdentity.context && strudel.getSuperdoughAudioController() === __exportLiveIdentity.controller && strudel.getAudioContext().state === 'running' && strudel.getAudioContext().currentTime > __exportLiveIdentity.time && strudel.getIsStarted(); probe.peaks = []; document.getElementById('strudel-${instanceId}-volume').value = '0.5'; document.getElementById('strudel-${instanceId}-volume').dispatchEvent(new Event('input')); void 0;`);
+  const alive = await until(sound, state => state.liveContextIdentity && state.peaks.length >= 10 && state.peaks.slice(-10).every(value => value > 0.001), 'wav-live-context-survived');
+  check(alive.activeAudioContexts === 1, 'Export created a live audio context in the authored realm.');
+  await sound.webContents.executeJavaScript('probe.dispose()');
+  const disposed = await read(sound);
+  check(disposed.disposal.audioState === 'closed' && !disposed.disposal.schedulerStarted && disposed.disposal.activeAudioContexts === 0, 'WAV fixture cleanup leaked live audio.');
+  // Exercise the installed Electron version's actual same-URL navigation event.
+  // Host canvas cancellation itself is covered by the fake-WebContents regression.
+  const navigationDetails = new Promise(resolve => sound.webContents.once('did-start-navigation', (details, url, isInPlace, isMainFrame) => resolve({ url: details.url ?? url, isSameDocument: details.isSameDocument ?? isInPlace, isMainFrame: details.isMainFrame ?? isMainFrame })));
+  const sameUrl = sound.webContents.getURL();
+  sound.webContents.reload();
+  const navigation = await navigationDetails;
+  check(navigation.url === sameUrl && navigation.isMainFrame === true && navigation.isSameDocument === false, 'Native same-URL reload did not emit a top-level replacement event.');
+
+  return { decoded: decoded.map(({ eventPeaks, quietPeaks, ...summary }) => ({ ...summary, eventPeaks, quietPeaks })), volumeRatio, liveContextIdentity: true,
+    sustainedLiveSamples: 10, sameUrlNavigationEvent: true, savedReopenedBytes: true, nativeDefaultProofs: synthProofs, nativeSustainRatio, longScore: { events: longSnapshot.events.length, latePeaks: longResult.latePeaks, duration: longResult.duration }, durableAssets: receipts.map(receipt => receipt.assetId), idempotentRetries: true, pinnedKitDigest: store.getProjectKitSource(project.id, 'strudel').digest };
+}
+
+function templateFixtureHtml(bundle, { instanceId = 'c'.repeat(32), preserved, saved, edited = false, exportEnabled = false } = {}) {
   const source = createStrudelTemplate({ instanceId });
   let html = source.files[source.entry];
+  if (exportEnabled) html = html.replace("note('c4 e4 g4 b4')", "note('~ c4 ~ g4')");
   if (edited) html = html.replace("note('c4 e4 g4 b4')", "note('a5 c6 e6 a6')");
   html = html.replace('</body>', `<script>(${monitorTemplate.toString()})(${JSON.stringify(instanceId)});</script></body>`);
   html = buildCanvasDocument({ html, kits: ['strudel'], kitBundles: { strudel: bundle } });
   const initial = `<script>window.__easelPreservedState=${JSON.stringify(preserved || {}).replace(/</g, '\\u003c')};window.__easelProjectState=${JSON.stringify(saved || {}).replace(/</g, '\\u003c')};</script>`;
   html = html.replace('<script id="easel-runtime-lifecycle">', initial + '<script id="easel-runtime-lifecycle">');
-  return html.replace('<script data-easel-canvas-kit="strudel">', `<script>(${installDiagnostics.toString()})();</script><script data-easel-canvas-kit="strudel">`);
+  return html.replace('<script data-easel-canvas-kit="strudel">', `<script>(${installDiagnostics.toString()})();${exportEnabled ? `(${installExportFixtureHost.toString()})();` : ''}</script><script data-easel-canvas-kit="strudel">`);
 }
 
 async function electronMain() {
-  const { app, BrowserWindow } = require('electron');
+  const { app, BrowserWindow, protocol, session } = require('electron');
+  // Identical to main.js: the production renderer serves its host-only URL.
+  protocol.registerSchemesAsPrivileged([{ scheme: 'easel-canvas', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
   const directory = process.env.EASEL_STRUDEL_PROBE_DIR;
   const diagnostic = { status: 'running', phase: 'startup', snapshots: {} };
   const persist = () => fs.writeFileSync(path.join(directory, 'evidence.json'), JSON.stringify(diagnostic, null, 2));
@@ -392,12 +554,13 @@ async function electronMain() {
       const result = await read(win);
       check(result.disposal.audioState === 'closed' && !result.disposal.schedulerStarted && result.disposal.activeAudioContexts === 0, 'Repeated close leaked resources.');
     }
+    const wav = await proveProductionWavExport({ BrowserWindow, session, open, until, read, windows, requests, directory, decoderWindow: isolated, stage, check });
     check(requests.length === 0, `Unexpected resource requests: ${requests.join(', ')}`);
     const evidence = { status: 'passed', csp: CSP, initialState: initial.initialState,
       trustedKeyboardPlay: playing.trustedKeyboardPlay, playPeak: Math.max(...playing.peaks),
       stopSilence: true, oldVoiceDrainSeconds: drained.audioTime - drained.stoppedAt, restartSustainedSamples: 10, restartPeak: Math.max(...restarted.peaks), offline: offline.offline,
       template: { trustedKeyboardPlay: starterPlaying.trustedKeyboardPlay, initialSilence: true, oldVoiceMutedRestartSeconds: silentRestart.audioTime - silentRestart.oldVoiceStartedAt, positiveRestartPeak: Math.max(...positiveRestart.peaks), positiveRestartSustainedSamples: 10, controlsImmediate: true, overlayEscapeStops: true, sourceReloadSilent: true, editedSourcePlays: true, independentSettings: true, disposedContexts: 0 },
-      networkRequests: requests, electron: process.versions.electron, chromium: process.versions.chrome };
+      wav, networkRequests: requests, electron: process.versions.electron, chromium: process.versions.chrome };
     fs.writeFileSync(path.join(directory, 'evidence.json'), JSON.stringify(evidence, null, 2));
     process.stdout.write(JSON.stringify(evidence, null, 2) + '\n');
     clearTimeout(watchdog);
@@ -418,6 +581,7 @@ function run() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-strudel-probe-'));
   fs.writeFileSync(path.join(directory, 'playback.html'), fixtureHtml(bundle, false));
   fs.writeFileSync(path.join(directory, 'offline.html'), fixtureHtml(bundle, true));
+  fs.writeFileSync(path.join(directory, 'export.html'), templateFixtureHtml(bundle, { instanceId: 'e'.repeat(32), exportEnabled: true }));
   fs.writeFileSync(path.join(directory, 'template.html'), templateFixtureHtml(bundle));
   fs.writeFileSync(path.join(directory, 'template-other.html'), templateFixtureHtml(bundle, { instanceId: 'd'.repeat(32), saved: { strudel: { ['c'.repeat(32)]: { bpm: 90, volume: 0.1 }, ['d'.repeat(32)]: { bpm: 160, volume: 0.7, playing: true } } } }));
   const runtime = path.join(directory, 'runtime');
@@ -437,4 +601,4 @@ if (process.versions.electron) electronMain().catch((error) => { console.error(e
 else if (require.main === module) {
   try { run(); } catch (error) { console.error(error.stack || error); process.exitCode = 1; }
 }
-module.exports = { assertTemplateInitialSilence, fixtureHtml, templateFixtureHtml, hasSilentTemplateRestart, hasAudibleTemplateRestart, TIMEOUT_MS, sendKeyboardActivation, stopIsDrained, hasRestartSignal, waitForProbeState, summarizeProbeState };
+module.exports = { assertNativeLongNoteEvidence, decodeExportWav, assertTemplateInitialSilence, fixtureHtml, templateFixtureHtml, hasSilentTemplateRestart, hasAudibleTemplateRestart, TIMEOUT_MS, sendKeyboardActivation, stopIsDrained, hasRestartSignal, waitForProbeState, summarizeProbeState };

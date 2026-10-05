@@ -51,7 +51,7 @@ function boundInspection(snapshot) {
   return snapshot;
 }
 
-async function createCanvasView({ WebContentsView, sessionFactory, assetStore, mediaAssetStore, canvasStore, kitBundles = {}, requestMediaPermission, onCanvasReady, onMediaSaved }) {
+async function createCanvasView({ WebContentsView, sessionFactory, assetStore, mediaAssetStore, canvasStore, kitBundles = {}, requestMediaPermission, onCanvasReady, onMediaSaved, onRuntimeInvalidated }) {
   if (typeof WebContentsView !== 'function' || typeof sessionFactory !== 'function') {
     throw new Error('Canvas view dependencies are required.');
   }
@@ -81,6 +81,8 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
   let sourcePendingReload = false;
   let runtimeGeneration = 0;
   let loading = false;
+  let loadedSourceValid = false;
+  let hostNavigationActive = false;
   let errorSequence = 0;
   let generationStartedAt = 0;
   let scriptLocations = [];
@@ -133,6 +135,36 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     if (recentConsoleErrors.length > 20) recentConsoleErrors.shift();
   });
 
+  function invalidateRuntime(reason) {
+    try { onRuntimeInvalidated?.(reason); } catch { /* Optional export cleanup cannot block canvas cleanup. */ }
+  }
+
+  function markSourcePendingReload() {
+    sourcePendingReload = true;
+    invalidateRuntime('The sound source changed; reload before exporting.');
+  }
+
+  webContents.on('did-start-navigation', (details, _url, isInPlace, isMainFrame) => {
+    const topLevel = details.isMainFrame ?? isMainFrame;
+    const sameDocument = details.isSameDocument ?? isInPlace;
+    if (!topLevel || sameDocument || hostNavigationActive) return;
+    // Renderer-initiated reload can replace a document without changing its URL.
+    // Only a subsequent host source load restores a valid loaded-source context.
+    loadedSourceValid = false;
+    sourcePendingReload = true;
+    runtimeGeneration += 1;
+    invalidateRuntime('The loaded canvas document was replaced; reload its saved source.');
+  });
+
+  async function loadHostUrl(url) {
+    hostNavigationActive = true;
+    try { await webContents.loadURL(url); }
+    finally { hostNavigationActive = false; }
+  }
+
+  webContents.on('render-process-gone', () => invalidateRuntime('The canvas renderer stopped.'));
+  webContents.on('destroyed', () => invalidateRuntime('The canvas renderer was destroyed.'));
+
   async function ensureDebugger() {
     if (!webContents.debugger.isAttached()) webContents.debugger.attach('1.3');
     if (!debuggerReady) {
@@ -143,6 +175,8 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
 
   async function loadHtml(html, canvasId = '', preservedState, disposePrevious = true, documentPath = currentDocumentPath, showPreview = !previewHidden) {
     if (typeof html !== 'string' || !html.trim()) throw new Error('Canvas HTML is required.');
+    loadedSourceValid = false;
+    invalidateRuntime('The canvas document is being replaced.');
     await cancelOutputCapture('The canvas document is being replaced.');
     html = addCanvasLifecycle(html);
     if (preservedState) {
@@ -173,7 +207,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
       return { start: html.slice(0, block.contentStart).split('\n').length, end: html.slice(0, block.contentEnd).split('\n').length, provenance: kit ? 'kit' : block.protected ? 'host' : 'app', file: /data-easel-project-file=["']([^"']+)["']/i.exec(opening)?.[1] || null, kit };
     });
     try {
-      await webContents.loadURL(currentUrl);
+      await loadHostUrl(currentUrl);
       await ensureDebugger();
       const loaded = await webContents.debugger.sendCommand('Runtime.evaluate', {
         expression: `document.open();document.write(${JSON.stringify(html)});document.close();`,
@@ -189,6 +223,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
       await waitForRuntime(2, 500);
       if (preservedState) await evaluate('window.EaselCanvas?.restoreControls()');
       loading = false;
+      loadedSourceValid = true;
       if (onCanvasReady) await onCanvasReady(canvasId, currentDocumentPath);
       return { id: currentCanvasId, projectId: currentCanvasId, documentPath: currentDocumentPath };
     } finally { loading = false; }
@@ -370,7 +405,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
 
   function canvasContract() {
     return {
-      canvasId: currentCanvasId, projectId: currentCanvasId, documentPath: currentDocumentPath, previewHidden, runtimeGeneration, loading, url: currentUrl, errorCursor: errorSequence, sourcePendingReload,
+      canvasId: currentCanvasId, projectId: currentCanvasId, documentPath: currentDocumentPath, previewHidden, runtimeGeneration, loading, loadedSourceValid, url: currentUrl, errorCursor: errorSequence, sourcePendingReload,
       sandbox: { network: false, filesystem: false, applicationAccess: false, workers: false, externalScripts: false, mediaSources: ['data:', 'blob:'], cameraAndMicrophone: 'Available after user permission scoped to this canvas.', deviceGrants: mediaPermissions.inspect(), inputBridge: 'Declared canvas inputs and explicitly shared media only.', audioRequiresUserGesture: true },
       persistence: { source: 'Authored project files are authoritative. Save, asset attachment and runtime probes never adopt live DOM. HTML export assembles an offline document.', runtime: 'JS variables, generated DOM, WebGL state and audio nodes do not persist. adopt_canvas_runtime_dom explicitly adopts DOM when needed.', patches: 'reload:false saves source only. reload:true also replaces the document. Existing runtime-only edits can be lost on reload.' },
       lifecycle: { api: 'window.EaselCanvas.registerApp({ id, root, renderer, scene, camera, audio, dispose, getState, restoreState })', state: 'getState must return JSON data (combined limit 16 KiB); restoreState receives it on reload. Controls restore values without firing events.', limits: 'Tracked frames, timers, listeners and audio contexts plus registered app disposal. Unregistered scene objects, library animation loops and resources cannot all be identified.' },
@@ -394,6 +429,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
   }
 
   async function cleanupForReload() {
+    invalidateRuntime('The canvas runtime is being cleaned up.');
     await cancelOutputCapture('The canvas runtime is being cleaned up.');
     return JSON.parse(await evaluate(`(async () => {
       if (!window.EaselCanvas) return { managed: false, limits: 'No lifecycle bootstrap. Reload discards the old document.' };
@@ -412,7 +448,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     // Validate storage policy before touching the running document.
     const updated = canvasStore.update(saved.id, patched.html, { documentPath: currentDocumentPath || undefined });
     const next = canvasStore.get(saved.id, { documentPath: currentDocumentPath || undefined });
-    sourcePendingReload = true;
+    markSourcePendingReload();
     let cleanup = null;
     let state;
     if (reload) {
@@ -456,7 +492,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     const generation = runtimeGeneration;
     const updated = await canvasStore[method](saved.id, args);
     if (saved.id !== currentCanvasId || generation !== runtimeGeneration) throw new Error('Source saved, but the canvas changed. Reopen it to apply the edits.');
-    sourcePendingReload = true;
+    markSourcePendingReload();
     let cleanup = null;
     let state;
     async function rollbackBatch(reason, attemptedValidation = null) {
@@ -550,7 +586,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     const updated = canvasStore.updateManifest(projectId, { kits, expectedProjectRevision });
     const result = { ...(active ? mutationIdentity(updated) : updated), projectId, kits: updated.manifest.kits.map((kit) => kit.name), ok: true, applied: false, sourcePendingReload: active ? sourcePendingReload : false };
     if (!updated.changed || !active) return { ...result, effects: { source: updated.changed ? 'project kits saved for every HTML document' : 'unchanged', runtime: 'unchanged' } };
-    sourcePendingReload = true;
+    markSourcePendingReload();
     let cleanup = null;
     let state = null;
     let applied = false;
@@ -565,7 +601,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
       const validation = await validateCanvas();
       return { ...result, applied: true, sourcePendingReload: false, preservedState: !!state, cleanup, validation, contract: canvasContract(), ...(validation.appRuntimeStatus.ok ? {} : { runtimeWarning: 'Project kits are saved and loaded. The app reports runtime errors; it may still use a kit that was disabled.' }), effects: { source: 'project kits saved for every HTML document', runtime: 'current document replaced once with managed lifecycle cleanup' } };
     } catch (error) {
-      if (!applied && currentCanvasId === projectId && currentDocumentPath === identity.documentPath) sourcePendingReload = true;
+      if (!applied && currentCanvasId === projectId && currentDocumentPath === identity.documentPath) markSourcePendingReload();
       return { ...result, applied, sourcePendingReload: currentCanvasId === projectId ? sourcePendingReload : false, preservedState: applied && !!state, cleanup, runtimeWarning: applied ? `Project kits are saved and loaded, but validation failed. ${error.message}` : `Project kits are saved. Reopen the canvas to apply them. ${error.message}`, contract: canvasContract(), effects: { source: 'project kits saved for every HTML document', runtime: applied ? 'current document replaced; validation unavailable' : cleanup ? 'reload failed after lifecycle cleanup' : 'unchanged; reload still required' } };
     }
   }
@@ -748,13 +784,14 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     if (currentUrl) await cleanupForReload();
     mediaPermissions.revoke();
     runtimeGeneration += 1;
+    loadedSourceValid = false;
     currentCanvasId = '';
     currentDocumentPath = '';
     previewHidden = false;
     currentUrl = '';
     sourcePendingReload = false;
     view.setVisible(false);
-    await webContents.loadURL('about:blank');
+    await loadHostUrl('about:blank');
     return { closed: true };
   }
 
@@ -769,7 +806,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     if (!Number.isInteger(maxWidth) || maxWidth < 10 || maxWidth > 100) throw new Error('Image width must be between 10 and 100 percent.');
     const saved = requireSavedCanvas();
     const inserted = await canvasStore.insertImage(saved.id, { assetId, alt, maxWidth, expectedProjectRevision: saved.projectRevision, documentPath: currentDocumentPath || undefined });
-    sourcePendingReload = true;
+    markSourcePendingReload();
     const asset = await canvasStore.getAsset(saved.id, assetId);
     const source = `data:${asset.mimeType};base64,${asset.data}`;
     const expression = `(() => {
@@ -803,6 +840,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
   }
 
   async function hide() {
+    invalidateRuntime('The canvas preview was hidden.');
     await cancelOutputCapture('The canvas preview was hidden.');
     previewHidden = true;
     view.setVisible(false);
@@ -812,6 +850,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
   }
 
   function destroy() {
+    invalidateRuntime('The application window was closed.');
     activeOutputCapture?.controller.abort('The application window was closed.');
     if (webContents.debugger.isAttached()) webContents.debugger.detach();
     if (!webContents.isDestroyed()) webContents.close();
@@ -840,7 +879,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     installProjectAssets,
     listCanvasDocuments: () => ({ ...canvasStore.listDocuments(currentCanvasId), contract: compactCanvasContract() }),
     openCanvasDocument: ({ path }) => openSaved(currentCanvasId, path),
-    markSourcePendingReload: () => { sourcePendingReload = true; },
+    markSourcePendingReload,
     listCanvasFiles: (args = {}) => readProject('listFiles', { includeAssets: false, ...args }),
     readCanvasFile: (args) => readProject('readFile', args),
     writeCanvasFile: (args) => mutateProject('writeFile', args),

@@ -249,6 +249,37 @@ function createCanvasMediaStore({ userDataPath, fileSystem = fs, idFactory = () 
     return { ...publicMetadata(saved.metadata), assetId: id, frames, totalFrames: saved.metadata.frames.length, includesAudio: false, sampled: true, limits: { maxFrames: MAX_VIDEO_FRAMES, maxFrameBytes: MAX_FRAME_BYTES }, contract: 'These are saved JPEG samples from the recorded canvas bitmap. Video timing between samples and audio are not represented.' };
   }
 
+  // Provenance and bytes are committed together by save's directory rename.
+  // Lookup is host-only and deliberately independent of the public 200-item list.
+  async function findExport({ projectId, instanceId, exportId } = {}) {
+    if (!ID_PATTERN.test(projectId || '') || !ID_PATTERN.test(instanceId || '') || typeof exportId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(exportId)) throw new Error('Export receipt identity is invalid.');
+    if (!fileSystem.existsSync(directory)) return null;
+    const rootStat = fileSystem.lstatSync(directory);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('Capture library directory is invalid.');
+    const matches = [];
+    for (const id of fileSystem.readdirSync(directory).filter((name) => ID_PATTERN.test(name))) {
+      const folder = capturePath(id), stat = fileSystem.lstatSync(folder);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Saved export receipt directory is invalid.');
+      const metadataFile = path.join(folder, 'metadata.json');
+      const metaStat = fileSystem.lstatSync(metadataFile);
+      if (!metaStat.isFile() || metaStat.isSymbolicLink()) throw new Error('Saved export receipt metadata is invalid.');
+      const saved = record(id), scope = saved.metadata.scope;
+      if (scope?.kind !== 'strudel-export') continue;
+      if (!ID_PATTERN.test(scope.projectId || '') || !ID_PATTERN.test(scope.instanceId || '') || typeof scope.exportId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(scope.exportId) || ['contentDigest','sourceRevision','kitDigest'].some((key) => typeof scope[key] !== 'string' || !/^[a-f0-9]{64}$/.test(scope[key])) || typeof scope.documentPath !== 'string' || !scope.documentPath || !Number.isFinite(scope.bpm) || !Number.isInteger(scope.cycles) || saved.metadata.mimeType !== 'audio/wav') throw new Error('Saved Strudel export receipt provenance is invalid.');
+      if (scope.projectId === projectId && scope.instanceId === instanceId && scope.exportId === exportId) matches.push(saved);
+    }
+    if (matches.length > 1) throw new Error('This export ID has ambiguous durable receipts. Inspect the saved Media assets before retrying.');
+    if (!matches.length) return null;
+    const saved = matches[0];
+    const source = await getPlaybackSource(saved.metadata.id);
+    const wavBytes = fileSystem.readFileSync(source.filename);
+    if (wavBytes.length !== source.bytes || crypto.createHash('sha256').update(wavBytes).digest('hex') !== source.digest) throw new Error('Saved Strudel export is corrupted.');
+    const { validateStrudelWav } = require('./strudel-export-policy');
+    const timing = validateStrudelWav(wavBytes, { bpm: saved.metadata.scope.bpm, cycles: saved.metadata.scope.cycles, tailSeconds: 0.5, parameterDigest: '0'.repeat(64), events: [] });
+    if (saved.metadata.duration !== timing.duration) throw new Error('Saved Strudel export receipt duration is inconsistent.');
+    return { ...publicMetadata(saved.metadata), wavBytes };
+  }
+
   async function list() {
     if (!fileSystem.existsSync(directory)) return [];
     const ids = new Set(fileSystem.readdirSync(directory).flatMap((filename) => ID_PATTERN.test(filename) ? [filename] : /^[a-f0-9]{32}\.(?:wav|mp3|webm|mp4)$/.test(filename) ? [filename.slice(0, 32)] : []));
@@ -259,7 +290,7 @@ function createCanvasMediaStore({ userDataPath, fileSystem = fs, idFactory = () 
     return result.sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 200);
   }
 
-  return { save, get, getMetadata, getPlaybackSource, updateMetadata, list, getFrames, getVideoFrames: getFrames, remove };
+  return { save, findExport, get, getMetadata, getPlaybackSource, updateMetadata, list, getFrames, getVideoFrames: getFrames, remove };
 }
 
 module.exports = { MAX_FRAME_BYTES, MAX_MEDIA_BYTES, MAX_VIDEO_FRAMES, createCanvasMediaStore };

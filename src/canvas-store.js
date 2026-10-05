@@ -561,6 +561,21 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return { id, title: project.title, version: project.version, manifest: project.manifest, documents: projectDocuments(project), contributions, projectRevision: projectRevision(project), updatedAt: project.updatedAt, files: Object.entries(project.files).map(([file, content]) => ({ path: file, bytes: Buffer.byteLength(content, 'utf8'), lines: content.split('\n').length, revision: digest(content), kind: file === project.manifest.entry ? 'entry' : file === 'state.json' ? 'state' : path.posix.extname(file).slice(1) })), contract: { source: 'Project files are persisted independently from the open runtime. Use reload_canvas to apply edits. Write dependency files before referencing them; remove references before deleting files. apply_canvas_file_patches validates and commits all matches against original files in one revision.', documents: 'Every authored HTML file is a canvas document identified by its stable relative path. Opening a document does not change the default manifest.entry. Documents share project source files, kits, media and state.json.', kits: 'Named dependencies are stored outside editable source.', assets: 'Attach assets before using them. Await EaselCanvas.assets.ready, then EaselCanvas.assets.getUrl(id) returns an offline URL for attached IDs without querying the DOM. Source can also use {{asset:id}} or a local assets/ path in HTML/CSS. Media bytes never appear in source reads.', modules: 'Classic scripts execute in document order at their tag position; async/defer are removed when inlined. Place app.js at the body end, or use type=module for deferred execution. ES modules support relative static and literal dynamic imports through a local blob import map; bare package/HTTP imports and computed dynamic imports are unsupported.', state: 'state.json is opt-in persistent JSON, available initially as window.__easelProjectState; runtime state is not saved automatically.' } };
   }
 
+  // Host-only accessor: never substitute installed kit bytes for a project pin.
+  function getProjectKitSource(id, name) {
+    if (name !== 'strudel') throw new Error('Only the pinned Strudel export dependency is supported.');
+    const kits = loadProject(id).manifest.kits.filter((kit) => kit.name === name);
+    if (kits.length !== 1 || !/^[a-f0-9]{64}$/.test(kits[0].digest || '')) throw new Error('The project Strudel kit is disabled or has no valid pin. Enable Strudel and reload.');
+    const filename = path.join(dependenciesPath, `${kits[0].digest}.js`);
+    let stat;
+    try { stat = fileSystem.lstatSync(filename); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; throw new Error('The pinned Strudel kit is missing. Reinstall its source before exporting.'); }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1 || stat.size > 8 * 1048576) throw new Error('The pinned Strudel kit is invalid or oversized (8 MiB limit).');
+    const source = fileSystem.readFileSync(filename, 'utf8');
+    if (Buffer.byteLength(source) !== stat.size || digest(source) !== kits[0].digest) throw new Error('The pinned Strudel kit is corrupted. Export cannot use an installed replacement.');
+    return { name, digest: kits[0].digest, source };
+  }
+
   function listFiles(id, { directory = '', offset = 0, limit = 100, includeAssets = true } = {}) {
     if (typeof includeAssets !== 'boolean') throw new Error('includeAssets must be a boolean.');
     if (directory && (!/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\/?$/.test(directory) || directory.split('/').includes('..'))) throw new Error('Project directory is invalid.');
@@ -969,7 +984,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return { ...commitProject(id, project), asset: saved, reference: `{{asset:${saved.id}}}`, effects: { source: 'asset attached; reference it from a source file', runtime: 'unchanged until reload' } };
   }
 
-  async function attachAssets(id, args = {}) {
+  async function attachAssets(id, args = {}, { beforeCommit } = {}) {
     if (!Array.isArray(args.assetIds) || args.assetIds.length < 1 || args.assetIds.length > 200 || args.assetIds.some((assetId) => typeof assetId !== 'string' || !ATTACHED_ID_PATTERN.test(assetId))) throw new Error('Attach between 1 and 200 valid asset IDs.');
     const project = loadProject(id);
     checkRevisions(project, undefined, args);
@@ -992,6 +1007,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
       assets.push(saved);
     }
     if (projectRevision(loadProject(id)) !== initialRevision) throw new Error('Canvas project changed while loading assets. No attachments were saved; retry from the latest revision.');
+    beforeCommit?.(); // Host lifecycle guard at the actual attachment boundary.
     const changed = projectRevision(project) !== initialRevision;
     const result = changed ? commitProject(id, project) : { id, title: project.title, updatedAt: project.updatedAt, projectRevision: initialRevision };
     return { ...result, atomic: true, changed, attachedCount: assets.length, assets: assets.map((asset) => ({ ...asset, reference: `{{asset:${asset.id}}}` })), effects: { source: changed ? 'all assets attached in one project revision' : 'assets already attached', runtime: 'unchanged until reload' } };
@@ -1138,7 +1154,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return { ...archive, id, title: project.title, fileName: `${slug}.zip`, bytes: archive.data.length, documents, manifest, contributions };
   }
 
-  return { attachAsset, attachAssets, createDocument, createEmpty, createProject, createTemplateDocument, deleteFile, deleteProject, detachAsset, exportProject, get, getAsset, getDocument, getDocumentSource, getLibraryAsset, getProject, getProjectKits, inspectAssetDeletion, inspectDeletion, inspectLibraryAssetDeletion, inspectProjectDeletion, insertImage, list, listAssets, listDocuments, listFiles, listLibraryAssets, migrateAssetReferences, patchFile, patchFiles, readAsset: getAsset, readFile, readProjectState, removeLibraryAsset, renameProject, restoreSourceSnapshot, save, saveProjectState, update, updateManifest, writeFile };
+  return { attachAsset, attachAssets, createDocument, createEmpty, createProject, createTemplateDocument, deleteFile, deleteProject, detachAsset, exportProject, get, getAsset, getDocument, getDocumentSource, getLibraryAsset, getProject, getProjectKits, getProjectKitSource, inspectAssetDeletion, inspectDeletion, inspectLibraryAssetDeletion, inspectProjectDeletion, insertImage, list, listAssets, listDocuments, listFiles, listLibraryAssets, migrateAssetReferences, patchFile, patchFiles, readAsset: getAsset, readFile, readProjectState, removeLibraryAsset, renameProject, restoreSourceSnapshot, save, saveProjectState, update, updateManifest, writeFile };
 }
 
 module.exports = { EMPTY_CANVAS_HTML, MAX_DOCUMENT_EXPORT_BYTES, MAX_PROJECT_EXPORT_BYTES, createCanvasStore };

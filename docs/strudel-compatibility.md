@@ -4,10 +4,10 @@
 
 The locally bundled kit and source package are unit/build verified. The narrow
 native-kit playback and OfflineAudioContext gate passed CI on 5 October 2026
-(see the dated evidence below). The editable starter remains gated until its
-extended controls/lifecycle fixture passes; native-kit proof alone is insufficient. WAV export is
+(see the dated evidence below). The actual editable starter passed its extended controls/lifecycle CI fixture at
+`2657bd4` on 5 October 2026. Creation is enabled when its kit is installed. WAV export is
 not advertised: `getStrudelCapabilities().audioExport` remains `false` until the
-separate bounded-export renderer is implemented and verified.
+separate bounded-export production path passes its Media/WAV runtime fixture.
 
 Pinned package: `@strudel/web@1.3.0`. Easel builds its published `web.mjs` source
 entry using esbuild and the repository lockfile, rather than copying the upstream
@@ -21,7 +21,7 @@ Source inspection supports `initStrudel({sync:false})`, `note(...).s("sine").pla
 `hush`, `getAudioContext`, `setAudioContext`, `setSuperdoughAudioController`,
 `registerSynthSounds`, and `superdough`. Native synth names are `sine`, `triangle`,
 `square`, and `sawtooth` (upstream also aliases `saw`). The native-kit checks
-below are proven; newly added starter controls/lifecycle checks are pending.
+below and the starter controls/lifecycle checks have passing CI evidence.
 
 - Start silent; use a real Play button gesture.
 - Call `initAudioOnFirstClick({disableWorklets:true})` before `initStrudel`.
@@ -61,7 +61,7 @@ trusted keyboard Play, nonzero analyzed native synth output, immediate muted Sto
 restart after all prior fixture voices have ended, four nonempty stereo offline synth segments,
 and zero network/CSP errors. Nonzero samples establish a signal, not a human
 listening test. The original native-kit fixture now has passing CI evidence below. The extended
-starter fixture is test preparation, not yet passing runtime evidence. Before restart it keeps output muted for at least three audio-context
+starter fixture also has passing CI evidence below. Before restart it keeps output muted for at least three audio-context
 seconds after Stop: this exceeds the pinned 0.5-CPS fixture's two-second note,
 scheduler lookahead/latency and release tail. Restart requires ten consecutive
 nonzero analyser samples after a cleared history. A mutation regression verifies
@@ -96,9 +96,90 @@ also finished green on that head. The retained probe evidence establishes:
 
 This proves the constrained native kit. It does **not** prove the new editable
 starter's controls, state restoration, graph reset, or a WAV file/Media save.
-`audioExport:false` and the starter's `strudelReady:false` host gate remain in
-place until their respective verification passes. No human listening check is
+`audioExport:false` remains until WAV/Media verification passes. The starter gate
+was subsequently satisfied by the evidence below. No human listening check is
 claimed by measured nonzero sample evidence.
+
+## Editable starter CI proof — 5 October 2026
+
+[Test run 37299938626](https://github.com/venetanji/easel-client/actions/runs/37299938626)
+passed at `2657bd4`. Its retained evidence verifies initial silence, one live
+context, trusted keyboard Play, immediate controls, old-voice graph isolation on
+restart, Escape while the canvas question is open, source-edit reload without
+autoplay, independent settings and clean scheduler/context disposal. The strict
+startup invariant also verifies the suspended AudioParam's current gain is zero.
+No network requests or CSP relaxation were needed. The coordinator supplied and
+verified this evidence; Task 6 does not claim another local Electron run.
+
+## Bounded WAV export contract and pending proof
+
+The save-only implementation is present. `STRUDEL_EXPORT_READY` and
+`getStrudelCapabilities().audioExport` remain false until the extended single
+runtime fixture passes for its exact published commit. Export controls explain
+this gate; standalone exported HTML requires Easel for Media saves.
+
+At click, the starter freezes the loaded source revision, BPM, volume, pattern
+version and selected onset events before any await. One cycle is four beats. It
+queries only 1–16 cycles, bounds total audio including a fixed 0.5-second tail to
+30 seconds, allows 4,096 onset events and at most 32 simultaneous native voices,
+and rounds total sample frames up exactly once at 48 kHz. Voice budgeting includes
+the pinned native synth's effective release (minimum 0.01 seconds) plus its
+0.01-second node-stop allowance; the output is explicitly
+cropped at the fixed tail. Stereo PCM16 WAV remains below 6 MiB.
+
+Authored event values support only `note`, `s`, `gain`, `attack`, `release`:
+
+- Sine/sin, triangle/tri, square/sqr, sawtooth/saw
+- Finite MIDI notes 24–96 or the pinned native note spelling/default-octave rules
+- Gain 0–1 (omission uses the pinned native 0.8 default) and attack/release 0–0.5 seconds; explicitly supplied null/undefined/non-finite controls reject
+- Rests and volume-zero loops are valid; volume multiplies event gain once
+
+Samples, effects, callbacks/stateful values, continuous events, additional
+control fields, `duration` and `clip` overrides are rejected with visible errors.
+Actual Hap callback context, including dominant/non-dominant `onTrigger`, rejects;
+plain source-location metadata remains harmless. The native bounded query uses
+`Pattern.query(new State(new TimeSpan(0, cycles)))` because `queryArc` swallows
+underlying query errors into the same empty array as an intentional rest.
+Authored query errors therefore fail export, while actual rests remain legal.
+
+The strict plain event's `envelopeMode` discriminates `native-default` from
+`explicit`. All-omitted native ADSR uses its pinned decay 0.05/sustain 0.6; numeric
+metadata 0.001/0.01 is not materialized as native controls in that branch.
+Explicit attack-only, release-only or explicitly-default-valued envelopes retain
+the native explicit decay/sustain behavior. No authored decay/sustain fields are
+introduced. In the isolated realm only, `setMaxPolyphony(eventCount)` prevents the
+native total-scheduled source map from stealing voices before offline time starts;
+the separate host 32-overlap/4,096-event caps still apply.
+
+These authored patterns can require a different future exporter; unsupported
+semantics are never silently stripped or synthesized using a replacement engine.
+
+The host binds reachable authored source to ordered project-pinned kit
+descriptors, verifies the exact cached Strudel bytes, and checks source/runtime
+identity before rendering and saving. Native same-URL top-level replacement invalidates loaded-source identity immediately; only host source reload restores it. Same-document fragment navigation is preserved. Source edits, failed/pending reload, hide,
+switch, renderer loss and cleanup immediately invalidate the export token. The
+disposable no-preload sandbox uses the existing canvas CSP, denies permissions,
+navigation and every request except its host-owned document, and is destroyed on
+cancel or a 30-second wall-clock watchdog. OfflineAudioContext has no close API;
+no upstream download helper or live Strudel globals are used.
+
+RIFF chunks, PCM format, exact frame/data length, rate, channels, bit depth,
+duration and byte budgets are validated before `CAPTURE_MEDIA.save`. Provenance
+and WAV bytes commit at the same existing Media directory rename. Host-only
+receipt lookup is independent of the public 200-item list: restart/eviction
+retries recover the original asset, while changed content, ambiguous receipts or
+corrupt bytes reject. Cancellation before save creates no asset. Once save is
+admitted, its completion is awaited; a successful asset survives cancellation,
+attachment or notification failure, with a Media recovery receipt. Attachment
+checks the captured project/runtime at its actual post-await commit boundary.
+Nothing is sent to chat automatically, and no microphone permission is requested.
+
+The single CI fixture now additionally drives the actual editable export action,
+production bridge/controller/renderer, exact pinned kit and real Media storage.
+It decodes saved/reopened WAV bytes (not a native save-dialog/download), checks rest/onset/tail timing and exact
+frames, tests zero and half-volume scaling, identical retry idempotency, and
+sustained live audio/context identity. It additionally measures omitted/native-default versus explicit envelope/gain branches, checks the late nonzero segment of a >128-event score with one long early note, and observes the actual Electron same-URL top-level navigation event. This extension is unit-tested but awaits
+its actual sandboxed CI execution; local unit/build success is not runtime proof.
 
 ## Editable starter and Task 6 handoff
 
@@ -106,7 +187,7 @@ claimed by measured nonzero sample evidence.
 `{files:{'index.html': html}, entry:'index.html'}`. The trusted service supplies its
 new opaque instance ID and validates the single-entry result. The existing atomic
 store extracts ordinary `app.js` and `styles.css` alongside the instance HTML.
-There is no source rewrite of older sketches and no new renderer IPC.
+There is no source rewrite of older sketches. Task 6 adds only a narrow loaded-source/export/cancel renderer handoff.
 
 The editable source exposes `createPattern(params)` and
 `window.EaselStrudel.snapshotPattern() -> {pattern,params}`. The first snapshot
@@ -210,4 +291,4 @@ rebuilds from the extracted material using its archived runtime dependencies and
 local copies of already-installed build tools, checking identical runtime bytes.
 `test/strudel-runtime-probe.test.js` tests native-focus gating and deliberately
 breaks second-Play scheduling to reject the old-voice restart false positive.
-`npm run build:canvas-kits` validates all kit scripts. Neither command substitutes for the pending extended starter/Media renderer gates.
+`npm run build:canvas-kits` validates all kit scripts. Neither command substitutes for the pending production WAV/Media runtime gate.

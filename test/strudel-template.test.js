@@ -34,7 +34,7 @@ function pinnedRuntime(dispatch) {
     clearInterval(id) { timers.delete(id); },
   };
 }
-function harness({ id = ID, preserved = {}, saved = {}, resumeGate, startGate, initGate, initError, audioError, patternError, usePinnedScheduler = false, firstTickError = false } = {}) {
+function harness({ id = ID, preserved = {}, saved = {}, resumeGate, startGate, initGate, initError, audioError, patternError, usePinnedScheduler = false, firstTickError = false, exportHost, exportEvents = [] } = {}) {
   const { files, entry } = factory()({ instanceId: id });
   const html = files[entry];
   const elements = new Map();
@@ -61,16 +61,16 @@ function harness({ id = ID, preserved = {}, saved = {}, resumeGate, startGate, i
   const repl = { scheduler, setCps(value) { if (usePinnedScheduler) scheduler.setCps(value); else scheduler.cps = value; }, async setPattern(pattern, autoplay) { assert.equal(autoplay, false); this.pattern = pattern; if (usePinnedScheduler) await scheduler.setPattern(pattern, false); },
     async start() { if (usePinnedScheduler) { counts.starts++; return scheduler.start(); } await options.beforeStart?.(); if (startGate) await startGate.promise; counts.starts++; counts.activeSchedulers++; scheduler.started = true; options.onToggle?.(true); },
     stop() { if (usePinnedScheduler) { scheduler.stop(); return; } counts.activeSchedulers = 0; scheduler.started = false; options?.onToggle?.(false); } };
-  const pattern = { s(value) { this.waveform = value; return this; }, gain(value) { this.eventGain = value; return this; }, attack() { return this; }, release() { return this; }, queryArc() { if (firstTickError) { firstTickError = false; throw new Error('First tick query failed'); } return []; } };
-  const strudel = { getAudioContext: () => context, getSuperdoughAudioController: () => controller,
+  const pattern = { s(value) { this.waveform = value; return this; }, gain(value) { this.eventGain = value; return this; }, attack() { return this; }, release() { return this; }, query(state) { return this.queryArc(Number(state.span.begin), Number(state.span.end)).map(hap => ({ ...hap, value: vm.runInContext(`JSON.parse(${JSON.stringify(JSON.stringify(hap.value))})`, sandbox) })); }, queryArc() { if (exportEvents.length) return exportEvents; if (firstTickError) { firstTickError = false; throw new Error('First tick query failed'); } return []; } };
+  const strudel = { State: class { constructor(span) { this.span = span; } }, TimeSpan: class { constructor(begin, end) { this.begin = begin; this.end = end; } }, getAudioContext: () => context, getSuperdoughAudioController: () => controller,
     async initStrudel(value) { counts.init++; options = value; if (initGate) await initGate.promise; if (initError) throw new Error('Initialization failed'); return repl; },
     async initAudio(value) { assert.equal(value.disableWorklets, true); if (audioError && !audioFailed) { audioFailed = true; throw new Error('Audio unavailable'); } },
     hush() { counts.hush++; repl.stop(); }, note() { counts.patterns++; if (patternError) throw new Error('Invalid pattern'); return pattern; } };
   let reloaded = false;
-  const window = { strudel, __easelProjectState: saved, location: { reload() { reloaded = true; } },
+  const window = { strudel, EaselHost: exportHost, __easelProjectState: saved, location: { reload() { reloaded = true; } },
     EaselCanvas: { registerApp(value) { app = value; if (preserved[value.id]) value.restoreState(preserved[value.id]); } },
     addEventListener(type, fn) { listeners.set('window:' + type, fn); }, removeEventListener(type) { listeners.delete('window:' + type); } };
-  const sandbox = { window, strudel, document: { getElementById: (key) => elements.get(key),
+  const sandbox = { window, strudel, crypto: require('node:crypto').webcrypto, TextEncoder, document: { getElementById: (key) => elements.get(key),
     addEventListener(type, fn, capture) { listeners.set(type, { fn, capture }); }, removeEventListener(type) { listeners.delete(type); } }, navigator: { userActivation: { isActive: true } }, console };
   vm.createContext(sandbox);
   for (const match of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) vm.runInContext(match[1], sandbox);
@@ -171,4 +171,42 @@ test('suspended_context_mute_updates_current_gain_before_any_render_quantum', as
   assert.equal(h.controller.output.destinationGain.gain.value, 0);
   assert.equal(h.scheduledGain(), 0);
   assert.equal(h.app().getState().playing, false);
+});
+
+
+function exportHarness(options = {}) {
+  let loadedContext, request;
+  const gate = deferred(), calls = [];
+  const host = {
+    onStrudelExportContext(callback) { loadedContext = callback; return () => { loadedContext = undefined; }; },
+    async strudelExport(value) { calls.push(value); if (value.action === 'cancel') return { cancelled: true }; request = value.input; await gate.promise; return { assetId: 'f'.repeat(32), attachmentStatus: 'attached' }; },
+  };
+  const events = [{ whole: { begin: 0, end: 0.25 }, value: { note: 'c4', s: 'sine', gain: 0.3, attack: 0.01, release: 0.05 }, hasOnset: () => true }];
+  const h = harness({ exportHost: host, exportEvents: events, ...options });
+  return { ...h, calls, gate, request: () => request, loaded: (value = { exportReady: true, sourceRevision: 'c'.repeat(64) }) => { assert.equal(typeof loadedContext, 'function', 'template subscribes to its loaded source context'); loadedContext(value); }, events };
+}
+async function waitExportRequest(h) { for (let i = 0; i < 50 && !h.request(); i++) await new Promise(resolve => setTimeout(resolve, 1)); assert.ok(h.request()); }
+test('export_freezes_source_parameters_and_events_before_any_await', async () => {
+  const h = exportHarness(); await flush(); h.loaded(); h.input('bpm', '120'); h.input('volume', '0.5'); h.element('cycles').value = '1';
+  assert.equal(h.element('export').disabled, false);
+  const exporting = h.window.EaselStrudel.exportLoop();
+  h.input('bpm', '240'); h.input('volume', '1'); h.events[0].value.gain = 0.9;
+  await waitExportRequest(h);
+  const request = h.request(); assert.equal(request.expectedSourceRevision, 'c'.repeat(64)); assert.equal(request.snapshot.bpm, 120); assert.equal(request.snapshot.events[0].gain, 0.15); assert.equal(request.snapshot.events[0].durationSeconds, 0.5); assert.match(request.snapshot.parameterDigest, /^[a-f0-9]{64}$/); assert.equal(h.counts.starts, 0);
+  h.gate.resolve(); await exporting; assert.match(h.element('export-status').textContent, /saved.*Media/i);
+});
+test('export_cancel_is_save_only_and_duplicate_clicks_do_not_duplicate_request', async () => {
+  const h = exportHarness(); await flush(); h.loaded(); h.element('cycles').value = '1';
+  const a = h.window.EaselStrudel.exportLoop(), b = h.window.EaselStrudel.exportLoop(); await waitExportRequest(h);
+  await h.window.EaselStrudel.cancelExport(); assert.equal(h.calls.filter(call => call.action === 'export').length, 1); assert.equal(h.calls.filter(call => call.action === 'cancel').length, 1); assert.equal(h.element('export').disabled, true);
+  h.gate.resolve(); await Promise.all([a,b]); assert.match(h.element('export-status').textContent, /saved.*Media/i); assert.equal(h.element('cancel-export').disabled, true);
+});
+test('export_gated_standalone_and_unsupported_patterns_show_clear_errors', async () => {
+  const standalone = harness(); await flush(); assert.equal(standalone.element('export').disabled, true); assert.match(standalone.element('export-status').textContent, /Easel|runtime/i);
+  const h = exportHarness(); await flush(); h.loaded({ exportReady: false, reason: 'WAV runtime gate pending' }); assert.equal(h.element('export').disabled, true); assert.match(h.element('export-status').textContent, /pending/i);
+  h.loaded(); h.element('cycles').value = '1'; h.events[0].value.room = 0.5; await h.window.EaselStrudel.exportLoop(); assert.match(h.element('export-status').textContent, /Unsupported/); assert.equal(h.calls.length, 0);
+});
+test('dispose_cancels_export_and_ignores_late_ui_completion', async () => {
+  const h = exportHarness(); await flush(); h.loaded(); h.element('cycles').value = '1'; const p = h.window.EaselStrudel.exportLoop(); await waitExportRequest(h);
+  await h.app().dispose(); const before = h.element('export-status').textContent; h.gate.resolve(); await p; assert.equal(h.calls.filter(call => call.action === 'cancel').length, 1); assert.equal(h.element('export-status').textContent, before); assert.equal(h.element('export').disabled, true);
 });

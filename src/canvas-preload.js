@@ -1,6 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('EaselHost', Object.freeze({
+  strudelExport: (input) => ipcRenderer.invoke('canvas:strudel-export', input),
+  onStrudelExportContext(callback) {
+    if (typeof callback !== 'function') throw new TypeError('Strudel export context listener must be a function.');
+    const listener = (_event, input) => callback(input);
+    ipcRenderer.on('canvas:strudel-export-context', listener);
+    return () => ipcRenderer.removeListener('canvas:strudel-export-context', listener);
+  },
   timeline: (input) => ipcRenderer.invoke('canvas:timeline', input),
   onTimelineChanged(callback) {
     if (typeof callback !== 'function') throw new TypeError('Timeline listener must be a function.');

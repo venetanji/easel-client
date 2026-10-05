@@ -1,4 +1,5 @@
 const { validateOpaqueId } = require('./ipc-contract');
+const { validateStrudelSnapshot, queryStrudelSnapshot } = require('./strudel-export-policy');
 
 // This function is copied into ordinary editable project source, not evaluated.
 function bootStrudelSketch(instanceId) {
@@ -9,6 +10,56 @@ function bootStrudelSketch(instanceId) {
   const state = { bpm: 100, volume: 0.5, patternVersion: 1, playing: false };
   let context, controller, repl, disposed = false, pending = false, epoch = 0, startingEpoch = -1;
   let initializationFailed = false, disposal, preparedPattern;
+  const exportButton = control('export'), cancelExportButton = control('cancel-export');
+  const cyclesInput = control('cycles'), exportStatus = control('export-status');
+  let exportContext, exportPending = false, exportId, cancelRequested = false;
+  const reportExport = (message, error = false) => {
+    if (disposed) return;
+    exportStatus.textContent = message;
+    exportStatus.setAttribute('role', error ? 'alert' : 'status');
+  };
+  function syncExportControls() {
+    exportButton.disabled = disposed || !repl || !exportContext?.exportReady || exportPending;
+    cyclesInput.disabled = disposed || exportPending;
+    cancelExportButton.disabled = disposed || !exportPending || cancelRequested;
+  }
+  function receiveExportContext(value) {
+    exportContext = value;
+    syncExportControls();
+    reportExport(value?.exportReady ? 'Export a bounded loop straight to Media.' : value?.reason || 'WAV export is awaiting its runtime compatibility check.');
+  }
+  const unsubscribeExport = window.EaselHost?.onStrudelExportContext?.(receiveExportContext);
+  async function exportLoop() {
+    if (disposed || exportPending || !repl || !exportContext?.exportReady) return;
+    exportPending = true;
+    cancelRequested = false;
+    exportId = crypto.randomUUID();
+    // Capture loaded source, local parameters and queried score before any await.
+    const expectedSourceRevision = exportContext.sourceRevision;
+    syncExportControls();
+    reportExport('Rendering loop… Cancel disposes the separate export renderer.');
+    try {
+      const { params, pattern } = snapshotPattern();
+      const cycles = Number(cyclesInput.value);
+      const frozen = queryStrudelSnapshot(pattern, params, cycles, '0'.repeat(64), window.strudel);
+      const digestBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(params)));
+      const parameterDigest = [...new Uint8Array(digestBytes)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+      if (disposed || cancelRequested) return;
+      const snapshot = Object.freeze({ ...frozen, parameterDigest });
+      const receipt = await window.EaselHost.strudelExport({ action: 'export', input: { exportId, expectedSourceRevision, snapshot } });
+      reportExport(receipt.warning || 'Loop saved in Media. Open Media to play, attach or download it.');
+      return receipt;
+    } catch (error) { reportExport(`Export failed: ${error.message}. Edit the pattern or reduce cycles, then try again.`, true); }
+    finally { exportPending = false; exportId = undefined; syncExportControls(); }
+  }
+  async function cancelExport() {
+    if (!exportPending || cancelRequested) return;
+    cancelRequested = true;
+    syncExportControls();
+    reportExport('Cancelling… If saving has started, a successful loop will remain in Media.');
+    try { await window.EaselHost.strudelExport({ action: 'cancel', input: { exportId } }); }
+    catch (error) { reportExport(`Cancellation could not reach this runtime: ${error.message}`, true); }
+  }
   const bounded = (value, min, max, fallback) => typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
   function report(message, error = false) {
     status.textContent = message;
@@ -118,7 +169,12 @@ function bootStrudelSketch(instanceId) {
   const escape = (event) => { if (event.key === 'Escape') stop(); };
   function dispose() {
     if (disposal) return disposal;
+    if (exportPending && !cancelRequested) cancelExport();
     disposed = true;
+    unsubscribeExport?.();
+    syncExportControls();
+    exportButton.removeEventListener('click', exportLoop);
+    cancelExportButton.removeEventListener('click', cancelExport);
     stop();
     playButton.disabled = true;
     playButton.removeEventListener('click', play);
@@ -148,11 +204,15 @@ function bootStrudelSketch(instanceId) {
       report(`Pattern error: ${message.slice(0, 240)}. Edit app.js, then Retry Play.`, true);
     }
   }
-  const api = { getState, restoreState, stop, patternChanged, snapshotPattern };
+  const api = { getState, restoreState, stop, patternChanged, snapshotPattern, exportLoop, cancelExport };
   window.EaselStrudel = api;
   syncControls();
   restoreState(window.__easelProjectState?.strudel?.[instanceId]);
   window.EaselCanvas?.registerApp({ id, dispose, getState, restoreState });
+  exportButton.addEventListener('click', exportLoop);
+  cancelExportButton.addEventListener('click', cancelExport);
+  reportExport(window.EaselHost?.strudelExport ? 'WAV export is awaiting its loaded runtime check.' : 'Open this project in Easel to export loops to Media.');
+  syncExportControls();
   playButton.addEventListener('click', play);
   stopButton.addEventListener('click', stopClick);
   bpmInput.addEventListener('input', updateBpm);
@@ -174,6 +234,7 @@ function bootStrudelSketch(instanceId) {
       });
       if (disposed) { window.strudel.hush(); return; }
       repl.setCps(state.bpm / 240);
+      syncExportControls();
       playButton.disabled = false;
       report('Ready. Press Play to listen.');
     } catch (error) {
@@ -196,8 +257,12 @@ function createStrudelTemplate({ instanceId } = {}) {
 <div class="transport" aria-label="Playback"><button type="button" id="${id}-play">Play</button><button type="button" id="${id}-stop">Stop</button></div>
 <p id="${id}-status" role="status" aria-live="polite">Preparing sound…</p><p class="muted">Press Escape to stop, including while a canvas question is open.</p>
 <div class="controls"><label for="${id}-bpm">Tempo · BPM<input id="${id}-bpm" type="number" min="30" max="240" step="1" value="100"></label><label for="${id}-volume">Volume <output id="${id}-volume-value" for="${id}-volume">50%</output><input id="${id}-volume" type="range" min="0" max="1" step="0.01" value="0.5"></label></div>
+<section aria-label="Loop export"><h2>Save a loop</h2><label for="${id}-cycles">Cycles · four beats each<input id="${id}-cycles" type="number" min="1" max="16" step="1" value="1"></label><div class="transport"><button type="button" id="${id}-export" disabled>Export loop</button><button type="button" id="${id}-cancel-export" disabled>Cancel export</button></div><p id="${id}-export-status" role="status" aria-live="polite">WAV export is awaiting its runtime compatibility check.</p><p class="muted">Up to 16 cycles and 30 seconds including a 0.5-second tail. Stereo 48 kHz WAV saves to Media. Export supports only note, s, gain, attack and release fields: native sine/triangle/square/saw aliases, MIDI notes 24–96, gain 0–1 and envelopes up to 0.5 seconds. Samples, effects, callbacks, continuous controls, duration and clip overrides receive an error. The fixed tail crops the native synth’s final 0.01-second stop allowance.</p></section>
 <h2>Change the music</h2><p>Open this sketch’s <code>app.js</code> in Files and edit <code>createPattern(params)</code>. Try changing <code>c4 e4 g4 b4</code> or choose <code>sine</code>, <code>triangle</code>, <code>square</code>, or <code>sawtooth</code>. One cycle is four beats.</p><p class="muted">Reload after editing, then press Play. Source changes stop playback; tempo and volume respond immediately. This starter uses native synths only, with no remote samples, microphone, effects or live-code console.</p>
-<footer>WAV export is not available yet. Settings restore on preserved-state reload; playback never restores. Saved project settings, when supplied, belong under strudel → this instance ID.</footer></main><script>
+<footer>This build enables WAV export only after its end-to-end runtime check. Settings restore on preserved-state reload; playback never restores. Saved project settings, when supplied, belong under strudel → this instance ID.</footer></main><script>
+// Plain-data export policy, shared with the host. No executable events cross the bridge.
+${validateStrudelSnapshot.toString()}
+${queryStrudelSnapshot.toString()}
 // EDIT THIS PATTERN. Mini-notation strings are data, not executable REPL code.
 // Keep event gain here; params.volume is applied separately at the final output.
 function createPattern(params) {
