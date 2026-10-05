@@ -42,7 +42,7 @@
     "easel"
   ],
   "author": "",
-  "license": "ISC",
+  "license": "GPL-3.0-or-later",
   "devDependencies": {
     "@strudel/web": "1.3.0",
     "electron": "^44.4.5",

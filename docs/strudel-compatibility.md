@@ -101,7 +101,8 @@ The source directory contains:
   source files where published, source maps, compiled modules, and notices;
   nested dependency versions retain their own paths
 - `easel/`: the local adapter, build script, kit helper, package manifests,
-  workspace manifest, and lockfile
+  workspace manifest, lockfile, root/workspace GPL LICENSE and NOTICE files, and
+  the retained creative-skills MIT grant, all copied byte-for-byte
 - `README.txt`: build instructions and remaining distribution review caveats
 
 A later project-ZIP export carrying Strudel must copy the intact source archive

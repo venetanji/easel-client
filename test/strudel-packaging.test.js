@@ -32,6 +32,21 @@ function unzip(buffer) {
   return files;
 }
 
+test('strudel_source_archive_preserves_merged_easel_license_material', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-strudel-licenses-'));
+  try {
+    const result = buildStrudelKit(directory);
+    const contents = unzip(fs.readFileSync(result.sourceArchivePath));
+    for (const filename of ['LICENSE', 'NOTICE', 'packages/media-mcp/LICENSE', 'packages/media-mcp/NOTICE', 'licenses/creative-skills-MIT.txt']) {
+      const sourcePath = `strudel-source/easel/${filename}`;
+      assert.ok(contents.has(sourcePath), `Easel source licensing material missing: ${filename}`);
+      assert.deepEqual(contents.get(sourcePath), fs.readFileSync(path.join(root, filename)), `Easel source licensing material changed: ${filename}`);
+    }
+    assert.equal(JSON.parse(contents.get('strudel-source/easel/package.json')).license, 'GPL-3.0-or-later');
+    assert.equal(JSON.parse(contents.get('strudel-source/packages/@strudel/web/package.json')).license, 'AGPL-3.0-or-later');
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('actual_electron_filter_and_transform_preserve_every_source_byte', async () => {
   const appRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-strudel-packaging-'));
   try {

@@ -468,7 +468,7 @@ test('unsupported bundled skill copies stay editable but cannot be enabled', () 
   const list = element();
   renderSkillList({ document, listElement: list, skills: [legacy], compatibility: (skill) => skillCompatibility(skill, catalog) });
   assert.equal(list.querySelectorAll('input')[0].disabled, true);
-  assert.match(list.textContent, /Requires a CLI/);
+  assert.match(list.textContent, /removed from Easel/);
   assert.equal(list.querySelectorAll('button').find((button) => button.textContent === 'Edit').disabled, false);
 });
 
@@ -480,4 +480,14 @@ test('chat submit forwards an exact explicit timeline selection without renderer
     document: { createElement: (tag) => element(tag) }, input, button: element('button'), statusElement: element(), messagesElement: element(), timelineSelection: selection });
   assert.deepEqual(options.timelineSelection, selection);
   assert.equal(options.timelineContext, undefined);
+});
+
+test('removed skill copies stay disabled without an installed catalog and preserve their text', () => {
+  for (const name of ['hyperframes', 'HyperFrames', 'hyperframes-animation', 'orbit-card', 'talking-head-recut']) {
+    const legacy = { id: 'custom-copy', name, instructions: 'Preserved instructions', enabled: true };
+    assert.equal(skillCompatibility(legacy, []).supported, false, name);
+    assert.equal(legacy.instructions, 'Preserved instructions');
+  }
+  assert.equal(skillCompatibility({ id: 'pack-installed-hyperframes', name: 'Renamed copy' }, []).supported, false);
+  assert.equal(skillCompatibility({ id: 'custom', name: 'My visual style' }, []).supported, true);
 });

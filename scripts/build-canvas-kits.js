@@ -89,7 +89,9 @@ function buildStrudelKit(destination = outputPath) {
   new vm.Script(bundle);
   fs.mkdirSync(destination, { recursive: true });
   fs.writeFileSync(path.join(destination, 'strudel.js'), bundle);
-  for (const filename of ['package.json', 'package-lock.json', 'packages/media-mcp/package.json', 'scripts/build-canvas-kits.js', 'src/strudel-kit.js', 'src/canvas-kits.js', 'src/project-zip.js']) {
+  for (const filename of ['package.json', 'package-lock.json', 'packages/media-mcp/package.json',
+    'LICENSE', 'NOTICE', 'packages/media-mcp/LICENSE', 'packages/media-mcp/NOTICE', 'licenses/creative-skills-MIT.txt',
+    'scripts/build-canvas-kits.js', 'src/strudel-kit.js', 'src/canvas-kits.js', 'src/project-zip.js']) {
     const target = path.join(sourceRoot, 'easel', filename);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(path.join(root, filename), target);
@@ -107,6 +109,7 @@ function buildStrudelKit(destination = outputPath) {
     'packages/ preserves the installed published packages, preferred source files when provided, licenses, and upstream unminified distribution.\n' +
     'manifest.json and easel/package-lock.json record the installed dependency graph and integrity hashes.\n' +
     'easel/ contains the local adapter and build inputs; npm ci and npm run build:canvas-kits rebuild the local wrapper.\n' +
+    'easel/ preserves the repository GPL license and notices byte-for-byte; dependencies retain their own upstream terms.\n' +
     'The runtime is rebuilt from web.mjs with pinned installed dependencies, not copied from the upstream all-in-one IIFE.\n' +
     'manifest.json hashes every actual esbuild input; esbuild-metafile.json records the composition.\n' +
     'Release/ZIP publication remains gated on missing upstream license texts and corresponding-source review; this material alone is not a claim of complete AGPL compliance.\n' +
