@@ -23,6 +23,33 @@ function hasRestartSignal(state) {
     state.peaks.slice(-10).every((peak) => peak > 0.001);
 }
 
+function summarizeProbeState(state = {}) {
+  const clip = (value, limit = 1000) => String(value ?? '').slice(0, limit);
+  const last = (values, limit) => Array.isArray(values) ? values.slice(-limit) : [];
+  const peaks = last(state.peaks, 100).filter(Number.isFinite);
+  return {
+    phase: clip(state.phase, 80), ready: state.ready === true, playEvents: state.playEvents || 0, plays: state.plays || 0,
+    audioState: clip(state.audioState, 40), audioTime: state.audioTime, schedulerStarted: state.schedulerStarted,
+    trustedKeyboardPlay: state.trustedKeyboardPlay, stopped: state.stopped, stoppedAt: state.stoppedAt,
+    peakCount: peaks.length, maxPeak: peaks.length ? Math.max(...peaks) : 0, lastPeak: peaks.at(-1),
+    errors: last(state.errors, 20).map((error) => clip(error)),
+    violations: last(state.violations, 20).map((item) => ({ directive: clip(item.directive, 100), blocked: clip(item.blocked, 200) })),
+    nativeInput: last(state.nativeInput, 12).map((item) => ({ type: clip(item.type, 40), key: clip(item.key, 40),
+      target: clip(item.target, 80), trusted: item.trusted === true, active: item.active === true })),
+    logs: last(state.logs, 20).map((item) => ({ type: clip(item.type, 40), message: clip(item.message) })),
+  };
+}
+
+async function waitForProbeState(read, predicate, label, timeoutMs = 6000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await read();
+    if (predicate(value)) return value;
+    if (Date.now() >= deadline) throw new Error(`${label} timed out: ${JSON.stringify(summarizeProbeState(value))}`);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  }
+}
+
 async function sendKeyboardActivation(win, id) {
   win.show();
   win.focus();
@@ -34,11 +61,24 @@ async function sendKeyboardActivation(win, id) {
   }
   await win.webContents.executeJavaScript(`document.getElementById(${JSON.stringify(id)}).focus(); void 0;`);
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+  // Electron keyDown becomes rawKeyDown. Chromium activates an Enter button
+  // on keypress, so its native char event is required between down and up.
+  win.webContents.sendInputEvent({ type: 'char', keyCode: 'Enter' });
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
 }
 
 function installDiagnostics() {
-  window.probe = { errors: [], violations: [], plays: 0, peaks: [], ready: false };
+  window.probe = { errors: [], violations: [], plays: 0, playEvents: 0, peaks: [], ready: false, phase: 'initializing', nativeInput: [], logs: [] };
+  for (const type of ['keydown', 'keypress', 'keyup', 'click']) {
+    document.addEventListener(type, (event) => {
+      probe.nativeInput.push({ type, key: event.key, target: event.target?.id, trusted: event.isTrusted, active: navigator.userActivation.isActive });
+      if (probe.nativeInput.length > 12) probe.nativeInput.shift();
+    }, true);
+  }
+  document.addEventListener('strudel.log', (event) => {
+    probe.logs.push({ message: String(event.detail?.message || '').slice(0, 1000), type: event.detail?.type });
+    if (probe.logs.length > 20) probe.logs.shift();
+  });
   window.addEventListener('error', (event) => probe.errors.push(event.message));
   window.addEventListener('unhandledrejection', (event) => probe.errors.push(String(event.reason?.stack || event.reason)));
   document.addEventListener('securitypolicyviolation', (event) => probe.violations.push({ directive: event.effectiveDirective, blocked: event.blockedURI }));
@@ -61,6 +101,7 @@ async function playbackProbe() {
       analyser.getFloatTimeDomainData(values);
       let peak = 0;
       for (const value of values) peak = Math.max(peak, Math.abs(value));
+      state.audioState = context.state;
       state.audioTime = context.currentTime;
       state.schedulerStarted = repl.scheduler.started;
       state.peaks.push(peak);
@@ -68,18 +109,25 @@ async function playbackProbe() {
     }, 20);
     document.querySelector('#play').onclick = async (event) => {
       try {
+        state.playEvents = (state.playEvents || 0) + 1;
+        state.phase = 'play-click';
         check(event.isTrusted && navigator.userActivation.isActive, 'Play requires trusted keyboard activation.');
         state.trustedKeyboardPlay = event.detail === 0;
         // Upstream first-click initialization only observes mousedown. Keyboard
         // Play explicitly resumes and initializes the same native-only context.
+        state.phase = 'resuming-audio';
         await context.resume();
+        state.phase = 'initializing-native-audio';
         await strudel.initAudio({ disableWorklets: true });
         output.destinationGain.gain.setValueAtTime(1, context.currentTime);
+        state.phase = 'scheduling-pattern';
         strudel.note('a4').s('sine').gain(0.3).release(0.05).play();
         state.plays++;
+        state.phase = 'awaiting-sound';
       } catch (error) { state.errors.push(error.stack || String(error)); }
     };
     document.querySelector('#stop').onclick = () => {
+      state.phase = 'stopping';
       strudel.hush();
       // hush stops scheduling; mute the output explicitly to silence tails.
       output.destinationGain.gain.setValueAtTime(0, context.currentTime);
@@ -88,6 +136,7 @@ async function playbackProbe() {
     };
     state.dispose = async () => { strudel.hush(); output.disconnect(); await context.close(); };
     state.ready = true;
+    state.phase = 'ready';
   } catch (error) { state.errors.push(error.stack || String(error)); }
 }
 
@@ -120,6 +169,7 @@ async function offlineProbe() {
     strudel.setSuperdoughAudioController(null);
     strudel.setAudioContext(null);
     state.ready = true;
+    state.phase = 'ready';
   } catch (error) { state.errors.push(error.stack || String(error)); }
 }
 
@@ -136,7 +186,9 @@ function fixtureHtml(bundle, offline) {
 async function electronMain() {
   const { app, BrowserWindow } = require('electron');
   const directory = process.env.EASEL_STRUDEL_PROBE_DIR;
-  const stage = (name) => fs.appendFileSync(path.join(directory, 'stages.log'), `${name}\n`);
+  const diagnostic = { status: 'running', phase: 'startup', snapshots: {} };
+  const persist = () => fs.writeFileSync(path.join(directory, 'evidence.json'), JSON.stringify(diagnostic, null, 2));
+  const stage = (name) => { diagnostic.phase = name; persist(); fs.appendFileSync(path.join(directory, 'stages.log'), `${name}\n`); };
   stage('electron-main-entered');
   app.setPath('userData', path.join(directory, 'user-data'));
   app.setPath('cache', path.join(directory, 'cache'));
@@ -144,7 +196,8 @@ async function electronMain() {
   app.enableSandbox();
   const windows = [];
   const requests = [];
-  const watchdog = setTimeout(() => { stage('watchdog-timeout'); app.exit(1); }, TIMEOUT_MS);
+  const labels = new Map();
+  const watchdog = setTimeout(() => { diagnostic.status = 'failed'; diagnostic.error = 'Global watchdog timeout'; stage('watchdog-timeout'); app.exit(1); }, TIMEOUT_MS);
   const check = (value, message) => { if (!value) throw new Error(message); };
   try {
     await app.whenReady();
@@ -154,6 +207,7 @@ async function electronMain() {
         nodeIntegration: false, backgroundThrottling: false, autoplayPolicy: 'document-user-activation-required',
         partition: `strudel-probe-${filename}` } });
       windows.push(win);
+      labels.set(win, filename);
       const url = pathToFileURL(path.join(directory, filename)).href;
       win.webContents.session.setPermissionRequestHandler((_web, _permission, callback) => callback(false));
       win.webContents.session.setPermissionCheckHandler(() => false);
@@ -169,31 +223,33 @@ async function electronMain() {
     }
     async function read(win) {
       const result = await win.webContents.executeJavaScript('JSON.parse(JSON.stringify(window.probe))');
+      diagnostic.snapshots[labels.get(win)] = summarizeProbeState(result);
+      persist();
       check(!result.errors.length && !result.violations.length, JSON.stringify(result));
       return result;
     }
-    async function until(win, predicate) {
-      for (;;) {
-        const value = await read(win);
-        if (predicate(value)) return value;
-        await new Promise((resolve) => setTimeout(resolve, 30));
-      }
+    async function until(win, predicate, label) {
+      stage(`waiting-${label}`);
+      const value = await waitForProbeState(() => read(win), predicate, label);
+      stage(label);
+      return value;
     }
     const live = await open('playback.html');
-    const initial = await until(live, (state) => state.ready);
-    stage('playback-ready');
+    const initial = await until(live, (state) => state.ready, 'playback-ready');
     check(initial.plays === 0 && initial.peaks.every((peak) => peak === 0), 'Playback began before Play.');
+    stage('sending-first-play');
     await sendKeyboardActivation(live, 'play');
-    const playing = await until(live, (state) => state.plays === 1 && state.peaks.some((peak) => peak > 0.001));
+    stage('first-play-sent');
+    const playing = await until(live, (state) => state.plays === 1 && state.peaks.some((peak) => peak > 0.001), 'first-signal');
     check(playing.trustedKeyboardPlay, 'Keyboard Play was not a trusted activation.');
     await sendKeyboardActivation(live, 'stop');
-    await until(live, (state) => state.stopped && state.peaks.length >= 10 && state.peaks.slice(-10).every((peak) => peak < 0.00001));
-    const drained = await until(live, stopIsDrained);
+    await until(live, (state) => state.stopped && state.peaks.length >= 10 && state.peaks.slice(-10).every((peak) => peak < 0.00001), 'stop-muted');
+    const drained = await until(live, stopIsDrained, 'stop-drained');
     await live.webContents.executeJavaScript('probe.peaks = []; void 0;');
     await sendKeyboardActivation(live, 'play');
-    const restarted = await until(live, hasRestartSignal);
+    const restarted = await until(live, hasRestartSignal, 'restart-signal');
     const isolated = await open('offline.html');
-    const offline = await until(isolated, (state) => state.ready);
+    const offline = await until(isolated, (state) => state.ready, 'offline-ready');
     check((await read(live)).plays === 2, 'The offline realm changed live state.');
     await live.webContents.executeJavaScript('probe.dispose()');
     check(requests.length === 0, `Unexpected resource requests: ${requests.join(', ')}`);
@@ -207,6 +263,8 @@ async function electronMain() {
     for (const win of windows) win.destroy();
     app.exit(0);
   } catch (error) {
+    diagnostic.status = 'failed';
+    diagnostic.error = String(error.message || error).slice(0, 50000);
     stage(`error: ${error.message || error}`);
     console.error(error.stack || error);
     for (const win of windows) if (!win.isDestroyed()) win.destroy();
@@ -236,4 +294,4 @@ if (process.versions.electron) electronMain().catch((error) => { console.error(e
 else if (require.main === module) {
   try { run(); } catch (error) { console.error(error.stack || error); process.exitCode = 1; }
 }
-module.exports = { fixtureHtml, TIMEOUT_MS, sendKeyboardActivation, stopIsDrained, hasRestartSignal };
+module.exports = { fixtureHtml, TIMEOUT_MS, sendKeyboardActivation, stopIsDrained, hasRestartSignal, waitForProbeState, summarizeProbeState };
