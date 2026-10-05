@@ -14,10 +14,10 @@ const ENTRIES = [
     id: 'strudel-sound', version: 1, status: 'ready', title: 'Strudel sound',
     purpose: 'Explore editable synthesized rhythms and melodies with Strudel.',
     requiredKits: ['strudel'], actions: ['create-project', 'add-to-current-project'],
-    outputs: ['Editable HTML and pattern source', 'Bounded WAV loop saved to Media after the audio compatibility gate passes'],
-    limitations: ['Unavailable until the local kit, real sketch and audio runtime pass compatibility checks.', 'Synth-only patterns; no remote samples, microphone or full REPL.', 'Planned export bounds: 1–16 cycles, 30 seconds and 6 MiB.'],
+    outputs: ['Editable HTML and native-synth pattern source'],
+    limitations: ['The native kit passed compatibility checks; this build keeps creation gated until the editable starter lifecycle passes its runtime fixture.', 'Synth-only patterns; no remote samples, microphone or full REPL.', 'WAV export is not available yet.'],
     questions: ['Do you want to begin with a rhythm or a melody?', 'Should it feel calm, playful or tense?'],
-    availability: { available: false, reason: 'The Strudel sketch and audio runtime compatibility gate have not passed.' },
+    availability: { available: false, reason: 'The editable Strudel starter runtime compatibility gate has not passed.' },
   },
   ...[
     ['presentations', 'Presentations', 'Build an editable visual story for a presentation.'],

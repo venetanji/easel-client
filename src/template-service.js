@@ -3,10 +3,11 @@ const { listTemplates: catalog } = require('./template-catalog');
 const { availableCanvasKits, assertInstalledKits } = require('./canvas-kit-catalog');
 const { validateTemplateCreate, validateTemplateOpen, validateOpaqueId, validateCanvasTitle, validateCanvasKits, validateDocumentPath } = require('./ipc-contract');
 const { createVideoTimelineTemplate } = require('./video-timeline-template');
+const { createStrudelTemplate } = require('./strudel-template');
 
 function createTemplateService({ projectStore, instanceStore, timelineStore, kitBundles = {}, history,
   getCurrentProjectId = () => '', saveBeforeSwitch = async () => {}, openDocument = async () => ({}),
-  isBusy = () => false, videoFactory = createVideoTimelineTemplate, strudelFactory, strudelReady = false,
+  isBusy = () => false, videoFactory = createVideoTimelineTemplate, strudelFactory = createStrudelTemplate, strudelReady = false,
   idFactory = () => crypto.randomUUID().replaceAll('-', ''),
 }) {
   let pending = false;
@@ -52,7 +53,18 @@ function createTemplateService({ projectStore, instanceStore, timelineStore, kit
     const instanceId = newId('Instance ID');
     const timelineId = entry.id === 'video-editor' ? newId('Timeline ID') : undefined;
     const documentPath = `sketches/${instanceId}/index.html`;
-    const html = entry.id === 'video-editor' ? videoFactory() : strudelFactory();
+    const source = entry.id === 'video-editor' ? videoFactory() : strudelFactory({ instanceId });
+    // The atomic store extracts inline HTML/CSS/JS into editable instance files.
+    // Adapt the factory's single-entry contract without silently dropping files
+    // or expanding the trusted creation transaction/renderer IPC surface.
+    let html = source;
+    if (typeof source !== 'string') {
+      if (!source || source.entry !== 'index.html' || !source.files ||
+        Object.keys(source.files).length !== 1 || typeof source.files['index.html'] !== 'string') {
+        throw new Error('Template factory must return a single index.html HTML entry.');
+      }
+      html = source.files[source.entry];
+    }
     let binding, saved, createdTimeline = false, createdBinding = false;
     try {
       saved = projectStore.createTemplateDocument({ projectId, path: documentPath, title: input.title || entry.title, html, kits }, ({ projectId: id }) => {

@@ -163,7 +163,8 @@ const TEMPLATES = createTemplateService({
       throw error;
     }
   },
-  // No Strudel factory is installed here until the real sketch and runtime gate pass.
+  // The native kit passed CI; enable strudelReady only after the editable
+  // starter lifecycle passes the extended disposable runtime fixture.
 });
 
 function withCanvas(action) {

@@ -17,7 +17,8 @@ function prepareStrudelBundle(source) {
 function getStrudelCapabilities() {
   return {
     nativeSynths: ['sine', 'triangle', 'square', 'sawtooth'],
-    // Promote only after the bounded isolated-renderer runtime gate passes.
+    // Native kit playback/offline synthesis passed CI on 5 October 2026.
+    // WAV export remains unavailable until its separate end-to-end Media gate.
     audioExport: false,
     externalSamples: false,
     repl: false,

@@ -77,7 +77,7 @@ test('planned_has_no_open and unavailable Strudel explains its real gate', async
   assert.match(f.nodes.get('templates-list').textContent, /Planned/);
   assert.deepEqual(f.buttons('templates-list').map((node) => node.dataset.templateId), ['video-editor', 'strudel-sound']);
   await f.choose('strudel-sound');
-  assert.match(f.nodes.get('templates-detail').textContent, /sketch and audio runtime compatibility gate have not passed/);
+  assert.match(f.nodes.get('templates-detail').textContent, /editable Strudel starter runtime compatibility gate has not passed/);
   assert.equal(f.button('templates-detail', 'Create project').disabled, true);
   f.project('c'.repeat(32));
   assert.equal(f.button('templates-detail', 'Add to current project').disabled, true);

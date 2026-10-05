@@ -426,3 +426,27 @@ test('current_project_template_creation_requires_shared_history_protection', asy
   await assert.rejects(f.create(), /history service is unavailable/);
   assert.equal(f.source(), before); assert.deepEqual(f.instances.list(f.projectId), []);
 });
+
+test('strudel_factory_receives_host_identity_and_atomic_single_entry_is_extracted', async (t) => {
+  const { createStrudelTemplate } = require('../src/strudel-template');
+  let factoryId;
+  const f = fixture(t, { strudel: true, kitBundles: { strudel: 'window.strudel = {};' }, strudelFactory: (options) => { factoryId = options?.instanceId; return createStrudelTemplate(options); } });
+  const before = JSON.parse(f.source());
+  const created = await f.create({ templateId: 'strudel-sound' });
+  assert.equal(factoryId, created.instanceId);
+  const after = JSON.parse(f.source());
+  for (const [name, content] of Object.entries(before.files)) assert.equal(after.files[name], content);
+  assert.match(after.files[`sketches/${created.instanceId}/app.js`], /function createPattern\(params\)/);
+  assert.match(after.files[created.documentPath], /Strudel sound/);
+  assert.equal(f.instances.list(f.projectId).length, 1);
+});
+
+test('strudel_factory_rejects_multi_file_or_invalid_entry_before_writes', async (t) => {
+  for (const result of [{ files: { 'index.html': '<main>Hi</main>', 'lost.js': 'bad' }, entry: 'index.html' }, { files: { '../index.html': 'bad' }, entry: '../index.html' }]) {
+    const f = fixture(t, { strudel: true, kitBundles: { strudel: 'window.strudel = {};' }, strudelFactory: () => result });
+    const before = f.source();
+    await assert.rejects(f.create({ templateId: 'strudel-sound' }), /single.*HTML|entry/i);
+    assert.equal(f.source(), before);
+    assert.deepEqual(f.instances.list(f.projectId), []);
+  }
+});

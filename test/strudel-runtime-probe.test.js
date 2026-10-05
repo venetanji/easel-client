@@ -118,3 +118,35 @@ test('diagnostic_snapshot_is_bounded_and_keeps_input_audio_and_strudel_errors', 
   assert.ok(summary.nativeInput.length <= 12 && summary.logs.length <= 20);
   assert.match(summary.logs.at(-1).message, /getTrigger/);
 });
+
+test('template_fixture_runs_the_editable_starter_and_managed_lifecycle', () => {
+  assert.equal(typeof runtime.templateFixtureHtml, 'function');
+  const html = runtime.templateFixtureHtml('window.strudel = {};');
+  assert.match(html, /function createPattern\(params\)/);
+  assert.match(html, /bootStrudelSketch/);
+  assert.match(html, /snapshotPattern/);
+  assert.match(html, /EaselCanvas\.cleanup\(\)/);
+  assert.match(html, /getIsStarted\(\)/);
+  assert.ok(html.indexOf('window.probe =') < html.indexOf('data-easel-canvas-kit="strudel"'));
+});
+
+test('template_restart_gate_requires_new_scheduler_and_silence_during_old_voice_lifetime', () => {
+  assert.equal(typeof runtime.hasSilentTemplateRestart, 'function');
+  const state = { plays: 2, schedulerStarted: true, gain: 0.5, audioTime: 2, oldVoiceStartedAt: 1, peaks: Array(10).fill(0) };
+  assert.equal(runtime.hasSilentTemplateRestart(state), true);
+  assert.equal(runtime.hasSilentTemplateRestart({ ...state, schedulerStarted: false }), false);
+  assert.equal(runtime.hasSilentTemplateRestart({ ...state, gain: 0 }), false, 'muted destination cannot prove that old voices are disconnected');
+  assert.equal(runtime.hasSilentTemplateRestart({ ...state, peaks: Array(10).fill(0.2) }), false);
+  assert.equal(runtime.hasSilentTemplateRestart({ ...state, audioTime: 10 }), false, 'silence after the old eight-second voice ends is not sufficient evidence');
+});
+
+
+test('template_positive_restart_requires_fresh_nonzero_samples_on_the_same_instance', () => {
+  assert.equal(typeof runtime.hasAudibleTemplateRestart, 'function');
+  const state = { plays: 3, schedulerStarted: true, gain: 0.2, peaks: Array(10).fill(0.1) };
+  assert.equal(runtime.hasAudibleTemplateRestart(state), true);
+  assert.equal(runtime.hasAudibleTemplateRestart({ ...state, plays: 1 }), false);
+  assert.equal(runtime.hasAudibleTemplateRestart({ ...state, schedulerStarted: false }), false);
+  assert.equal(runtime.hasAudibleTemplateRestart({ ...state, gain: 0 }), false);
+  assert.equal(runtime.hasAudibleTemplateRestart({ ...state, peaks: [0.2, ...Array(9).fill(0)] }), false, 'one historical peak cannot prove an active analyser or positive restart');
+});

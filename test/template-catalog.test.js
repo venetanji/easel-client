@@ -32,3 +32,8 @@ test('catalog returns independent metadata and rejects unknown options', () => {
   assert.throws(() => listTemplates({ includePlanned: 'yes' }), /invalid/i);
   assert.throws(() => listTemplates({ html: '<script></script>' }), /invalid/i);
 });
+test('strudel_does_not_advertise_unimplemented_wav_output', () => {
+  const entry = catalog().listTemplates().find((item) => item.id === 'strudel-sound');
+  assert.ok(entry.outputs.every((output) => !/WAV|export/i.test(output)));
+  assert.ok(entry.limitations.some((limit) => /WAV export is not available/i.test(limit)));
+});
