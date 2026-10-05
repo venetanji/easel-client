@@ -189,3 +189,15 @@ npx playwright install chromium
 ```
 
 The renderer caps markup at 1 MiB, accepts at most 8 local images/32 MiB, uses a fixed bounded viewport, blocks network requests, and times out after 10 seconds. Tool inputs do not accept filesystem paths or arbitrary hosts.
+
+## License
+
+Easel-owned code in this package is **GPL-3.0-or-later**. See LICENSE and NOTICE
+in this package. Third-party dependencies keep their own license and copyright
+notices. This declaration does not revoke any previously granted rights.
+
+Source and build instructions are maintained in
+https://github.com/venetanji/easel-client/tree/main/packages/media-mcp.
+Distributors must provide the exact source revision and build materials matching
+their package under an applicable GPL section 6 route; this moving link alone
+is not a corresponding-source offer.

@@ -1,3 +1,4 @@
+const RendererRemovedSkills = typeof module !== 'undefined' ? require('./removed-skills') : EaselRemovedSkills;
 const RendererActionIcons = typeof module !== 'undefined' ? require('./ui-icons') : EaselUiIcons;
 const RendererMediaResults = typeof module !== 'undefined' ? require('./media-tool-results') : { producedMediaAssets };
 const RendererSetupWizard = typeof module !== 'undefined' ? require('./setup-wizard') : { createSetupWizard };
@@ -462,6 +463,7 @@ function renderNewProjectKits(document, listElement, catalog, selectedKits, onCh
 }
 
 function skillCompatibility(skill, installedSkills) {
+  if (RendererRemovedSkills.isRemoved(skill?.name)) return { supported: false, reason: RendererRemovedSkills.reason };
   const installed = installedSkills.find((item) => `pack-${item.id}` === skill?.id || item.name.trim().toLowerCase() === skill?.name?.trim().toLowerCase());
   if (!installed && !skill?.id?.startsWith('pack-')) return { supported: true, reason: 'Custom instructions; compatibility has not been reviewed.' };
   return { supported: installed?.compatibility === 'supported', reason: installed?.compatibility === 'supported' ? '' : installed?.reason || 'This installed recipe is unavailable in the client.' };

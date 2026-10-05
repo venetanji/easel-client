@@ -116,7 +116,7 @@ Open **Skills** to write a reusable instruction, edit one, or import a Codex `SK
 
 For Qwen overlays, cutouts, stickers, or sprites, enable **Qwen Transparent Images** for the focused workflow, or **Easel Media** for the broader media recipes. Both include Qwen's official RGBA prompt format and a read-only check of the saved PNG's alpha channel. Preview background color alone does not establish opacity, and Qwen can leave faint residual alpha. See [transparency guidance and live test results](docs/qwen-transparency.md).
 
-HyperFrames workflows remain available in the repository for external coding agents, but are unavailable in the studio skill picker: the in-app harness has no shell, package manager, HyperFrames CLI, unrestricted network, or external asset installation. Previously imported copies are disabled with an explanation; their text is retained.
+The imported HyperFrames workflows and their bundled assets have been removed from this repository and app distribution. Easel-native skills remain available. Previously saved copies stay disabled with an explanation; their text is retained in user storage. This removal does not add a replacement animation engine.
 
 ## Project kits and completed media
 
@@ -204,3 +204,17 @@ git push origin v0.0.2
 The **Desktop Builds** workflow builds all three platforms and creates a GitHub Release with separate Windows EXE/ZIP, macOS DMG/ZIP, and Linux AppImage/DEB downloads. The release job runs only after every platform succeeds. It generates a changelog and prepends `docs/releases/<tag>.md` when that file exists. Publishing a `v*` release from the GitHub UI also runs the build and attaches its packages; reruns replace matching assets on the existing release.
 
 Tags must match the current `package.json` version, optionally followed by a prerelease suffix such as `v0.0.2-rc.1`. Those suffixes mark the release as a prerelease. Manual **Run workflow** builds upload Actions artifacts without publishing a release. Runs for the same ref are serialized so an in-progress release build can finish. Headless MCP tarballs remain available in the Actions artifacts.
+
+## License
+
+Easel-owned code is licensed under **GPL-3.0-or-later**: GNU GPL version 3 or,
+at your option, any later version. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Third-party libraries retain their own terms, including p5 (LGPL-2.1),
+Mediabunny (MPL-2.0), and the MIT/Apache-licensed dependencies. The new declaration
+does not revoke rights already granted under earlier terms, including historical
+ISC package metadata.
+
+See [the licensing audit](docs/license-audit.md) for scope, provenance evidence
+and distribution checks. Before distributing binaries, supply the exact matching
+Corresponding Source, dependency notices and build materials through an
+applicable GPL section 6 route; the current branch URL alone is not a source offer.
