@@ -1,0 +1,23 @@
+Easel Media MCP
+SPDX-License-Identifier for Easel-owned code: GPL-3.0-or-later
+
+Easel-owned code in this package is licensed under the GNU General Public
+License, version 3 or (at your option) any later version. The complete GPL
+version 3 text accompanies this file as LICENSE.
+
+This declaration covers only material the maintainers have the right to license.
+Third-party dependencies retain their own copyright and license notices,
+including @modelcontextprotocol/sdk (MIT), Playwright (Apache-2.0) and Zod (MIT).
+Inspect their installed license and notice files before redistributing them.
+Browser binaries carry additional upstream notices and are not bundled in the
+standalone npm package or headless MCP archive.
+
+This declaration does not revoke prior grants, including any rights conferred
+under historical root ISC package metadata. It does not relicense dependencies.
+
+When distributing compiled MCP code, provide the exact matching Corresponding
+Source and build materials under an applicable GPL section 6 route, with the
+required dependency notices. The source repository is
+https://github.com/venetanji/easel-client, but a moving branch URL alone is not a
+matching-source offer. The repository's docs/license-audit.md records scope,
+provenance evidence, packaging verification and remaining distribution gates.

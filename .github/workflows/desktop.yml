@@ -82,7 +82,7 @@ jobs:
           ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
       - name: Package headless MCP server
         shell: bash
-        run: tar -czf release/easel-media-mcp-${{ matrix.target }}.tar.gz -C packages/media-mcp dist package.json README.md
+        run: tar -czf release/easel-media-mcp-${{ matrix.target }}.tar.gz -C packages/media-mcp dist package.json README.md LICENSE NOTICE
       - uses: actions/upload-artifact@v7
         with:
           name: easel-${{ matrix.target }}-${{ github.run_id }}

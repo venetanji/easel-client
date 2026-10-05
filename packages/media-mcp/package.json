@@ -8,7 +8,9 @@
     "easel-media-mcp": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "NOTICE"
   ],
   "engines": {
     "node": ">=22"
@@ -27,5 +29,6 @@
     "@types/node": "^22.19.11",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"
-  }
+  },
+  "license": "GPL-3.0-or-later"
 }
