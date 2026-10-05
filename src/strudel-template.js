@@ -18,7 +18,9 @@ function bootStrudelSketch(instanceId) {
     const gain = controller?.output.destinationGain?.gain;
     if (!gain || context.state === 'closed') return;
     gain.cancelScheduledValues(context.currentTime);
-    gain.setValueAtTime(value, context.currentTime);
+    // The setter updates the current-value slot even while suspended, and
+    // schedules the same value at currentTime for the next render quantum.
+    gain.value = value;
   }
   function syncControls() {
     bpmInput.value = String(state.bpm);

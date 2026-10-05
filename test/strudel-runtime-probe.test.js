@@ -150,3 +150,24 @@ test('template_positive_restart_requires_fresh_nonzero_samples_on_the_same_insta
   assert.equal(runtime.hasAudibleTemplateRestart({ ...state, gain: 0 }), false);
   assert.equal(runtime.hasAudibleTemplateRestart({ ...state, peaks: [0.2, ...Array(9).fill(0)] }), false, 'one historical peak cannot prove an active analyser or positive restart');
 });
+
+test('template_diagnostics_preserve_initial_gain_and_instance_settings', () => {
+  const summary = runtime.summarizeProbeState({ phase: 'Ready. Press Play to listen.', plays: 0,
+    audioState: 'suspended', audioTime: 0, schedulerStarted: false, gain: 1, cps: 100 / 240,
+    activeAudioContexts: 1, settings: { bpm: 100, volume: 0.5, patternVersion: 1, playing: false, arbitrary: 'x'.repeat(10000) }, peaks: [0, 0] });
+  assert.equal(summary.gain, 1);
+  assert.equal(summary.activeAudioContexts, 1);
+  assert.equal(summary.cps, 100 / 240);
+  assert.deepEqual(summary.settings, { bpm: 100, volume: 0.5, patternVersion: 1, playing: false });
+  assert.ok(JSON.stringify(summary).length < 1000);
+});
+
+test('initial_silence_failure_identifies_the_exact_invariant_without_weakening_it', () => {
+  assert.equal(typeof runtime.assertTemplateInitialSilence, 'function');
+  const silent = { plays: 0, gain: 0, audioState: 'suspended', schedulerStarted: false,
+    settings: { bpm: 100, volume: 0.5, patternVersion: 1, playing: false }, activeAudioContexts: 1, peaks: [0] };
+  assert.doesNotThrow(() => runtime.assertTemplateInitialSilence(silent));
+  assert.throws(() => runtime.assertTemplateInitialSilence({ ...silent, gain: 1 }), /initial output gain.*"gain":1.*"playing":false/i);
+  assert.throws(() => runtime.assertTemplateInitialSilence({ ...silent, plays: 1 }), /scheduled playback before Play/);
+  assert.throws(() => runtime.assertTemplateInitialSilence({ ...silent, settings: { playing: true } }), /restored playback/);
+});

@@ -29,9 +29,13 @@ function summarizeProbeState(state = {}) {
   const clip = (value, limit = 1000) => String(value ?? '').slice(0, limit);
   const last = (values, limit) => Array.isArray(values) ? values.slice(-limit) : [];
   const peaks = last(state.peaks, 100).filter(Number.isFinite);
+  const finite = (value) => Number.isFinite(value) ? value : null;
   return {
     phase: clip(state.phase, 80), ready: state.ready === true, playEvents: state.playEvents || 0, plays: state.plays || 0,
     audioState: clip(state.audioState, 40), audioTime: state.audioTime, schedulerStarted: state.schedulerStarted,
+    gain: finite(state.gain), cps: finite(state.cps), activeAudioContexts: finite(state.activeAudioContexts),
+    settings: state.settings ? { bpm: finite(state.settings.bpm), volume: finite(state.settings.volume),
+      patternVersion: finite(state.settings.patternVersion), playing: typeof state.settings.playing === 'boolean' ? state.settings.playing : null } : null,
     trustedKeyboardPlay: state.trustedKeyboardPlay, stopped: state.stopped, stoppedAt: state.stoppedAt,
     peakCount: peaks.length, maxPeak: peaks.length ? Math.max(...peaks) : 0, lastPeak: peaks.at(-1),
     errors: last(state.errors, 20).map((error) => clip(error)),
@@ -40,6 +44,17 @@ function summarizeProbeState(state = {}) {
       target: clip(item.target, 80), trusted: item.trusted === true, active: item.active === true })),
     logs: last(state.logs, 20).map((item) => ({ type: clip(item.type, 40), message: clip(item.message) })),
   };
+}
+
+function assertTemplateInitialSilence(state) {
+  const checks = [
+    [state.plays === 0, 'Starter scheduled playback before Play'],
+    [state.gain === 0, 'Starter initial output gain must be 0'],
+    [state.settings?.playing === false, 'Starter restored playback instead of only settings'],
+  ];
+  for (const [passed, message] of checks) {
+    if (!passed) throw new Error(`${message}: ${JSON.stringify(summarizeProbeState(state))}`);
+  }
 }
 
 async function waitForProbeState(read, predicate, label, timeoutMs = 6000) {
@@ -328,7 +343,7 @@ async function electronMain() {
     const control = (name) => `strudel-${templateId}-${name}`;
     const starter = await open('template.html');
     const starterInitial = await until(starter, (state) => state.ready, 'template-ready');
-    check(starterInitial.plays === 0 && starterInitial.gain === 0 && starterInitial.settings.playing === false, 'Starter did not open silently.');
+    assertTemplateInitialSilence(starterInitial);
     check(starterInitial.activeAudioContexts === 1, 'Starter created duplicate audio contexts.');
     // Long first voice: eight seconds at 30 BPM. Replacing it with a zero-gain
     // pattern tests real output isolation, not just that reset() was called.
@@ -422,4 +437,4 @@ if (process.versions.electron) electronMain().catch((error) => { console.error(e
 else if (require.main === module) {
   try { run(); } catch (error) { console.error(error.stack || error); process.exitCode = 1; }
 }
-module.exports = { fixtureHtml, templateFixtureHtml, hasSilentTemplateRestart, hasAudibleTemplateRestart, TIMEOUT_MS, sendKeyboardActivation, stopIsDrained, hasRestartSignal, waitForProbeState, summarizeProbeState };
+module.exports = { assertTemplateInitialSilence, fixtureHtml, templateFixtureHtml, hasSilentTemplateRestart, hasAudibleTemplateRestart, TIMEOUT_MS, sendKeyboardActivation, stopIsDrained, hasRestartSignal, waitForProbeState, summarizeProbeState };

@@ -42,9 +42,15 @@ function harness({ id = ID, preserved = {}, saved = {}, resumeGate, startGate, i
   for (const match of html.matchAll(/id="([^"]+)"/g)) elements.set(match[1], { value: '', textContent: '', disabled: false, hidden: false, attributes: {},
     setAttribute(key, value) { this.attributes[key] = value; }, addEventListener(type, fn) { this[type] = fn; }, removeEventListener(type) { delete this[type]; } });
   const counts = { init: 0, starts: 0, activeSchedulers: 0, activeAudioContexts: 1, closes: 0, hush: 0, resets: 0, patterns: 0, resumes: 0 };
-  const output = { destinationGain: { gain: { value: 1, cancelScheduledValues() {}, setValueAtTime(value) { this.value = value; } } }, disconnect() { this.disconnected = true; } };
+  // AudioParam automation does not update its current-value slot until a
+  // render quantum; setting .value updates that slot and schedules the value.
+  // In particular, a suspended context never consumes setValueAtTime here.
+  let currentGain = 1, scheduledGain = 1;
+  const gain = { get value() { return currentGain; }, set value(value) { currentGain = value; scheduledGain = value; },
+    cancelScheduledValues() {}, setValueAtTime(value) { scheduledGain = value; if (context.state === 'running') currentGain = value; } };
+  const output = { destinationGain: { gain }, disconnect() { this.disconnected = true; } };
   const controller = { output, reset() { counts.resets++; output.disconnected = false; } };
-  const context = { state: 'suspended', currentTime: 1, async resume() { counts.resumes++; if (resumeGate) await resumeGate.promise; this.state = 'running'; }, async close() { counts.closes++; counts.activeAudioContexts = 0; this.state = 'closed'; } };
+  const context = { state: 'suspended', currentTime: 1, async resume() { counts.resumes++; if (resumeGate) await resumeGate.promise; this.state = 'running'; currentGain = scheduledGain; }, async close() { counts.closes++; counts.activeAudioContexts = 0; this.state = 'closed'; } };
   let options, app, audioFailed = false;
   const pinned = pinnedRuntime((event) => listeners.get(event.type)?.fn(event));
   const scheduler = usePinnedScheduler ? new pinned.Cyclist({ getTime: () => context.currentTime,
@@ -69,7 +75,7 @@ function harness({ id = ID, preserved = {}, saved = {}, resumeGate, startGate, i
   vm.createContext(sandbox);
   for (const match of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) vm.runInContext(match[1], sandbox);
   const element = (name) => elements.get(`strudel-${id}-${name}`);
-  return { html, pinned, app: () => app, window, element, counts, context, controller, repl, sandbox, listeners, reloaded: () => reloaded,
+  return { html, pinned, scheduledGain: () => scheduledGain, app: () => app, window, element, counts, context, controller, repl, sandbox, listeners, reloaded: () => reloaded,
     play: () => element('play').click({ isTrusted: true, detail: 0 }), stop: () => element('stop').click({ isTrusted: true }),
     input(name, value) { element(name).value = value; element(name).input(); } };
 }
@@ -149,4 +155,20 @@ test('forwarded_superdough_error_stops_but_informational_logs_do_not', async () 
   assert.match(h.element('status').textContent, /\[superdough\] error: Could not connect to target/);
   assert.equal(h.element('play').disabled, false);
   await h.app().dispose();
+});
+
+
+test('suspended_context_mute_updates_current_gain_before_any_render_quantum', async () => {
+  const h = harness();
+  await flush();
+  assert.equal(h.context.state, 'suspended');
+  assert.equal(h.counts.resumes, 0);
+  assert.equal(h.controller.output.destinationGain.gain.value, 0, 'scheduled automation alone leaves the suspended current-value getter at its default');
+  assert.equal(h.scheduledGain(), 0, 'muting must also take effect when the context first renders');
+  h.controller.output.destinationGain.gain.value = 0.8;
+  h.app().restoreState({ bpm: 120, volume: 0.2 });
+  assert.equal(h.context.state, 'suspended');
+  assert.equal(h.controller.output.destinationGain.gain.value, 0);
+  assert.equal(h.scheduledGain(), 0);
+  assert.equal(h.app().getState().playing, false);
 });
