@@ -5,9 +5,11 @@
 The locally bundled kit and source package are unit/build verified. The narrow
 native-kit playback and OfflineAudioContext gate passed CI on 5 October 2026
 (see the dated evidence below). The actual editable starter passed its extended controls/lifecycle CI fixture at
-`2657bd4` on 5 October 2026. Creation is enabled when its kit is installed. WAV export is
-not advertised: `getStrudelCapabilities().audioExport` remains `false` until the
-separate bounded-export production path passes its Media/WAV runtime fixture.
+`2657bd4` on 5 October 2026. Creation is enabled when its kit is installed. The production bounded WAV/Media
+fixture passed at published `b3cb58a` (exact source snapshot `2e5db98`) on 5 October
+2026. `STRUDEL_EXPORT_READY` and `getStrudelCapabilities().audioExport` are now
+`true`; the host still checks the loaded instance, source and pinned kit at every
+export boundary. See the dated production proof below.
 
 Pinned package: `@strudel/web@1.3.0`. Easel builds its published `web.mjs` source
 entry using esbuild and the repository lockfile, rather than copying the upstream
@@ -96,8 +98,8 @@ also finished green on that head. The retained probe evidence establishes:
 
 This proves the constrained native kit. It does **not** prove the new editable
 starter's controls, state restoration, graph reset, or a WAV file/Media save.
-`audioExport:false` remains until WAV/Media verification passes. The starter gate
-was subsequently satisfied by the evidence below. No human listening check is
+At that earlier native-kit milestone, export remained gated. The starter and
+production WAV gates were subsequently satisfied by the evidence below. No human listening check is
 claimed by measured nonzero sample evidence.
 
 ## Editable starter CI proof — 5 October 2026
@@ -111,12 +113,12 @@ startup invariant also verifies the suspended AudioParam's current gain is zero.
 No network requests or CSP relaxation were needed. The coordinator supplied and
 verified this evidence; Task 6 does not claim another local Electron run.
 
-## Bounded WAV export contract and pending proof
+## Bounded WAV export contract and production proof
 
-The save-only implementation is present. `STRUDEL_EXPORT_READY` and
-`getStrudelCapabilities().audioExport` remain false until the extended single
-runtime fixture passes for its exact published commit. Export controls explain
-this gate; standalone exported HTML requires Easel for Media saves.
+The save-only production path passed the extended single runtime fixture for
+published `b3cb58a` (exact `2e5db98` snapshot). Export is enabled in Easel; controls
+still wait for their loaded source context. Standalone exported HTML requires
+Easel for Media saves.
 
 At click, the starter freezes the loaded source revision, BPM, volume, pattern
 version and selected onset events before any await. One cycle is four beats. It
@@ -178,8 +180,36 @@ The single CI fixture now additionally drives the actual editable export action,
 production bridge/controller/renderer, exact pinned kit and real Media storage.
 It decodes saved/reopened WAV bytes (not a native save-dialog/download), checks rest/onset/tail timing and exact
 frames, tests zero and half-volume scaling, identical retry idempotency, and
-sustained live audio/context identity. It additionally measures omitted/native-default versus explicit envelope/gain branches, checks the late nonzero segment of a >128-event score with one long early note, and observes the actual Electron same-URL top-level navigation event. This extension is unit-tested but awaits
-its actual sandboxed CI execution; local unit/build success is not runtime proof.
+sustained live audio/context identity. It additionally measures omitted/native-default versus explicit envelope/gain branches, checks the late nonzero segment of a >128-event score with one long early note, and observes the actual Electron same-URL top-level navigation event. The production extension passed its sandboxed CI execution described below;
+local unit/build success alone is not runtime proof.
+
+
+## Production WAV/Media CI proof — 5 October 2026
+
+[Test run 37306231481](https://github.com/venetanji/easel-client/actions/runs/37306231481)
+passed at published `b3cb58a`, the immutable publication of source snapshot
+`2e5db981fc63429a16b9b4f2d443f2beef25acac`. Retained artifact
+`strudel-runtime-evidence` (`11342839982`) reports `status: passed`.
+
+- The actual starter export action drives the production bridge/controller,
+  isolated renderer, pinned kit and durable Media store. Saved/reopened WAV bytes
+  decode as 48 kHz stereo with exact onset/rest/tail timing and frame duration.
+- Half-volume/full-volume amplitude ratio is `0.5001695438203305`; zero volume
+  produces silence. Native omitted/default versus explicit gain/envelope
+  branches are preserved, with sustain ratio `0.6000579661049783`.
+- A 201-event, 8.5-second score retains the late note with stereo peak
+  `0.08999908715486526`, covering the native scheduler's bounded lookahead.
+- Identical export retries return the original durable asset. Reopened bytes
+  match; export preserves live context identity and ten sustained live samples.
+- The fixture observes actual Electron same-URL top-level navigation, verifies
+  silent source reload and Escape while a question has focus, and reports no
+  network requests or CSP changes. Electron `44.4.5`, Chromium `152.0.7977.130`.
+
+This is measured signal and production-path evidence; no human listening check
+or native file-download dialog is claimed. The verified constrained export
+subset, time/voice/size bounds and save-only permission boundaries above remain
+unchanged. Capability flags and catalog output were activated after this proof;
+no export/probe behavior or security policy was changed for activation.
 
 ## Editable starter and Task 6 handoff
 
@@ -291,4 +321,4 @@ rebuilds from the extracted material using its archived runtime dependencies and
 local copies of already-installed build tools, checking identical runtime bytes.
 `test/strudel-runtime-probe.test.js` tests native-focus gating and deliberately
 breaks second-Play scheduling to reject the old-voice restart false positive.
-`npm run build:canvas-kits` validates all kit scripts. Neither command substitutes for the pending production WAV/Media runtime gate.
+`npm run build:canvas-kits` validates all kit scripts. Neither command substitutes for the separately recorded production WAV/Media runtime proof.

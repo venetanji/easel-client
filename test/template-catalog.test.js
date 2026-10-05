@@ -20,7 +20,7 @@ test('catalog describes ready and planned templates without implying runtime ava
   }
   const strudel = entries.find((entry) => entry.id === 'strudel-sound');
   assert.equal(strudel.availability.available, false);
-  assert.match(strudel.availability.reason, /runtime|compatibility/i);
+  assert.match(strudel.availability.reason, /installed.*kit|kit.*installed/i);
   assert.equal(listTemplates({ includePlanned: false }).length, 2);
 });
 test('catalog returns independent metadata and rejects unknown options', () => {
@@ -32,8 +32,10 @@ test('catalog returns independent metadata and rejects unknown options', () => {
   assert.throws(() => listTemplates({ includePlanned: 'yes' }), /invalid/i);
   assert.throws(() => listTemplates({ html: '<script></script>' }), /invalid/i);
 });
-test('strudel_does_not_advertise_unimplemented_wav_output', () => {
+test('strudel_advertises_only_runtime_proven_bounded_wav_output', () => {
   const entry = catalog().listTemplates().find((item) => item.id === 'strudel-sound');
-  assert.ok(entry.outputs.every((output) => !/WAV|export/i.test(output)));
-  assert.ok(entry.limitations.some((limit) => /WAV export is not available/i.test(limit)));
+  assert.ok(entry.outputs.some((output) => /WAV.*Media/i.test(output)));
+  assert.ok(entry.limitations.some((limit) => /1.?16 cycles.*30 seconds/i.test(limit)));
+  assert.ok(entry.limitations.some((limit) => /48 kHz.*PCM16.*6 MiB/i.test(limit)));
+  assert.ok(entry.limitations.every((limit) => !/not available|gate has not passed/i.test(limit)));
 });

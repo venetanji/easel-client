@@ -5,7 +5,7 @@ const { buildUserContent, handleMcpResult, runAgentTurn } = require('./agent');
 const { createLiteLLMClient } = require('./litellm-client');
 const { createMediaMcpClient } = require('./media-mcp-client');
 const { validateChatMessage } = require('./ipc-contract');
-const { canvasInputSummary, formatCanvasInputMessage, inputId } = require('./canvas-input');
+const { canvasInputMatchesScope, canvasInputSummary, formatCanvasInputMessage, inputId } = require('./canvas-input');
 const { validateApprovedMediaModel } = require('./canvas-input-store');
 
 function defaultMcpLaunchOptions(settings, secrets, { isPackaged = false, resourcesPath = '' } = {}) {
@@ -336,6 +336,8 @@ function createChatService({
 
   function matchingCanvas(entry) {
     const documentPath = entry.documentPath || (canvasController?.getCurrentCanvasId?.() === entry.canvasId ? canvasController?.getDefaultDocumentPath?.() : '');
+    if (typeof canvasController?.getCanvasInputScope === 'function') return canvasInputMatchesScope({ ...entry, documentPath }, canvasController.getCanvasInputScope());
+    if (entry.instanceId !== undefined) return false;
     return (typeof canvasController?.getCurrentCanvasId !== 'function' || canvasController.getCurrentCanvasId() === entry.canvasId)
       && (!documentPath || typeof canvasController?.getCurrentDocumentPath !== 'function' || canvasController.getCurrentDocumentPath() === documentPath);
   }
@@ -359,6 +361,7 @@ function createChatService({
 
   async function resumeCanvasInput(entry, turn) {
     turn.controller.signal.throwIfAborted();
+    if (!matchingCanvas(entry)) throw new Error('Open the original project document and template instance before continuing this response.');
     assertMediaDestination(entry);
     const text = formatCanvasInputMessage(entry);
     let attachments = [];
@@ -370,6 +373,7 @@ function createChatService({
       }));
     }
     turn.controller.signal.throwIfAborted();
+    if (!matchingCanvas(entry)) throw new Error('The original canvas or template instance changed before this response could continue.');
     if (!history.some((message) => message.role === 'user' && message.canvasInputRequestId === entry.id)) {
       history.push({ role: 'user', content: text, canvasInputRequestId: entry.id, ...(entry.kind === 'media' ? { canvasMediaRefs: entry.attachments } : {}) });
       pendingSave = true;

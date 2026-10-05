@@ -69,7 +69,7 @@ test("main_preload_and_media_ui_wire_a_narrow_save_only_export_route", () => {
   assert.match(main, /onRuntimeInvalidated:.*STRUDEL_EXPORT_CONTROLLER\.invalidate/);
   assert.match(main, /strudel-exported/);
   assert.match(ui, /event\.type === 'strudel-exported'/);
-  assert.match(main, /const STRUDEL_EXPORT_READY = false/);
+  assert.match(main, /const STRUDEL_EXPORT_READY = true/);
   assert.match(main, /strudelReady: true/);
 });
 

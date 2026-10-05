@@ -66,6 +66,7 @@ const { decodeCodexImage } = require('./codex-image-output');
 const { handleMcpResult, formatRuntimeKitInstructions } = require('./agent');
 const { createChatStore } = require('./chat-store');
 const { createCanvasInputStore } = require('./canvas-input-store');
+const { canvasInputMatchesScope } = require('./canvas-input');
 const { renderCanvasInputScript, dismissCanvasInputScript } = require('./canvas-input-runtime');
 const { createCanvasMediaStore } = require('./canvas-media-store');
 const { createMediaJobStore, mediaJobSummary } = require('./media-job-store');
@@ -437,6 +438,22 @@ const presentToolCanvas = (artifact) => withCanvas(async (controller) => {
     }
     finally { if (id && CANVASES.get(id).html !== before) CANVAS_HISTORY.record(id, before); }
   });
+function currentCanvasInputScope(controller = requireCanvasView()) {
+  const canvasId = controller.getCurrentCanvasId(), documentPath = controller.getCurrentDocumentPath();
+  if (!canvasId || !documentPath) return null;
+  try {
+    if (!CANVASES.listDocuments(canvasId).documents.some((document) => document.path === documentPath)) return null;
+    const instance = TEMPLATE_INSTANCES.resolveDocument(canvasId, documentPath);
+    return { canvasId, documentPath, ...(instance ? { instanceId: instance.instanceId } : {}) };
+  } catch { return null; }
+}
+
+function canvasInputContextNote(request) {
+  const instance = request.instanceId && TEMPLATE_INSTANCES.resolveDocument(request.canvasId, request.documentPath);
+  return instance && instance.instanceId === request.instanceId && instance.templateId === 'strudel-sound'
+    ? 'Your choice is saved before continuing. Changes need a model round trip; source patches may reload. Escape stops sound; Dismiss question then Stop also works.' : '';
+}
+
 const CANVAS_CONTROLLER = {
     assertTimelineSelectionOrigin: (selection) => TIMELINE_CONTROLLER.assertSelectionOrigin(selection),
     inspectTimeline: (args) => TIMELINE_CONTROLLER.inspect(args),
@@ -463,6 +480,7 @@ const CANVAS_CONTROLLER = {
       return id ? CANVASES.getProjectKits(id).kits : undefined;
     },
     getCurrentDocumentPath: () => requireCanvasView().getCurrentDocumentPath(),
+    getCanvasInputScope: () => currentCanvasInputScope(),
     getDefaultDocumentPath: () => CANVASES.getProject(requireCanvasView().getCurrentCanvasId()).manifest.entry,
     listMediaJobs: () => ({ jobs: MEDIA_JOBS.list(), polling: 'The host polls and downloads pending jobs across restarts. Do not resubmit.' }),
     forgetMediaJob: ({ jobId }, context) => forgetMediaJob(jobId, context),
@@ -485,10 +503,10 @@ const CANVAS_CONTROLLER = {
       return attachProjectAssets(controller, projectId, assetIds, { kits });
     }),
     requestCanvasInput: (args, context) => withCanvas(async (controller) => {
-      const canvasId = controller.getCurrentCanvasId();
-      if (!canvasId || !controller.getCurrentDocumentPath()) throw new Error('Open a project document before requesting input.');
-      const request = CANVAS_INPUTS.create({ ...args, ...context, canvasId, documentPath: controller.getCurrentDocumentPath() });
-      try { await controller.evaluate(renderCanvasInputScript(request)); }
+      const scope = currentCanvasInputScope(controller);
+      if (!scope) throw new Error('Open an existing project document before requesting input.');
+      const request = CANVAS_INPUTS.create({ ...args, ...context, ...scope, instanceId: scope.instanceId });
+      try { await controller.evaluate(renderCanvasInputScript({ ...request, contextNote: canvasInputContextNote(request) })); }
       catch (error) { CANVAS_INPUTS.cancel(request.id, 'The input view could not be rendered.'); throw error; }
       mainWindow?.webContents.send(IPC_CHANNELS.AGENT_EVENT, { type: 'canvas-input', request, status: 'pending' });
       return request;
@@ -508,12 +526,15 @@ const CANVAS_CONTROLLER = {
       return { inputs, truncated: inputs.length < entries.length };
     },
     completeCanvasInput: (request) => withCanvas(async (controller) => {
-      if (controller.getCurrentCanvasId() !== request.canvasId || (request.documentPath && controller.getCurrentDocumentPath() !== request.documentPath)) throw new Error('Open the original project document to complete this input.');
+      if (!canvasInputMatchesScope(request, currentCanvasInputScope(controller))) throw new Error('Open the original project document and template instance to complete this input.');
       await controller.evaluate(dismissCanvasInputScript(request.id));
-      if (request.afterSubmit === 'resetState') await controller.reloadCanvas({ preserveState: false });
+      if (request.afterSubmit === 'resetState') {
+        if (!canvasInputMatchesScope(request, currentCanvasInputScope(controller))) throw new Error('The original canvas changed before its state could be reset.');
+        await controller.reloadCanvas({ preserveState: false });
+      }
     }),
     dismissCanvasInput: (request) => withCanvas(async (controller) => {
-      if (controller.getCurrentCanvasId() !== request.canvasId || (request.documentPath && controller.getCurrentDocumentPath() !== request.documentPath)) return;
+      if (!canvasInputMatchesScope(request, currentCanvasInputScope(controller))) return;
       await controller.evaluate(dismissCanvasInputScript(request.id));
     }),
     isEmpty: () => withCanvas((controller) => controller.isEmpty()),
@@ -812,8 +833,8 @@ const JOB_MONITOR = createMediaJobMonitor({
   onReady: (job) => CHAT.notifyMediaJob(job),
 });
 
-// Remains false until the exact production-route WAV fixture passes in CI.
-const STRUDEL_EXPORT_READY = false;
+// Production WAV/Media fixture passed at b3cb58a, Test run 37306231481.
+const STRUDEL_EXPORT_READY = true;
 const STRUDEL_EXPORT_OPTIONS = { getView: () => requireCanvasView(), projectStore: CANVASES, instances: TEMPLATE_INSTANCES };
 const STRUDEL_EXPORT_RENDERER = createStrudelExportRenderer({
   BrowserWindow,
@@ -934,7 +955,9 @@ function registerIpcHandlers() {
   ipcMain.handle('canvas:submit-input', (event, input) => {
     const controller = requireCanvasSender(event);
     if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['requestId', 'value'].includes(key))) throw new Error('Canvas input is invalid.');
-    return CHAT.submitCanvasInput({ ...input, canvasId: controller.getCurrentCanvasId(), documentPath: controller.getCurrentDocumentPath() });
+    const scope = currentCanvasInputScope(controller);
+    if (!scope) throw new Error('Open the original project document before answering this question.');
+    return CHAT.submitCanvasInput({ ...input, ...scope });
   });
   ipcMain.handle('canvas:cancel-input', (event, input) => {
     const controller = requireCanvasSender(event);
@@ -1420,8 +1443,9 @@ async function createWindow() {
         catch (error) { canvasView.view.webContents.send('canvas:strudel-export-context', { exportReady: false, reason: error.message }); }
       }
       const defaultPath = CANVASES.getProject(canvasId).manifest.entry;
-      const pending = CANVAS_INPUTS.list({ canvasId, status: 'pending', limit: 200, raw: true }).find((request) => request.documentPath ? request.documentPath === documentPath : documentPath === defaultPath);
-      if (pending) await canvasView.evaluate(renderCanvasInputScript({ ...pending, contextNote: pending.chatId === CHAT.getActiveChatId() ? '' : 'This question belongs to another conversation. Answer here, then open that conversation in History to continue. You can also dismiss it.' }));
+      const scope = currentCanvasInputScope(canvasView);
+      const pending = CANVAS_INPUTS.list({ canvasId, status: 'pending', limit: 200, raw: true }).find((request) => canvasInputMatchesScope(request, scope) && (request.documentPath || documentPath === defaultPath));
+      if (pending) await canvasView.evaluate(renderCanvasInputScript({ ...pending, contextNote: [canvasInputContextNote(pending), pending.chatId === CHAT.getActiveChatId() ? '' : 'This question belongs to another conversation. Answer here, then open that conversation in History to continue. You can also dismiss it.'].filter(Boolean).join(' ') }));
       CHAT.recoverCanvasInputs();
     },
   });

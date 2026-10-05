@@ -118,7 +118,7 @@ function zipEntry(buffer, name) {
 test('strudel_default_gate_never_instantiates_placeholder_source', async (t) => {
   const f = fixture(t, { kitBundles: { strudel: 'window.Strudel = {};' } }); const before = f.source();
   assert.equal(f.service.listTemplates().find((entry) => entry.id === 'strudel-sound').availability.available, false);
-  await assert.rejects(f.create({ templateId: 'strudel-sound' }), /runtime|compatibility|unavailable/i);
+  await assert.rejects(f.create({ templateId: 'strudel-sound' }), /installed.*kit|runtime|compatibility|unavailable/i);
   assert.equal(f.source(), before); assert.deepEqual(f.calls, []);
 });
 test('extracted_dependencies_count_toward_100_file_limit', async (t) => {

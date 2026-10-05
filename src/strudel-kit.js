@@ -17,9 +17,9 @@ function prepareStrudelBundle(source) {
 function getStrudelCapabilities() {
   return {
     nativeSynths: ['sine', 'triangle', 'square', 'sawtooth'],
-    // Native kit playback/offline synthesis passed CI on 5 October 2026.
-    // WAV export remains unavailable until its separate end-to-end Media gate.
-    audioExport: false,
+    // Native playback and bounded production WAV/Media export passed CI on 5 October 2026.
+    // Production gate: b3cb58a, Test run 37306231481.
+    audioExport: true,
     externalSamples: false,
     repl: false,
   };

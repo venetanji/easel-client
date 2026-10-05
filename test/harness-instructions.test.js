@@ -74,3 +74,22 @@ test('shared stitching guidance separates hard cuts, synthesis, review and user 
   assert.match(COMMON_INSTRUCTIONS, /boundary frames, continuity and audio/);
   assert.match(COMMON_INSTRUCTIONS, /Export video button; no agent export tool/);
 });
+
+test('template co-creation keeps specific permission, adaptive questions and silent restore within the existing budgets', () => {
+  for (const instructions of [BUILTIN_INSTRUCTIONS, CODEX_INSTRUCTIONS, EXTERNAL_INSTRUCTIONS]) {
+    assert.match(instructions, /list_templates/);
+    assert.match(instructions, /create_template_instance/);
+    assert.match(instructions, /specific.*(?:create|add).*target/i);
+    assert.match(instructions, /one.*question.*(?:rhythm|melody)/i);
+    assert.match(instructions, /calm.*energetic/i);
+    assert.match(instructions, /restorePreviousView.*clear.*(?:never|avoid).*resetState/i);
+    assert.match(instructions, /model round trip.*source.*reload/i);
+    assert.match(instructions, /Escape.*Stop/);
+    assert.match(instructions, /(?:answers|questions).*media.*(?:permission|authorize)/i);
+    assert.ok(instructions.length < 6500);
+  }
+});
+
+test('Tone gesture instructions are scoped to Tone rather than replacing the Strudel kit', () => {
+  assert.match(COMMON_INSTRUCTIONS, /For Tone, enable its kit/);
+});

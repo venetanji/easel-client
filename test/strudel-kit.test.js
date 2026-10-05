@@ -52,7 +52,7 @@ test('adapter_precedes_init', () => {
   assert.equal(prepareStrudelBundle(prepared), prepared);
   const capabilities = getStrudelCapabilities();
   assert.deepEqual(capabilities.nativeSynths, ['sine', 'triangle', 'square', 'sawtooth']);
-  assert.equal(capabilities.audioExport, false, 'export remains gated until runtime verification');
+  assert.equal(capabilities.audioExport, true, 'bounded WAV export passed the production runtime/Media gate at b3cb58a');
   assert.equal(capabilities.externalSamples, false);
   assert.equal(capabilities.repl, false);
 });

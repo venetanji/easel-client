@@ -72,12 +72,12 @@ test('ready_actions_create_or_add', async () => {
   assert.match(f.nodes.get('templates-detail').textContent, /60 seconds.*32 MiB/);
 });
 
-test('planned_has_no_open and unavailable Strudel explains its real gate', async () => {
+test('planned_has_no_open and unavailable Strudel explains its installed-kit requirement', async () => {
   const f = fixture(); await f.drawer.refresh();
   assert.match(f.nodes.get('templates-list').textContent, /Planned/);
   assert.deepEqual(f.buttons('templates-list').map((node) => node.dataset.templateId), ['video-editor', 'strudel-sound']);
   await f.choose('strudel-sound');
-  assert.match(f.nodes.get('templates-detail').textContent, /editable Strudel starter runtime compatibility gate has not passed/);
+  assert.match(f.nodes.get('templates-detail').textContent, /Creation requires the installed Strudel kit/);
   assert.equal(f.button('templates-detail', 'Create project').disabled, true);
   f.project('c'.repeat(32));
   assert.equal(f.button('templates-detail', 'Add to current project').disabled, true);

@@ -1,4 +1,4 @@
-const { canvasInputSummary, formatCanvasInputMessage, inputId } = require('./canvas-input');
+const { canvasInputMatchesScope, canvasInputSummary, formatCanvasInputMessage, inputId } = require('./canvas-input');
 const { validateApprovedMediaModel } = require('./canvas-input-store');
 
 function createAgentRouter({ builtin, codex, control, chatStore, inputStore, mediaJobStore,
@@ -33,6 +33,8 @@ function createAgentRouter({ builtin, codex, control, chatStore, inputStore, med
       turnOptions: turn?.options || { kits: canvasController.getCurrentKits?.() || [] } };
   }
   function matchesCanvas(entry) {
+    if (typeof canvasController.getCanvasInputScope === 'function') return canvasInputMatchesScope(entry, canvasController.getCanvasInputScope());
+    if (entry.instanceId !== undefined) return false;
     return entry.canvasId === canvasController.getCurrentCanvasId()
       && (!entry.documentPath || entry.documentPath === canvasController.getCurrentDocumentPath());
   }
