@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const removedSkills = require('./removed-skills');
 
 const MAX_SKILL_FILE_BYTES = 128_000;
 const MAX_SKILL_INSTRUCTIONS_LENGTH = 32_000;
@@ -10,13 +11,7 @@ const HARNESS_SKILLS = Object.freeze({
   'easel-p5': ['p5'],
   'easel-three': ['three'],
 });
-const HYPERFRAMES_SKILLS = new Set([
-  'canopy-part-title', 'code-slice-hero', 'cuboid-carousel', 'embedded-captions',
-  'faceless-explainer', 'figma', 'frost-sequence-camera-orbit', 'general-video',
-  'glass-shard-title', 'media-use', 'motion-graphics', 'music-to-video', 'orbit-card',
-  'pr-to-video', 'product-launch-video', 'remotion-to-hyperframes', 'slideshow',
-  'talking-head-recut', 'wireframe-portal-title',
-]);
+
 
 function skillCompatibility(folder, availableKits) {
   if (Object.hasOwn(HARNESS_SKILLS, folder)) {
@@ -25,9 +20,9 @@ function skillCompatibility(folder, availableKits) {
     if (missing?.length) return { compatibility: 'unsupported', requiredKits, reason: `Requires an installed ${missing.join(', ')} kit.` };
     return { compatibility: 'supported', requiredKits, reason: requiredKits.length ? `Enable ${requiredKits.join(', ')} in the project's Files drawer.` : 'Uses the tools and offline runtime available in Easel.' };
   }
-  if (folder === 'hyperframes' || folder.startsWith('hyperframes-') || HYPERFRAMES_SKILLS.has(folder)) return {
+  if (removedSkills.isRemoved(folder)) return {
     compatibility: 'unsupported', requiredKits: [],
-    reason: 'Requires HyperFrames, shell commands or external assets that the in-app agent cannot access.',
+    reason: removedSkills.reason,
   };
   return { compatibility: 'unreviewed', requiredKits: [], reason: 'Not reviewed for the Easel harness. Its dependencies may be unavailable.' };
 }
@@ -62,6 +57,7 @@ function readInstalledSkills(skillsPath, { availableKits } = {}) {
 function assertHarnessSkills(skills, catalog) {
   const unavailable = new Map(catalog.filter((skill) => skill.compatibility !== 'supported').map((skill) => [skill.name.toLowerCase(), skill]));
   for (const skill of skills) {
+    if (removedSkills.isRemoved(skill.name)) throw new Error(`The ${skill.name} skill is unavailable in Easel: ${removedSkills.reason}`);
     const installed = unavailable.get(skill.name.toLowerCase());
     if (installed) throw new Error(`The ${installed.name} skill is unavailable in Easel: ${installed.reason}`);
   }

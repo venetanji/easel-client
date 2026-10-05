@@ -42,7 +42,7 @@
     "easel"
   ],
   "author": "",
-  "license": "ISC",
+  "license": "GPL-3.0-or-later",
   "devDependencies": {
     "electron": "^44.4.5",
     "electron-builder": "26.16.1",

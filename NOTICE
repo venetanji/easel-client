@@ -1,0 +1,49 @@
+Easel Client
+SPDX-License-Identifier for Easel-owned code: GPL-3.0-or-later
+
+Easel-owned source code, documentation, Easel-native skills and original assets
+are licensed under the GNU General Public License, version 3 or (at your option)
+any later version. The complete GPL version 3 text is in LICENSE.
+
+Scope and prior grants
+----------------------
+This declaration applies only to material the Easel maintainers have the right
+to license. It does not relicense third-party code or assets, remove their notices,
+or revoke rights already granted under earlier licenses. Historical package
+metadata declared ISC; this change is not a withdrawal of any prior ISC grant.
+Git authorship alone is not proof of ownership. See docs/license-audit.md and
+docs/license-inventory.json for the evidence and limits of the provenance review.
+
+Third-party components
+----------------------
+The easel-media prompting/review guidance adapts venetanji/creative-skills
+material. Its known MIT grant is preserved in licenses/creative-skills-MIT.txt;
+.agents/skills/easel-media/NOTICE.md records the adaptation and provenance limits.
+
+Dependencies and generated runtime bundles retain their own copyright and license
+terms. Consult each installed package's license/notice and the notices embedded
+in canvas-kits/*.js. In particular:
+- p5.js 2.3.4 retains LGPL-2.1. Its full license and an unminified library copy
+  accompany the runtime in canvas-kits/p5.js and canvas-kits/p5.source.js.
+- Mediabunny 1.61.0 retains MPL-2.0. The generated bundle carries the full license
+  and exact upstream source reference; installed node_modules/mediabunny includes
+  the upstream source and license.
+- Three.js, Phaser, Matter.js, Tone.js and their bundled dependencies retain their
+  MIT and other upstream notices. MCP SDK and other npm dependencies retain their
+  own terms, including OpenAI's Apache-2.0 notice.
+- Electron/Chromium and their third-party notices accompany desktop binaries.
+The inventory is not a complete transitive SBOM or a legal clearance.
+
+The 28 imported heygen-com/hyperframes skill directories and their vendored assets
+have been removed from this version. No GSAP, Pixabay SFX, imported HyperFrames
+fonts or textures are distributed by those removed paths. Historical audit and
+migration references do not contain or grant rights to the removed material.
+
+Distribution
+------------
+When distributing covered binaries or bundles, supply the exact matching
+Corresponding Source, license notices, lockfiles, local changes and build/install
+materials under an applicable GPL section 6 route. Preserve third-party source
+and notice obligations. A moving repository URL alone is not a source offer.
+Do not include credentials, private user projects or user media in source bundles.
+This change is source alignment, not authorization to publish a binary release.

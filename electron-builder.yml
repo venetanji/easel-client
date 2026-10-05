@@ -8,6 +8,13 @@ files:
   - packages/media-mcp/package.json
   - .agents/skills/**/*
   - package.json
+  - LICENSE
+  - NOTICE
+  - licenses/**/*
+  - docs/license-audit.md
+  - docs/license-inventory.json
+  - packages/media-mcp/LICENSE
+  - packages/media-mcp/NOTICE
 asar: true
 asarUnpack:
   - packages/media-mcp/dist/**/*
