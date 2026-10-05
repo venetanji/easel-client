@@ -244,3 +244,20 @@ test('removes only the requested project timeline and is idempotent when absent'
   assert.equal(store.remove(projectId), false);
   assert.notEqual(store.read(secondProjectId), null);
 });
+
+test('two_timelines_are_independent', (t) => {
+  const { store, userDataPath } = setup(t);
+  const a = 'd'.repeat(32), b = 'e'.repeat(32);
+  store.create(projectId, a, {}); store.create(projectId, b, {});
+  const beforeB = store.read(projectId, b);
+  const filenameB = path.join(userDataPath, 'video-timelines', projectId, `${b}.json`);
+  const bytesB = fs.readFileSync(filenameB);
+  store.apply(projectId, a, { expectedRevision: 0, operations: [{ type: 'insert', item: clip }] });
+  store.undo(projectId, a, { expectedRevision: 1 });
+  assert.deepEqual(store.read(projectId, b), beforeB);
+  assert.deepEqual(fs.readFileSync(filenameB), bytesB);
+  assert.throws(() => store.read(projectId), { code: 'TIMELINE_AMBIGUOUS' });
+  assert.throws(() => store.remove(projectId), { code: 'TIMELINE_AMBIGUOUS' });
+  assert.equal(store.remove(projectId, a), true);
+  assert.deepEqual(store.read(projectId), beforeB);
+});

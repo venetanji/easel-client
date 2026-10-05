@@ -1077,6 +1077,7 @@ function wireRenderer({ document, client }) {
   const canvasTitle = document.getElementById('canvas-title');
   const exportCurrentButton = document.getElementById('export-current');
   const undoCanvasButton = document.getElementById('canvas-undo');
+  const undoCanvasStatus = document.getElementById('canvas-undo-status');
   const modelSelect = document.getElementById('chat-model');
   const templateSelect = document.getElementById('prompt-template');
   const connectionDot = document.getElementById('connection-dot');
@@ -1113,6 +1114,7 @@ function wireRenderer({ document, client }) {
   let insertedStarterPrompt = '';
   const notifiedCanvasInputs = new Set();
   let activeUndoAvailable = false;
+  let activeUndoBlockedReason = '';
   let creationKind = 'document';
   let newProjectKitInputs = null;
   let newProjectKitRequest = 0;
@@ -1557,6 +1559,10 @@ function wireRenderer({ document, client }) {
     const videoEditorButton = document.getElementById('open-video-editor');
     if (videoEditorButton) videoEditorButton.disabled = busy || videoEditorOpening;
     undoCanvasButton.disabled = busy || activePreviewKind !== 'document' || !activeUndoAvailable;
+    undoCanvasButton.title = activeUndoBlockedReason || 'Undo canvas changes';
+    if (activeUndoBlockedReason) undoCanvasButton.setAttribute('aria-description', activeUndoBlockedReason);
+    else undoCanvasButton.removeAttribute('aria-description');
+    if (undoCanvasStatus) { undoCanvasStatus.textContent = activeUndoBlockedReason; undoCanvasStatus.hidden = !activeUndoBlockedReason; }
     sendButton.disabled = external || (running ? stopPending : busy || modelSaving || credentialsSaving || !ready || (!messageInput.value.trim() && pendingAttachments.length === 0));
     sendButton.dataset.action = running ? 'stop' : 'send';
     document.getElementById('send-label').textContent = running ? stopPending ? 'Stopping...' : 'Stop' : 'Send';
@@ -2091,6 +2097,7 @@ function wireRenderer({ document, client }) {
     activePreviewKind = canvas?.previewKind || 'empty';
     starterDocument = activePreviewKind === 'document' && canvas?.starterDocument === true;
     activeUndoAvailable = canvas?.undoAvailable === true;
+    activeUndoBlockedReason = typeof canvas?.undoBlockedReason === 'string' ? canvas.undoBlockedReason : '';
     canvasTitle.textContent = canvas?.documentTitle || canvas?.title || 'Project';
     exportCurrentButton.disabled = !activeCanvasId;
     canvasEmpty.hidden = activePreviewKind !== 'empty' && !starterDocument;
@@ -2483,6 +2490,7 @@ function wireRenderer({ document, client }) {
     videoEditorOpening = true; updateSendState();
     try {
       const result = await client.openVideoEditor(activeCanvasId ? { projectId: activeCanvasId } : {});
+      if (result.canceled) return;
       await workspace.openProject(result.projectId || result.id, result.documentPath);
       setStatus(statusElement, 'Video editor ready. Its HTML, JavaScript and styles are editable under Project files.');
     } catch (error) { setStatus(statusElement, error.message, true); }
@@ -2582,7 +2590,7 @@ function wireRenderer({ document, client }) {
       return;
     }
     if (event.type === 'timeline-changed') {
-      if (timelineSelection?.projectId === event.projectId && timelineSelection.timelineRevision !== event.revision) setTimelineSelection(null);
+      if (timelineSelection?.projectId === event.projectId && timelineSelection.timelineId === event.timelineId && (!timelineSelection.instanceId || timelineSelection.instanceId === event.instanceId) && timelineSelection.timelineRevision !== event.revision) setTimelineSelection(null);
       return;
     }
     if (event.type === 'timeline-exported') {

@@ -4,6 +4,7 @@
   const MAX_MEDIA_BYTES = 64 * 1024 * 1024;
   const MAX_CACHE_BYTES = 128 * 1024 * 1024;
   const MAX_FRAME = 10_000_000;
+  const MAX_DELETE_CLIPS = 100;
   const MEDIA_DRAG_TYPE = 'application/x-easel-media-asset';
   const MEDIA_TYPE = /^(?:video\/[a-z0-9.+-]+|audio\/[a-z0-9.+-]+|image\/(?:png|jpeg|webp|gif|avif|bmp))$/i;
   const copy = (value) => value == null ? null : JSON.parse(JSON.stringify(value));
@@ -24,7 +25,7 @@
     }));
   }
 
-  function createVideoTimelineView({ document, container, client, onSelection = () => {}, onStatus = () => {}, onClose, isBusy = () => false }) {
+  function createVideoTimelineView({ document, container, client, onSelection = () => {}, onStatus = () => {}, onClose, isBusy = () => false, confirmDeleteTrack }) {
     if (!document || !container || !client) throw new Error('Timeline document, container and client are required.');
     const host = document.defaultView || root;
     const urlApi = host.URL || root.URL;
@@ -35,14 +36,14 @@
     const now = () => host.performance?.now?.() ?? Date.now();
     let projectId = '', timeline = null, selection = null, assets = [], generation = 0, readSequence = 0;
     let closed = true, destroyed = false, loading = false, mutating = false, explicitlyBusy = false;
-    let pickerSequence = 0;
+    let pickerSequence = 0, deleteConfirmation = null;
     let history = null, libraryAssets = [], exportController = null, preparing = false, exporting = false, playhead = 0, playing = false, animation = null, playOrigin = 0, startedAt = 0;
     let pixelsPerSecond = PIXELS_PER_SECOND, inspectedItemId = '', drag = null, dropTarget = null, suppressClick = false;
     let cachedBytes = 0, itemCounter = 0, mediaFetchTail = Promise.resolve();
     const cache = new Map(), pendingMedia = new Map(), mediaErrors = new Map(), mediaNodes = new Map(), probeCleanups = new Set();
     const ui = {}, editControls = [];
     const active = (token) => !closed && !destroyed && generation === token;
-    const canEdit = () => !closed && !!timeline && !loading && !mutating && !preparing && !exporting && !explicitlyBusy && !isBusy();
+    const canEdit = () => !closed && !!timeline && !loading && !mutating && !preparing && !exporting && !deleteConfirmation && !explicitlyBusy && !isBusy();
     const el = (tag, className, text, role) => {
       const node = document.createElement(tag);
       if (className) node.className = className;
@@ -122,7 +123,7 @@
     rangeBar.append(field('Start frame', 'range-start', 'number', 0), field('End frame (exclusive)', 'range-end', 'number', 24), field('Selection track', 'range-track', 'select'), button('Select range', 'select-range', selectRange), button('Clear', 'clear-selection', clearSelection, 'button quiet small'));
     exactRange.append(rangeBar); contextBar.append(add, inspector, exactRange);
     const selectionSummary = el('p', 'timeline-selection-summary', 'Select a clip or frame range to attach it to your next message.', 'selection-summary'); selectionSummary.setAttribute('aria-live', 'polite');
-    const timelineToolbar = el('div', 'timeline-track-toolbar'); timelineToolbar.append(selectionSummary, button('Add video track', 'add-video-track', addVideoTrack), button('Clear selection', 'clear-range', clearSelection, 'button quiet small'), field('Zoom', 'zoom', 'range', PIXELS_PER_SECOND));
+    const timelineToolbar = el('div', 'timeline-track-toolbar'); timelineToolbar.append(selectionSummary, button('Delete clip', 'remove-clip', deleteSelectedClips, 'button outline small timeline-delete'), button('Add video track', 'add-video-track', addVideoTrack), button('Clear selection', 'clear-range', clearSelection, 'button quiet small'), field('Zoom', 'zoom', 'range', PIXELS_PER_SECOND));
     ui.zoom.min = '24'; ui.zoom.max = '160'; ui.zoom.step = '8'; ui.zoom.addEventListener('input', () => { pixelsPerSecond = Number(ui.zoom.value); renderTracks(); });
     const tracksViewport = el('div', 'timeline-tracks-viewport', undefined, 'tracks-viewport');
     const tracks = el('div', 'timeline-tracks', undefined, 'tracks'); tracksViewport.append(tracks);
@@ -135,6 +136,10 @@
     shell.append(header, workbench, contextBar, timelineToolbar, tracksViewport, statusNode); container.replaceChildren(shell); container.hidden = true;
     editControls.push(ui['add-video-track'], ui['add-asset'], ui['add-track'], ui['image-duration'], ui['add-clip']);
     shell.addEventListener('keydown', (event) => {
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        if (!event.defaultPrevented && !event.repeat && !event.isComposing && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && canEdit() && !drag && selectionOwnsFocus(event.target) && selectedClipCount() <= MAX_DELETE_CLIPS) { event.preventDefault(); deleteSelectedClips(); }
+        return;
+      }
       if (event.key === 'Escape') { event.preventDefault(); if (drag) cancelRangeDrag(); else clearSelection(); clearDropTarget(); return; }
       if (event.defaultPrevented || ['INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY'].includes(event.target?.tagName) || event.target?.isContentEditable) return;
       if (event.target?.tagName === 'BUTTON' && !['clip-body', 'track-select', 'clip-trim-start', 'clip-trim-end', 'range-start-handle', 'range-end-handle'].includes(event.target.dataset?.role)) return;
@@ -149,7 +154,7 @@
       ui['add-clip'].disabled = !editable || !pickerAssets().some((asset) => asset.id === ui['add-asset'].value);
       ui.undo.disabled = !editable || history?.undoAvailable === false;
       ui.redo.disabled = !editable || history?.redoAvailable === false;
-      ui.refresh.disabled = loading || mutating || preparing || exporting || closed;
+      ui.refresh.disabled = loading || mutating || preparing || exporting || !!deleteConfirmation || closed;
       ui.export.disabled = !editable || !durationFrames(timeline) || !host.EaselVideoExport?.exportVideoTimeline || !client.saveTimelineExport;
       ui.export.title = host.EaselVideoExport?.exportVideoTimeline ? 'Render a video and save it to the Media library' : 'Video export runtime is unavailable in this project';
       ui['cancel-export'].hidden = !exporting;
@@ -160,12 +165,16 @@
       ui['select-range'].disabled = !timeline || loading;
       ui['clear-selection'].disabled = !selection; ui['clear-range'].disabled = !selection;
       ui['save-clip'] && (ui['save-clip'].disabled = !editable);
-      ui['remove-clip'] && (ui['remove-clip'].disabled = !editable);
+      const count = selectedClipCount();
+      ui['remove-clip'].textContent = count > 1 ? `Delete selected clips (${count})` : 'Delete clip';
+      ui['remove-clip'].disabled = !editable || !selectionCurrent() || !count || count > MAX_DELETE_CLIPS;
+      ui['remove-clip'].title = count > MAX_DELETE_CLIPS ? 'Select up to 100 clips, or use Delete track for a whole track.' : 'Delete selected clips from the timeline. Undo restores them; source files stay in Media.';
       walk(tracks, (node) => {
+        if (node.dataset?.role === 'remove-track') node.disabled = !editable;
         if (node.dataset?.role === 'track-up' || node.dataset?.role === 'track-down') node.disabled = !editable || (node.dataset.role === 'track-up' ? timeline?.tracks.at(-1)?.id : timeline?.tracks[0]?.id) === node.dataset.trackId;
         if (['clip-trim-start', 'clip-trim-end'].includes(node.dataset?.role)) node.disabled = !editable;
         if (['range-start-handle', 'range-end-handle'].includes(node.dataset?.role)) node.disabled = !editable || !selectionCurrent(); });
-      shell.setAttribute('aria-busy', String(loading || mutating || preparing || exporting));
+      shell.setAttribute('aria-busy', String(loading || mutating || preparing || exporting || !!deleteConfirmation));
     }
     function pickerAssets() {
       const found = new Map(assets.map(asset => [asset.id, asset]));
@@ -229,7 +238,13 @@
           control.dataset.role = `track-${label}`; control.dataset.trackId = track.id; control.setAttribute('aria-label', `Move ${track.name || track.type} ${label}`);
           control.disabled = !canEdit() || (direction === 1 ? timeline.tracks.at(-1)?.id : timeline.tracks[0]?.id) === track.id; trackActions.append(control);
         }
-        trackHeader.append(trackButton, trackActions);
+        const clipCount = timeline.items.filter(item => item.trackId === track.id).length;
+        const identity = { token: generation, timelineId: timeline.id, revision: timeline.revision };
+        const removeTrack = button('Delete track', '', () => { if (shell.contains(removeTrack)) return deleteTrack(track.id, identity); }, 'timeline-track-order-button timeline-delete');
+        removeTrack.dataset.role = 'remove-track'; removeTrack.dataset.trackId = track.id;
+        removeTrack.setAttribute('aria-label', `Delete ${track.name || track.type} track, ${clipCount} clip${clipCount === 1 ? '' : 's'}`);
+        removeTrack.disabled = !canEdit(); trackActions.append(removeTrack);
+        trackHeader.append(trackButton, el('span', 'timeline-track-count', `${clipCount} clip${clipCount === 1 ? '' : 's'}`), trackActions);
         trackButton.dataset.role = 'track-select'; trackButton.dataset.trackId = track.id; trackButton.setAttribute('aria-label', `Select ${track.name || track.type} track`);
         const lane = el('div', 'timeline-track-lane'); lane.tabIndex = 0; lane.dataset.role = 'track-lane'; lane.dataset.trackId = track.id; lane.style.width = `${width}px`; lane.style.backgroundSize = `${pixelsPerSecond}px 100%`; lane.setAttribute('aria-label', `${track.name || track.type} clips`);
         lane.addEventListener('pointerdown', (event) => {
@@ -277,7 +292,7 @@
     function visibleEndFrame() {
       return Math.min(MAX_FRAME, Math.max(durationFrames(timeline) + Math.ceil(fps(timeline.frameRate)), Math.ceil(fps(timeline.frameRate) * 8), selection?.endFrame || 0));
     }
-    function selectionCurrent() { return !!selection && selection.timelineRevision === timeline?.revision && selection.timelineId === timeline?.id; }
+    function selectionCurrent() { return !!selection && selection.projectId === projectId && selection.timelineRevision === timeline?.revision && selection.timelineId === timeline?.id; }
     function frameAt(event, lane, end = visibleEndFrame()) {
       return clamp(pixelToFrame(event.clientX - lane.getBoundingClientRect().left, timeline.frameRate, pixelsPerSecond), 0, end);
     }
@@ -512,6 +527,8 @@
       const stale = !!selection && (selection.timelineRevision !== timeline?.revision || selection.timelineId !== timeline?.id);
       if (selection) { ui['range-start'].value = String(selection.startFrame); ui['range-end'].value = String(selection.endFrame); ui['range-track'].value = selection.trackIds.length === 1 ? selection.trackIds[0] : ''; }
       ui['selection-summary'].textContent = selection ? stale ? `Timeline changed after selection (revision ${selection.timelineRevision}). Select again before sending.` : `Selected frames [${selection.startFrame}, ${selection.endFrame}) · ${selection.trackIds.length} track${selection.trackIds.length === 1 ? '' : 's'} · ${selection.endFrame - selection.startFrame} frames · drag handles to adjust · next message` : 'Drag clips to move · edges to trim · empty space to select · Alt/Option + drag moves the range · drag headers to stack';
+      if (selection && !stale && selection.itemIds.length) ui['selection-summary'].textContent += ` · ${selection.itemIds.length} clip${selection.itemIds.length === 1 ? '' : 's'}`;
+      if (selection && !stale && selection.itemIds.length > MAX_DELETE_CLIPS) ui['selection-summary'].textContent += ' · Select up to 100 clips to delete together, or use Delete track.';
       ui['selection-summary'].dataset.stale = String(stale);
       walk(tracks, (node) => {
         if (node.dataset?.itemId) node.setAttribute('aria-pressed', String(selection?.itemIds.includes(node.dataset.itemId) || false));
@@ -554,7 +571,7 @@
     }
     function renderInspector() {
       const inspector = ui.inspector; const item = timeline?.items.find((entry) => entry.id === inspectedItemId);
-      delete ui['save-clip']; delete ui['remove-clip'];
+      delete ui['save-clip'];
       inspector.hidden = !item;
       if (!item) { inspector.open = false; inspector.replaceChildren(); return; }
       const title = el('summary', '', `Clip details · ${item.name || assets.find((asset) => asset.id === item.assetId)?.name || 'Selected clip'}`);
@@ -565,9 +582,49 @@
       if (!isStill) {
         grid.append(field('Audio gain (0–1)', 'clip-gain', 'number', item.gain ?? 1), field('Fade in (frames)', 'fade-in', 'number', item.fadeInFrames || 0), field('Fade out (frames)', 'fade-out', 'number', item.fadeOutFrames || 0)); ui['clip-gain'].step = '0.05'; ui['clip-gain'].max = '1';
       }
-      const buttons = el('div', 'timeline-actions'); buttons.append(button('Save clip', 'save-clip', () => saveClip(item.id, isStill), 'button primary small'), button('Remove', 'remove-clip', () => mutate('applyTimeline', [{ type: 'remove', itemId: item.id }]), 'button quiet small'));
+      const buttons = el('div', 'timeline-actions'); buttons.append(button('Save clip', 'save-clip', () => saveClip(item.id, isStill), 'button primary small'));
       inspector.replaceChildren(title, el('p', 'timeline-help', 'Drag the clip to move it. Drag its side grips to trim.'), grid, buttons, el('p', 'timeline-help', 'Source timestamps are independent of project frames. Live preview maps the source span to the clip length.'));
       updateControls();
+    }
+    function selectedClipCount() { return selection?.itemIds.length || 0; }
+    const modalOpen = () => !!document.querySelector?.('dialog[open], [role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]');
+    function selectionOwnsFocus(target) {
+      if (!selectionCurrent() || !selectedClipCount() || target !== document.activeElement || !shell.contains(target)) return false;
+      if (modalOpen()) return false;
+      for (let node = target; node; node = node.parentNode) {
+        if (['INPUT', 'TEXTAREA', 'SELECT', 'SUMMARY', 'DIALOG'].includes(node.tagName) || node.isContentEditable || ['true', '', 'plaintext-only'].includes(node.getAttribute?.('contenteditable')) || ['textbox', 'dialog', 'alertdialog'].includes(node.getAttribute?.('role'))) return false;
+      }
+      const role = target.dataset?.role;
+      if (role === 'remove-clip') return true;
+      if (['clip-body', 'clip-trim-start', 'clip-trim-end'].includes(role)) return selection.itemIds.includes(target.dataset.itemId || target.dataset.clipId);
+      return ['track-select', 'track-lane', 'range-start-handle', 'range-end-handle'].includes(role) && selection.trackIds.includes(target.dataset.trackId);
+    }
+    async function deleteSelectedClips() {
+      if (!canEdit() || !selectionCurrent() || !selectedClipCount()) return;
+      const count = selectedClipCount();
+      if (count > MAX_DELETE_CLIPS) { status('Select up to 100 clips to delete together, or use Delete track. No clips were deleted.', true); return; }
+      await mutate('applyTimeline', selection.itemIds.map(itemId => ({ type: 'remove', itemId })), {
+        clearSelection: true, message: `Deleted ${count} clip${count === 1 ? '' : 's'}. Undo restores them. Source files stay in Media.`,
+      });
+    }
+    async function deleteTrack(trackId, identity) {
+      if (!canEdit() || !active(identity.token) || timeline.id !== identity.timelineId || timeline.revision !== identity.revision) return;
+      const track = timeline.tracks.find(entry => entry.id === trackId); if (!track) return;
+      const count = timeline.items.filter(item => item.trackId === trackId).length;
+      if (count) {
+        if (typeof confirmDeleteTrack !== 'function') { status('Track deletion confirmation is unavailable. No clips were deleted.', true); return; }
+        const Controller = host.AbortController || root.AbortController;
+        const controller = new Controller(); deleteConfirmation = controller; pause(); cancelRangeDrag(); updateControls();
+        let confirmed = false;
+        try { confirmed = await confirmDeleteTrack({ trackId, trackName: track.name, clipCount: count, signal: controller.signal }) === true; }
+        catch (error) { if (active(identity.token)) status(`Could not confirm track deletion. ${error.message || 'Try again.'}`, true); }
+        finally { if (deleteConfirmation === controller) { deleteConfirmation = null; updateControls(); } }
+        if (!confirmed || controller.signal.aborted || !canEdit() || !active(identity.token)) return;
+        if (timeline.id !== identity.timelineId || timeline.revision !== identity.revision) { status('The timeline changed. Review the track and delete again.', true); return; }
+      }
+      await mutate('applyTimeline', [{ type: 'remove-track', trackId, ...(count ? { removeItems: true } : {}) }], {
+        clearSelection: true, message: `Deleted ${track.name} track${count ? ` and ${count} clip${count === 1 ? '' : 's'}` : ''}. Undo restores it. Source files stay in Media.`,
+      });
     }
     async function saveClip(itemId, isStill) {
       if (!canEdit()) return;
@@ -587,24 +644,25 @@
       if (!client.getTimelineHistory) return;
       try { const value = await client.getTimelineHistory(projectId); if (active(token)) { history = value; updateControls(); } } catch { if (active(token)) history = null; }
     }
-    async function mutate(method, operations) {
+    async function mutate(method, operations, options = {}) {
       if (!canEdit() || operations && !operations.length) return;
       cancelRangeDrag(); clearDropTarget();
       const token = generation, owner = projectId, revision = timeline.revision;
       const focused = document.activeElement; let nextFocus;
+      const restoreDeletionFocus = options.clearSelection && selectionOwnsFocus(focused);
       mutating = true; readSequence += 1; pause(); updateControls();
       try {
         const result = await client[method](owner, { expectedRevision: revision, ...(operations ? { operations } : {}) });
         if (!active(token)) return;
-        const restoreFocus = (document.activeElement === focused || document.activeElement === document.body) && ['clip-body', 'clip-trim-start', 'clip-trim-end', 'track-select', 'track-up', 'track-down'].includes(focused?.dataset?.role);
-        timeline = result; playhead = Math.min(playhead, durationFrames(timeline)); render();
+        const restoreFocus = !modalOpen() && (document.activeElement === focused || document.activeElement === document.body) && (restoreDeletionFocus || ['clip-body', 'clip-trim-start', 'clip-trim-end', 'track-select', 'track-up', 'track-down', 'remove-track'].includes(focused?.dataset?.role));
+        timeline = result; playhead = Math.min(playhead, durationFrames(timeline)); if (options.clearSelection) clearSelection(); render();
         if (restoreFocus) {
           let replacement; walk(tracks, node => { if (node.dataset?.role === focused.dataset.role && ['itemId', 'clipId', 'trackId'].every(key => node.dataset[key] === focused.dataset[key])) replacement = node; });
-          nextFocus = replacement || ui.ruler;
+          nextFocus = restoreDeletionFocus ? ui.ruler : replacement || ui.ruler;
         }
-        status(method === 'undoTimeline' ? 'Edit undone.' : method === 'redoTimeline' ? 'Edit restored.' : 'Timeline saved. Source media is unchanged.'); await readHistory(token);
+        status(options.message || (method === 'undoTimeline' ? 'Edit undone.' : method === 'redoTimeline' ? 'Edit restored.' : 'Timeline saved. Source media is unchanged.')); await readHistory(token);
       } catch (error) { if (active(token)) status(`${error.message || 'Could not save the timeline.'}${/revision|conflict/i.test(error.message || '') ? ' Refresh, then select again.' : ''}`, true); }
-      finally { if (active(token)) { mutating = false; updateControls(); if (nextFocus && (!document.activeElement || document.activeElement === focused || document.activeElement === document.body)) nextFocus.focus?.(); } }
+      finally { if (active(token)) { mutating = false; updateControls(); if (nextFocus && !modalOpen() && (!document.activeElement || document.activeElement === focused || document.activeElement === document.body)) nextFocus.focus?.(); } }
     }
     async function addClip(drop) {
       if (!canEdit()) return;
@@ -805,18 +863,40 @@
     async function open(nextProjectId) {
       if (destroyed) throw new Error('Timeline view has been destroyed.');
       if (typeof nextProjectId !== 'string' || !nextProjectId) throw new Error('Open a project before using Timeline.');
-      cancelRangeDrag(); clearDropTarget(); generation += 1; exportController?.abort(); exportController = null; exporting = false; preparing = false; disposePreview(); closed = false; projectId = nextProjectId; timeline = null; assets = []; libraryAssets = []; add.open = false; inspector.open = false; exactRange.open = false; history = null; inspectedItemId = ''; playhead = 0; mutating = false;
+      cancelRangeDrag(); clearDropTarget(); generation += 1; deleteConfirmation?.abort(); deleteConfirmation = null; exportController?.abort(); exportController = null; exporting = false; preparing = false; disposePreview(); closed = false; projectId = nextProjectId; timeline = null; assets = []; libraryAssets = []; add.open = false; inspector.open = false; exactRange.open = false; history = null; inspectedItemId = ''; playhead = 0; mutating = false;
       if (selection) { selection = null; onSelection(null); }
       container.hidden = false; tracks.replaceChildren(); ui.inspector.replaceChildren(); ui['add-asset'].replaceChildren(); status('Opening timeline…'); render();
       await load(generation, true);
     }
     async function refresh() { if (closed || destroyed || mutating || preparing || exporting) return; cancelRangeDrag(); pause(); await load(generation, true); if (add.open) await refreshPicker(); }
-    function close() { cancelRangeDrag(); clearDropTarget(); generation += 1; exportController?.abort(); exportController = null; exporting = false; preparing = false; closed = true; loading = false; mutating = false; disposePreview(); projectId = ''; timeline = null; assets = []; history = null; clearSelection(); container.hidden = true; }
+    function close() { cancelRangeDrag(); clearDropTarget(); generation += 1; deleteConfirmation?.abort(); deleteConfirmation = null; exportController?.abort(); exportController = null; exporting = false; preparing = false; closed = true; loading = false; mutating = false; disposePreview(); projectId = ''; timeline = null; assets = []; history = null; clearSelection(); container.hidden = true; }
     function destroy() { if (destroyed) return; close(); destroyed = true; container.replaceChildren(); }
     function setBusy(value) { explicitlyBusy = !!value; if (value) { cancelRangeDrag(); clearDropTarget(); } updateControls(); renderSelection(); }
     return { open, refresh, getSelection: () => copy(selection), clearSelection, close, destroy, setBusy };
   }
-  const api = { createVideoTimelineView, frameToPixels, pixelToFrame, getPreviewLayers };
+
+  function confirmTimelineTrackDeletion({ document, container, trackName, clipCount, signal }) {
+    if (signal?.aborted) return Promise.resolve(false);
+    const dialog = document.createElement('dialog'); dialog.className = 'timeline-delete-dialog';
+    dialog.setAttribute('aria-label', `Delete ${trackName} track?`);
+    const title = document.createElement('h2'); title.textContent = `Delete ${trackName} track?`;
+    const detail = document.createElement('p'); detail.textContent = `This deletes the track and ${clipCount} clip${clipCount === 1 ? '' : 's'}. Undo restores them. Source files stay in Media.`;
+    const actions = document.createElement('div'); actions.className = 'timeline-actions';
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'button outline small'; cancel.textContent = 'Cancel';
+    const approve = document.createElement('button'); approve.type = 'button'; approve.className = 'button outline small timeline-delete'; approve.textContent = `Delete track and ${clipCount} clip${clipCount === 1 ? '' : 's'}`;
+    actions.append(cancel, approve); dialog.append(title, detail, actions);
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => { if (settled) return; settled = true; signal?.removeEventListener('abort', abort); if (dialog.open) dialog.close(); dialog.remove(); resolve(value); };
+      const abort = () => finish(false);
+      cancel.addEventListener('click', abort); approve.addEventListener('click', () => finish(true));
+      dialog.addEventListener('cancel', event => { event.preventDefault(); finish(false); });
+      dialog.addEventListener('close', abort); signal?.addEventListener('abort', abort, { once: true });
+      try { container.append(dialog); dialog.showModal(); cancel.focus(); }
+      catch { finish(false); }
+    });
+  }
+  const api = { createVideoTimelineView, confirmTimelineTrackDeletion, frameToPixels, pixelToFrame, getPreviewLayers };
   if (typeof module === 'object' && module.exports) module.exports = api;
-  if (root) root.createVideoTimelineView = createVideoTimelineView;
+  if (root) { root.createVideoTimelineView = createVideoTimelineView; root.confirmTimelineTrackDeletion = confirmTimelineTrackDeletion; }
 }(typeof window !== 'undefined' ? window : globalThis));

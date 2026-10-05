@@ -193,3 +193,17 @@ test('caches tool discovery across calls, shares the first request, and invalida
   const restarted = f.host.listTools(); await new Promise(setImmediate); finish(tools); await restarted;
   assert.equal(discoveries, 3);
 });
+
+test('shared_host_rejects_a_selected_turn_after_runtime_replacement', async (t) => {
+  const { templateFixture } = require('./helpers/template-lifecycle');
+  const f = templateFixture(t), [a, b] = f.records;
+  f.controller.resolveSelection(f.selection); const before = [f.bytes(a), f.bytes(b)];
+  const host = createEaselToolHost({ canvasController: f.hostController,
+    createMediaClient: async () => ({ listTools: async () => [], close: async () => {} }),
+    getOrigin: () => ({ turnOptions: { timelineSelection: f.selection } }),
+  });
+  f.setActive({ runtimeGeneration: 2 });
+  const result = await host.callTool('apply_timeline_edit', { projectId: f.projectId, expectedRevision: 0, operations: [{ type: 'insert', item: f.clip }] });
+  assert.equal(result.isError, true); assert.match(result.content[0].text, /stale|runtime|document/i);
+  assert.deepEqual([f.bytes(a), f.bytes(b)], before);
+});

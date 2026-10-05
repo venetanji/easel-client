@@ -13,10 +13,13 @@ function project(value) {
   return value;
 }
 function validateTimelineSelectionInput(input) {
-  object(input, ['projectId', 'timelineId', 'timelineRevision', 'trackIds', 'itemIds', 'startFrame', 'endFrame'], 'Timeline selection');
+  object(input, ['projectId', 'instanceId', 'documentPath', 'runtimeGeneration', 'timelineId', 'timelineRevision', 'trackIds', 'itemIds', 'startFrame', 'endFrame'], 'Timeline selection');
   project(input.projectId);
-  if (!ID.test(input.timelineId || '')) throw new Error('Timeline ID is invalid.');
+  if (typeof input.timelineId !== 'string' || !ID.test(input.timelineId)) throw new Error('Timeline ID is invalid.');
   revision(input.timelineRevision);
+  if (input.instanceId !== undefined && (typeof input.instanceId !== 'string' || !PROJECT_ID.test(input.instanceId))) throw new Error('Timeline instance ID is invalid.');
+  if (input.documentPath !== undefined && (typeof input.documentPath !== 'string' || input.documentPath.length > 240 || !/\.html?$/i.test(input.documentPath) || /[\\\u0000-\u001f]/.test(input.documentPath) || input.documentPath.split('/').some((part) => !part || part === '.' || part === '..'))) throw new Error('Timeline document path is invalid.');
+  if (input.runtimeGeneration !== undefined && (!Number.isSafeInteger(input.runtimeGeneration) || input.runtimeGeneration < 0)) throw new Error('Timeline runtime generation is invalid.');
   for (const key of ['trackIds', 'itemIds']) {
     if (!Array.isArray(input[key]) || input[key].length > 100 || input[key].some((id) => typeof id !== 'string' || !ID.test(id)) || new Set(input[key]).size !== input[key].length) throw new Error(`Timeline ${key} are invalid.`);
   }
@@ -32,23 +35,38 @@ function validateTimelineRequest(action, input = {}) {
   return structuredClone(input);
 }
 
-function createVideoTimelineController({ store, projectStore, getActiveProjectId, onChanged }) {
+function createVideoTimelineController({ store, projectStore, getActiveProjectId, getActiveScope, instances, onChanged }) {
   const { applyTimelineOperations, validateTimelineSelection } = require('./video-timeline');
   function assertProject(projectId, active = false) {
     project(projectId);
     if (active && projectId !== getActiveProjectId()) throw new Error('Open the timeline’s active project before editing or sharing its selection.');
     projectStore.getProject(projectId);
   }
-  function read(projectId) { assertProject(projectId); return store.read(projectId); }
-  function history(projectId) { assertProject(projectId); return store.status(projectId); }
+  function resolveLegacy(projectId) { assertProject(projectId); return store.resolveLegacy(projectId); }
+  function resolveTarget(projectId, timelineId, instanceId) {
+    assertProject(projectId);
+    if (timelineId !== undefined && (typeof timelineId !== 'string' || !ID.test(timelineId))) throw new Error('Timeline ID is invalid.');
+    if (instanceId !== undefined) {
+      if (typeof instanceId !== 'string' || !PROJECT_ID.test(instanceId)) throw new Error('Timeline instance ID is invalid.');
+      const binding = instances?.list(projectId).find((entry) => entry.instanceId === instanceId);
+      if (!binding?.timelineId || timelineId !== undefined && binding.timelineId !== timelineId) throw new Error('Timeline instance does not match.');
+      return binding.timelineId;
+    }
+    return timelineId ?? resolveLegacy(projectId);
+  }
+  function read(projectId, timelineId) { const id = resolveTarget(projectId, timelineId); return id === null ? null : store.read(projectId, id); }
+  function history(projectId, timelineId) { const id = resolveTarget(projectId, timelineId); return id === null ? { undoAvailable: false, redoAvailable: false } : store.status(projectId, id); }
   function changed(projectId, document) {
-    onChanged?.({ type: 'timeline-changed', projectId, timelineId: document.id, revision: document.revision });
+    const binding = instances?.list(projectId).find((entry) => entry.timelineId === document.id);
+    onChanged?.({ type: 'timeline-changed', projectId, timelineId: document.id, revision: document.revision,
+      ...(binding ? { instanceId: binding.instanceId, documentPath: binding.documentPath } : {}) });
     return document;
   }
-  function create(projectId, input = {}) {
+  function create(projectId, timelineId, input = {}) {
     assertProject(projectId, true);
+    if (typeof timelineId !== 'string') { input = timelineId ?? input; timelineId = undefined; }
     const options = validateTimelineRequest('create', input);
-    return changed(projectId, store.create(projectId, options));
+    return changed(projectId, timelineId === undefined ? store.create(projectId, options) : store.create(projectId, timelineId, options));
   }
   function validateAssets(projectId, document) {
     const manifestAssets = projectStore.getProject(projectId).manifest?.assets || projectStore.listAssets(projectId).assets;
@@ -63,24 +81,44 @@ function createVideoTimelineController({ store, projectStore, getActiveProjectId
       if (family !== 'image' && Number.isFinite(asset.duration) && item.sourceEndSeconds > asset.duration + 0.001) throw new Error(`Timeline clip ${item.id} exceeds its source duration.`);
     }
   }
-  function apply(projectId, input) {
+  function apply(projectId, timelineId, input) {
     assertProject(projectId, true);
+    if (typeof timelineId !== 'string') { input = timelineId; timelineId = undefined; }
+    timelineId = resolveTarget(projectId, timelineId);
     const options = validateTimelineRequest('apply', input);
-    const current = store.read(projectId);
+    const current = timelineId === null ? null : store.read(projectId, timelineId);
     if (!current) throw new Error('Create a timeline first.');
     if (current.revision !== options.expectedRevision) throw Object.assign(new Error('Timeline revision changed. Inspect the timeline and rebase your edit.'), { code: 'TIMELINE_REVISION_CONFLICT' });
     const candidate = applyTimelineOperations(current, options.operations).document;
     validateAssets(projectId, candidate);
-    return changed(projectId, store.apply(projectId, options));
+    return changed(projectId, store.apply(projectId, timelineId, options));
   }
-  function undo(projectId, input) { assertProject(projectId, true); return changed(projectId, store.undo(projectId, validateTimelineRequest('undo', input), (document) => validateAssets(projectId, document))); }
-  function redo(projectId, input) { assertProject(projectId, true); return changed(projectId, store.redo(projectId, validateTimelineRequest('redo', input), (document) => validateAssets(projectId, document))); }
-  function resolveSelection(input) {
+  function restore(direction, projectId, timelineId, input) {
+    assertProject(projectId, true);
+    if (typeof timelineId !== 'string') { input = timelineId; timelineId = undefined; }
+    const id = resolveTarget(projectId, timelineId);
+    if (!id) throw new Error('Create a timeline first.');
+    return changed(projectId, store[direction](projectId, id, validateTimelineRequest(direction, input), (document) => validateAssets(projectId, document)));
+  }
+  function undo(projectId, timelineId, input) { return restore('undo', projectId, timelineId, input); }
+  function redo(projectId, timelineId, input) { return restore('redo', projectId, timelineId, input); }
+  function assertSelectionOrigin(input) {
     const selection = validateTimelineSelectionInput(input);
     assertProject(selection.projectId, true);
-    const document = store.read(selection.projectId);
+    if (instances) {
+      const binding = instances.resolveDocument(selection.projectId, selection.documentPath);
+      if (!binding || binding.instanceId !== selection.instanceId || binding.timelineId !== selection.timelineId) throw new Error('The selection belongs to another or deleted template instance. Select a range again.');
+      const active = getActiveScope?.();
+      if (!active || ['projectId', 'documentPath', 'instanceId', 'timelineId', 'runtimeGeneration'].some((key) => active[key] !== selection[key])) throw new Error('The selected document or runtime is stale. Select a range again.');
+    }
+    return selection;
+  }
+  function resolveSelection(input) {
+    const selection = assertSelectionOrigin(input);
+    const document = store.read(selection.projectId, selection.timelineId);
     if (!document) throw new Error('The selected timeline no longer exists. Select a range again.');
-    validateTimelineSelection(selection, document);
+    const { instanceId, documentPath, runtimeGeneration, ...coreSelection } = selection;
+    validateTimelineSelection(coreSelection, document);
     const selectedIds = new Set(selection.itemIds);
     const nearby = document.items.filter((item) => selectedIds.has(item.id) || item.startFrame <= selection.endFrame && item.endFrame >= selection.startFrame);
     const items = [...nearby.filter((item) => selectedIds.has(item.id)), ...nearby.filter((item) => !selectedIds.has(item.id))].slice(0, 30);
@@ -89,17 +127,19 @@ function createVideoTimelineController({ store, projectStore, getActiveProjectId
       capabilities: { livePreview: true, export: 'webm-vp8-opus', transitions: false, localGeneration: false },
       sourceTiming: 'Source ranges are seconds, timeline ranges are integer project frames [start,end). Browser preview is approximate; WebM export samples project frames with Mediabunny.' };
   }
-  function inspect({ projectId }) {
+  function inspect({ projectId, timelineId, instanceId }) {
     assertProject(projectId, true);
-    const document = store.read(projectId);
-    return { projectId, document, ...store.status(projectId), capabilities: { livePreview: true, export: 'webm-vp8-opus', transitions: false, localGeneration: false },
+    const id = resolveTarget(projectId, timelineId, instanceId);
+    const document = id === null ? null : store.read(projectId, id);
+    const binding = instances?.list(projectId).find((entry) => entry.timelineId === id);
+    return { projectId, ...(id ? { timelineId: id } : {}), ...(binding ? { instanceId: binding.instanceId, documentPath: binding.documentPath } : {}), document, ...history(projectId, id ?? undefined), capabilities: { livePreview: true, export: 'webm-vp8-opus', transitions: false, localGeneration: false },
       note: 'Use create_timeline if absent. Managed assets must already be attached to this project. The editable HTML video template exports WebM with Mediabunny (up to 60 seconds/32 MiB). Transitions, speed changes and local generation are unavailable.' };
   }
   function assertAssetUnused(projectId, assetId) {
-    const document = store.read(project(projectId));
-    if (document?.items.some((item) => item.assetId === assetId)) throw new Error('This media is used by the video timeline. Remove its timeline clips before detaching it.');
+    const documents = store.list(project(projectId));
+    if (documents.some((document) => document.items.some((item) => item.assetId === assetId))) throw new Error('This media is used by the video timeline. Remove its timeline clips before detaching it.');
   }
-  return { create, read, history, apply, undo, redo, resolveSelection, inspect, assertAssetUnused,
+  return { create, read, history, resolveLegacy, resolveTarget, apply, undo, redo, assertSelectionOrigin, resolveSelection, inspect, assertAssetUnused,
     openEditor: (projectId, open) => { assertProject(projectId, true); return open(); },
   };
 }

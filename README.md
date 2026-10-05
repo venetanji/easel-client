@@ -6,6 +6,10 @@ A local-first Electron client for Easel canvases and media. Choose a built-in Op
 
 Choose **New project → Template → Video editor**, or use **Video editor** above the canvas. It is a regular HTML/JavaScript/CSS project the built-in agent can modify. Import local images, audio and video, assemble a revision-safe timeline, select an exact range for chat, and export WebM locally with the bundled Mediabunny runtime. Media search, filters and sorting help find sources.
 
+Timeline selections expose **Delete clip** or **Delete selected clips**. Delete/Backspace works while the selected clips or range own timeline focus; typing in fields is unaffected. Up to 100 selected clips can be deleted in one edit. Each track has **Delete track** with a clip count; deleting a populated track asks for confirmation and removes its clips in one edit, including tracks with more than 100 clips. Timeline **Undo** restores deleted clips and tracks. Source files stay in Media.
+
+These controls are included in newly generated Video editor starters. Existing projects keep their editable HTML, JavaScript and CSS unchanged; opening them does not replace user-edited source.
+
 See [the video editor guide](docs/video-editor.md) for laptop build instructions, supported editing/export limits and reproducible offline verification.
 
 ## Configure

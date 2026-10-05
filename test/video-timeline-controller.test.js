@@ -96,3 +96,45 @@ test('still images can be timed on a video track as well as overlay tracks', (t)
   const doc = f.controller.apply(projectId, { expectedRevision: 0, operations: [{ type: 'insert', item: clip }] });
   assert.equal(doc.items[0].assetId, assetId);
 });
+
+test('stale_selection_rejected', (t) => {
+  const f = fixture(t);
+  const a = 'd'.repeat(32), b = 'e'.repeat(32), instanceId = 'f'.repeat(32);
+  f.store.create(projectId, a, {}); f.store.create(projectId, b, {});
+  let activeScope = { projectId, documentPath: 'a.html', instanceId, timelineId: a, runtimeGeneration: 2 };
+  const instances = { list: () => [{ ...activeScope, templateId: 'video-editor' }], resolveDocument: (_id, documentPath) => documentPath === 'a.html' ? activeScope : null };
+  const controller = createVideoTimelineController({ store: f.store, projectStore: { getProject: () => ({}) }, instances, getActiveProjectId: () => projectId, getActiveScope: () => activeScope });
+  const selection = { projectId, instanceId, documentPath: 'a.html', runtimeGeneration: 2, timelineId: a, timelineRevision: 0, trackIds: ['video-1'], itemIds: [], startFrame: 0, endFrame: 12 };
+  assert.equal(controller.resolveSelection(selection).selection.instanceId, instanceId);
+  for (const change of [{ timelineId: b }, { instanceId: 'b'.repeat(32) }, { runtimeGeneration: 1 }, { documentPath: 'b.html' }]) assert.throws(() => controller.resolveSelection({ ...selection, ...change }), /instance|stale|document|runtime/i);
+  activeScope = { ...activeScope, runtimeGeneration: 3 };
+  assert.throws(() => controller.resolveSelection(selection), /stale|runtime/i);
+});
+
+test('controller_legacy_requests_never_choose_the_first_timeline', (t) => {
+  const { store, controller } = fixture(t);
+  store.create(projectId, 'd'.repeat(32), {}); store.create(projectId, 'e'.repeat(32), {});
+  assert.throws(() => controller.resolveLegacy(projectId), { code: 'TIMELINE_AMBIGUOUS' });
+  assert.throws(() => controller.inspect({ projectId }), { code: 'TIMELINE_AMBIGUOUS' });
+});
+
+test('selection_identity_rejects_coercible_non_string_ids', () => {
+  const selection = { projectId, timelineId: 'a'.repeat(32), instanceId: 'b'.repeat(32), timelineRevision: 0, trackIds: ['video-1'], itemIds: [], startFrame: 0, endFrame: 1 };
+  assert.throws(() => validateTimelineSelectionInput({ ...selection, instanceId: [selection.instanceId] }), /instance/i);
+  assert.throws(() => validateTimelineSelectionInput({ ...selection, timelineId: [selection.timelineId] }), /timeline ID/i);
+});
+
+test('populated track deletion above 99 clips uses one operation and one undo without changing media', (t) => {
+  const f = fixture(t); f.controller.create(projectId, {});
+  const clips = Array.from({ length: 101 }, (_, i) => ({ ...clip, id: `clip-${i}`, startFrame: i * 24, endFrame: (i + 1) * 24 }));
+  f.controller.apply(projectId, { expectedRevision: 0, operations: clips.slice(0, 100).map(item => ({ type: 'insert', item })) });
+  const before = f.controller.apply(projectId, { expectedRevision: 1, operations: [{ type: 'insert', item: clips[100] }] });
+  const removed = f.controller.apply(projectId, { expectedRevision: 2, operations: [{ type: 'remove-track', trackId: 'video-1', removeItems: true }] });
+  assert.equal(removed.items.length, 0); assert.equal(removed.tracks.length, 2);
+  assert.throws(() => f.controller.apply(projectId, { expectedRevision: 2, operations: [{ type: 'remove-track', trackId: 'audio-1' }] }), { code: 'TIMELINE_REVISION_CONFLICT' });
+  const restored = f.controller.undo(projectId, { expectedRevision: 3 });
+  assert.deepEqual(restored.items, before.items); assert.deepEqual(restored.tracks, before.tracks);
+  assert.equal(restored.revision, 4);
+  assert.equal(f.controller.redo(projectId, { expectedRevision: 4 }).items.length, 0);
+  assert.throws(() => validateTimelineRequest('apply', { expectedRevision: 5, operations: clips.map(item => ({ type: 'remove', itemId: item.id })) }), /1–100/);
+});

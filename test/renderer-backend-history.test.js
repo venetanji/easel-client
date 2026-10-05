@@ -42,6 +42,7 @@ async function fixture(t, { deferInitial = false } = {}) {
   const originals = {};
   let workspaceOptions;
   const creations = [];
+  const openedProjects = [];
   const catalog = [{ id: 'canvas-2d', name: 'Canvas 2D', installed: true }, { id: 'tone', name: 'Tone.js', installed: true }, { id: 'p5', name: 'p5.js', installed: true }];
   const dependencies = {
     createAgentControlUi,
@@ -51,6 +52,7 @@ async function fixture(t, { deferInitial = false } = {}) {
       isOperating: () => false, updateBusy() {}, setDrawer() {}, refreshProjects: async () => {}, refreshAssets: async () => {},
       getKits: () => ['canvas-2d', 'p5'], getKitCatalog: () => catalog,
       async create(...args) { creations.push(args); return { title: args[1] }; },
+      async openProject(...args) { openedProjects.push(args); },
     }; },
   };
   for (const [key, value] of Object.entries(dependencies)) { originals[key] = global[key]; global[key] = value; }
@@ -85,7 +87,7 @@ async function fixture(t, { deferInitial = false } = {}) {
   };
   const renderer = wireRenderer({ document, client }); t.after(() => renderer.dispose());
   await new Promise(setImmediate);
-  return { nodes, get, acknowledgements, snapshots, client, creations,
+  return { nodes, get, acknowledgements, snapshots, client, creations, openedProjects,
     openCreate: (...args) => workspaceOptions.onCreate(...args),
     selectCanvas: (value) => workspaceOptions.onSelection(value),
     emit: (event) => listener(event),
@@ -199,4 +201,30 @@ test('delayed startup and switch snapshots cannot overwrite a new live turn', as
   await f.settle();
   assert.match(f.get('messages').textContent, /Live reply/);
   assert.doesNotMatch(f.get('messages').textContent, /Stale/);
+});
+
+
+test('canceling the native Video choice does not open an undefined project or report success', async (t) => {
+  const f = await fixture(t);
+  f.client.openVideoEditor = async () => ({ canceled: true });
+  await f.get('open-video-editor').click();
+  assert.deepEqual(f.openedProjects, []);
+  assert.doesNotMatch(f.get('status').textContent, /Video editor ready/);
+});
+
+
+test('Undo explains a retained creation boundary and returns to normal for later source edits', async (t) => {
+  const f = await fixture(t);
+  const reason = 'Undo stops at template creation. Your earlier history is kept.';
+  f.selectCanvas({ projectId: 'a'.repeat(32), documentPath: 'index.html', previewKind: 'document', undoAvailable: false, undoBlockedReason: reason });
+  const button = f.get('canvas-undo');
+  assert.equal(button.disabled, true);
+  assert.equal(button.title, reason);
+  assert.equal(button.getAttribute('aria-description'), reason);
+  assert.equal(f.get('canvas-undo-status').textContent, reason);
+  assert.equal(f.get('canvas-undo-status').hidden, false);
+  f.selectCanvas({ projectId: 'a'.repeat(32), documentPath: 'index.html', previewKind: 'document', undoAvailable: true });
+  assert.equal(button.disabled, false);
+  assert.equal(button.title, 'Undo canvas changes');
+  assert.equal(f.get('canvas-undo-status').hidden, true);
 });

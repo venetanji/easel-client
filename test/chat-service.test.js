@@ -169,3 +169,24 @@ test('host timeline context is attached to one submitted user turn and not autom
   await service.sendMessage('What next?');
   assert.equal(requests[1].filter((message) => message.role === 'user').at(-1).content, 'What next?');
 });
+
+test('builtin_selected_dispatch_rechecks_runtime_after_turn_admission', async (t) => {
+  const { templateFixture } = require('./helpers/template-lifecycle');
+  const f = templateFixture(t), [a, b] = f.records;
+  f.controller.resolveSelection(f.selection); const before = [f.bytes(a), f.bytes(b)];
+  let calls = 0; const requests = [];
+  const service = createChatService({ settingsStore: settingsStore(), assetStore: {}, canvasController: f.hostController,
+    llmFactory: () => ({ async createCompletion({ messages }) {
+      requests.push(structuredClone(messages));
+      if (calls++ === 0) {
+        f.setActive({ ...b, runtimeGeneration: 2 });
+        return { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'edit-1', type: 'function', function: { name: 'apply_timeline_edit', arguments: JSON.stringify({ projectId: f.projectId, expectedRevision: 0, operations: [{ type: 'insert', item: f.clip }] }) } }] } }] };
+      }
+      return reply('Stopped after the stale selection.');
+    } }),
+    mcpFactory: async () => ({ async listTools() { return []; }, async close() {} }), mcpLaunchOptions: () => ({ command: 'node' }),
+  });
+  await service.sendMessage('Edit the selected timeline', { timelineSelection: f.selection });
+  assert.deepEqual([f.bytes(a), f.bytes(b)], before);
+  assert.match(JSON.stringify(requests.at(-1).filter((message) => message.role === 'tool')), /stale|runtime|document/i);
+});

@@ -676,3 +676,42 @@ test('restoring an older canvas snapshot cannot detach a live timeline source', 
   assert.throws(() => store.update(project.id, before, { restoreMetadata: true }), /timeline/i);
   assert.equal(store.getAsset(project.id, assetId).data, 'YWJj');
 });
+
+test('all_timeline_references_block_detach', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-multi-reference-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  let timelines = [];
+  const store = createCanvasStore({ userDataPath, listTimelines: () => timelines });
+  const project = store.save({ title: 'Two sketches', html: '<h1>Editor</h1>', assets: [{ name: 'source', data: 'YWJj', mimeType: 'image/png' }] });
+  const assetId = store.getProject(project.id).manifest.assets[0].id;
+  timelines = [{ id: 'a'.repeat(32), items: [] }, { id: 'b'.repeat(32), items: [{ assetId }] }];
+  assert.equal(store.inspectAssetDeletion(project.id, { assetId }).ok, false);
+  assert.throws(() => store.detachAsset(project.id, { assetId }), /timeline/i);
+  assert.equal(store.getProject(project.id).manifest.assets.length, 1);
+});
+
+test('zip_preserves_all_instances', (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-multi-zip-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const { createTimelineDocument } = require('../src/video-timeline');
+  const timelines = ['a', 'b'].map((id) => createTimelineDocument({ id: id.repeat(32) }));
+  const instances = timelines.map((document, index) => ({ instanceId: String(index + 1).repeat(32), timelineId: document.id, documentPath: index ? 'second.html' : 'index.html', templateId: 'video-editor', templateVersion: 1 }));
+  const store = createCanvasStore({ userDataPath, listTimelines: () => timelines, listInstances: () => instances });
+  const project = store.createProject({ title: 'Multiple sketches' });
+  store.createDocument(project.id, { path: 'second.html', html: '<h1>Second</h1>' });
+  const exported = store.exportProject(project.id);
+  assert.equal(exported.manifest.version, 2);
+  assert.deepEqual(exported.manifest.instances, instances);
+  assert.equal(exported.manifest.timelines.length, 2);
+  assert.equal(exported.manifest.timeline, undefined);
+  const entries = new Map(); let offset = 0;
+  while (exported.data.readUInt32LE(offset) === 0x04034b50) {
+    const method = exported.data.readUInt16LE(offset + 8), size = exported.data.readUInt32LE(offset + 18);
+    const length = exported.data.readUInt16LE(offset + 26), extra = exported.data.readUInt16LE(offset + 28), start = offset + 30 + length + extra;
+    const name = exported.data.toString('utf8', offset + 30, offset + 30 + length), bytes = exported.data.subarray(start, start + size);
+    entries.set(name, (method === 8 ? zlib.inflateRawSync(bytes) : bytes).toString()); offset = start + size;
+  }
+  assert.equal(entries.has('.easel/timeline.json'), false);
+  for (const timeline of timelines) assert.deepEqual(JSON.parse(entries.get(`.easel/timelines/${timeline.id}.json`)), timeline);
+  assert.match(entries.get('.easel/source/second.html'), /Second/);
+});

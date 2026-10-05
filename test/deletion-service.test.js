@@ -129,3 +129,33 @@ test('project deletion remains reported when library cleanup fails after source 
   assert.deepEqual(result.mediaWarnings, [{ assetId: 'image', message: 'Disk is busy' }]);
   assert.deepEqual(calls.map(([name]) => name), ['cleanup']);
 });
+
+test('confirmed_deletion_cleans_only_deleted_document_instances', async () => {
+  const f = fixture(() => true);
+  let records = [{ instanceId: 'one', documentPath: 'old.html' }, { instanceId: 'two', documentPath: 'index.html' }];
+  const instances = { list: () => records, remove: (_id, instanceId) => { records = records.filter((record) => record.instanceId !== instanceId); } };
+  const service = createDeletionService({ canvasStore: f.canvasStore, confirm: async () => true, instances });
+  await service.deleteProjectFile(f.controller, 'project', { path: 'old.html' });
+  assert.deepEqual(records.map((record) => record.instanceId), ['two']);
+});
+
+test('cancelled_or_failed_document_deletion_keeps_instance_state', async () => {
+  const f = fixture(() => true); let removed = 0;
+  const instances = { list: () => [{ instanceId: 'one', documentPath: 'old.html' }], remove: () => { removed++; } };
+  const cancel = createDeletionService({ canvasStore: f.canvasStore, confirm: async () => false, instances });
+  await cancel.deleteProjectFile(f.controller, 'project', { path: 'old.html' });
+  assert.equal(removed, 0);
+  f.canvasStore.deleteFile = () => { throw new Error('Revision conflict'); };
+  const failed = createDeletionService({ canvasStore: f.canvasStore, confirm: async () => true, instances });
+  await assert.rejects(failed.deleteProjectFile(f.controller, 'project', { path: 'old.html' }), /Revision conflict/);
+  assert.equal(removed, 0);
+});
+
+test('committed_deletion_still_invalidates_runtime_when_instance_cleanup_fails', async () => {
+  const f = fixture(() => true);
+  const instances = { list: () => [{ instanceId: 'one', documentPath: 'old.html' }], remove: () => { throw new Error('Storage unavailable'); } };
+  const service = createDeletionService({ canvasStore: f.canvasStore, confirm: async () => true, instances });
+  const result = await service.deleteProjectFile(f.controller, 'project', { path: 'old.html' });
+  assert.equal(result.deleted, true); assert.match(result.instanceWarning, /Storage unavailable/);
+  assert.ok(f.calls.some(([call]) => call === 'open'));
+});

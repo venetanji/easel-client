@@ -44,6 +44,9 @@ const IPC_CHANNELS = Object.freeze({
   RETRY_CANVAS_INPUT: 'canvas:inputs:retry',
   IMPORT_MEDIA: 'media:import',
   OPEN_VIDEO_EDITOR: 'timeline:open-editor',
+  LIST_TEMPLATES: 'templates:list',
+  CREATE_TEMPLATE_INSTANCE: 'templates:create',
+  OPEN_TEMPLATE_INSTANCE: 'templates:open',
   READ_TIMELINE: 'timeline:read',
   CREATE_TIMELINE: 'timeline:create',
   APPLY_TIMELINE: 'timeline:apply',
@@ -87,7 +90,7 @@ const MAX_SKILL_NAME_LENGTH = 80;
 const MAX_SKILL_INSTRUCTIONS_LENGTH = 32_000;
 const MAX_TOTAL_SKILL_INSTRUCTIONS_LENGTH = 48_000;
 const MAX_CANVAS_BOUNDS = 10_000;
-const ALLOWED_RUNTIME_KITS = new Set(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone', 'p5']);
+const ALLOWED_RUNTIME_KITS = new Set(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone', 'p5', 'strudel']);
 const MAX_CHAT_ATTACHMENTS = 6;
 const MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 64 * 1024 * 1024;
@@ -314,6 +317,20 @@ function validateCanvasKits(value = []) {
   }))];
 }
 
+function validateTemplateCreate(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['templateId', 'target', 'projectId', 'title'].includes(key))) throw new Error('Template creation options are invalid.');
+  if (typeof input.templateId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(input.templateId) || !['new-project', 'current-project'].includes(input.target)) throw new Error('Template ID or target is invalid.');
+  if (input.target === 'new-project' && input.projectId !== undefined) throw new Error('A new template project cannot target an existing project.');
+  return { templateId: input.templateId, target: input.target,
+    ...(input.projectId !== undefined ? { projectId: validateOpaqueId(input.projectId, 'Project ID') } : {}),
+    ...(input.title !== undefined ? { title: validateCanvasTitle(input.title) } : {}) };
+}
+
+function validateTemplateOpen(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['projectId', 'instanceId'].includes(key))) throw new Error('Template open options are invalid.');
+  return { projectId: validateOpaqueId(input.projectId, 'Project ID'), instanceId: validateOpaqueId(input.instanceId, 'Instance ID') };
+}
+
 function validateProjectKits(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['kits', 'expectedProjectRevision'].includes(key)) || !Object.hasOwn(input, 'kits')) throw new Error('Project kit settings are invalid.');
   if (typeof input.expectedProjectRevision !== 'string' || !/^[a-f0-9]{64}$/.test(input.expectedProjectRevision)) throw new Error('Read the project kit settings before changing them.');
@@ -348,6 +365,8 @@ module.exports = {
   validateDocumentPath,
   validateProjectInput,
   validateProjectKits,
+  validateTemplateCreate,
+  validateTemplateOpen,
   validateSettingsInput,
   validateConnectionInput,
   validateModelSelection,

@@ -42,6 +42,7 @@ test('preload exposes a narrow frozen API with an explicit MCP connection action
     'onAgentEvent', 'openCanvas', 'openChat', 'openExternal', 'openProjectDocument', 'readCanvasFile', 'removeConnection', 'renameProject', 'retryCanvasInput', 'retryMediaJob',
     'saveCanvas', 'saveConnection', 'saveLibraryAsset', 'saveProjectAsset', 'saveSettings', 'selectCodexModel', 'selectModel', 'sendMessage', 'setAgentBackend', 'setCanvasBounds', 'stopAgent',
     'testLiteLLMChat', 'testLiteLLMImage', 'undoCanvas', 'updateModel', 'updateProjectKits',
+    'listTemplates', 'createTemplateInstance', 'openTemplateInstance',
     'importMedia', 'openVideoEditor', 'readTimeline', 'createTimeline', 'applyTimeline', 'undoTimeline', 'redoTimeline', 'getTimelineHistory',
   ].sort());
   assert.equal(Object.isFrozen(api), true);
@@ -104,4 +105,29 @@ test('timeline bridge methods use only named channels', async () => {
   await client.redoTimeline(id, { expectedRevision: 2 });
   await client.getTimelineHistory(id);
   assert.deepEqual(calls.map((call) => call.channel), ['timeline:read', 'timeline:create', 'timeline:apply', 'timeline:undo', 'timeline:redo', 'timeline:history']);
+});
+
+test('timeline_bridge_carries_explicit_timeline_identity', async () => {
+  const { exposed, calls } = runPreload();
+  const projectId = 'a'.repeat(32), timelineId = 'b'.repeat(32), input = { expectedRevision: 0, operations: [] };
+  await exposed.easelClient.readTimeline(projectId, timelineId);
+  await exposed.easelClient.applyTimeline(projectId, timelineId, input);
+  assert.deepEqual(calls[0], { channel: 'timeline:read', args: [projectId, timelineId] });
+  assert.deepEqual(calls[1], { channel: 'timeline:apply', args: [projectId, timelineId, input] });
+});
+
+test('template bridge carries only narrow catalog create and open requests', async () => {
+  const { exposed, calls } = runPreload();
+  const client = exposed.easelClient;
+  assert.equal(typeof client.listTemplates, 'function');
+  assert.equal(typeof client.createTemplateInstance, 'function');
+  assert.equal(typeof client.openTemplateInstance, 'function');
+  const create = { templateId: 'video-editor', target: 'current-project' };
+  const open = { projectId: 'a'.repeat(32), instanceId: 'b'.repeat(32) };
+  await client.listTemplates({ includePlanned: false }); await client.createTemplateInstance(create); await client.openTemplateInstance(open);
+  assert.deepEqual(calls, [
+    { channel: 'templates:list', args: [{ includePlanned: false }] },
+    { channel: 'templates:create', args: [create] },
+    { channel: 'templates:open', args: [open] },
+  ]);
 });

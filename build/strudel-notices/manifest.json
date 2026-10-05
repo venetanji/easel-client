@@ -1,0 +1,11 @@
+{
+  "@tonaljs/progression@4.9.3": {
+    "file": "progression.LICENSE",
+    "verification": "source-content-match",
+    "upstreamCommit": "a1b98c3cb04c7244250ec1de72d155582e96acf8",
+    "licenseUrl": "https://github.com/tonaljs/tonal/blob/a1b98c3cb04c7244250ec1de72d155582e96acf8/docs/LICENSE",
+    "sourceUrl": "https://github.com/tonaljs/tonal/blob/a1b98c3cb04c7244250ec1de72d155582e96acf8/packages/progression/index.ts",
+    "sourceSha256": "8c0d121a47421264a7ca0bd00d4b25414173924a16683a54cf936456089df9f7",
+    "caveat": "The published 4.9.3 source-map content matches this upstream source exactly; upstream package metadata at this commit says 4.9.2, so this is not asserted to be the release commit."
+  }
+}

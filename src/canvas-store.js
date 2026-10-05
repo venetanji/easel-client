@@ -4,8 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { buildCanvasDocument, buildCanvasSnapshotDocument } = require('./canvas-policy');
 const { imageElement, imageInsertionLocation } = require('./canvas-html');
-const { MAX_FILE_BYTES, MAX_FILES, assembleProject, digest, documentTitle, managedKitScripts, projectDocuments, projectFromDocument, readChunk, resolveDocumentPath, stripManagedKitScripts, validateFilePath, validateJavaScriptFiles, validateProject, validateStateText } = require('./canvas-project');
+const { MAX_FILE_BYTES, MAX_FILES, assembleProject, digest, documentTitle, managedKitScripts, projectDocuments, projectFromDocument, projectSnapshot, readChunk, resolveDocumentPath, stripManagedKitScripts, validateFilePath, validateJavaScriptFiles, validateProject, validateStateText } = require('./canvas-project');
 const { createProjectZip } = require('./project-zip');
+const { listTemplates } = require('./template-catalog');
 const { assertStorageSpace, storageWriteError } = require('./storage-space');
 
 const ID_PATTERN = /^[a-f0-9]{32}$/;
@@ -115,7 +116,7 @@ function referencesProjectItem(content, fromFile, targetPath, assetId) {
   return false;
 }
 
-function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, assetStore, readTimeline = () => null, thumbnailFactory = (bytes, mimeType) => `data:${mimeType};base64,${bytes.toString('base64')}`, idFactory = () => crypto.randomUUID().replaceAll('-', '') }) {
+function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, assetStore, readTimeline = () => null, listTimelines = (id) => [readTimeline(id)].filter(Boolean), listInstances = () => [], thumbnailFactory = (bytes, mimeType) => `data:${mimeType};base64,${bytes.toString('base64')}`, idFactory = () => crypto.randomUUID().replaceAll('-', '') }) {
   const canvasesPath = path.join(userDataPath, 'canvases');
   const dependenciesPath = path.join(canvasesPath, '.dependencies');
   const projectAssetsPath = path.join(canvasesPath, '.assets');
@@ -150,7 +151,9 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
       try { fileSystem.rmSync(temporary, { force: true }); } catch { /* Keep the original storage failure. */ }
       throw storageWriteError(error);
     }
-    return fileSystem.statSync(filename).mtimeMs;
+    // Rename is the commit point. An advisory timestamp failure after it must
+    // not make callers compensate a successful source transaction.
+    try { return fileSystem.statSync(filename).mtimeMs; } catch { return Date.now(); }
   }
 
   function projectFilename(id) {
@@ -259,9 +262,9 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
 
   function commitProject(id, project) {
     validateProject(project);
-    const timeline = readTimeline(id);
+    const timelines = listTimelines(id);
     const attached = new Set(project.manifest.assets.map((asset) => asset.id));
-    if (timeline?.items.some((item) => !attached.has(item.assetId))) throw new Error('This project change would detach media used by the video timeline. Undo its timeline clips first or retain the source media.');
+    if (timelines.some((timeline) => timeline.items.some((item) => !attached.has(item.assetId)))) throw new Error('This project change would detach media used by the video timeline. Undo its timeline clips first or retain the source media.');
     for (const document of projectDocuments(project)) {
       const source = assembleProject(project, { documentPath: document.path, validateOnly: true });
       buildCanvasSnapshotDocument(source, { maxBytes: Infinity });
@@ -394,6 +397,92 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return { ...commitProject(id, project), documentPath: name, documentTitle: title.trim(), files, documents: projectDocuments(project), dependencyPaths: Object.keys(document.files).filter((filename) => filename !== name), kits: project.manifest.kits.map((kit) => kit.name), ...(ignoredDocumentKits.length ? { ignoredDocumentKits, kitGuidance: 'HTML documents inherit the project kit selection. Use update_canvas_project with kits to change dependencies for every document.' } : {}), atomic: true };
   }
 
+  // Host-only creation transaction. Prepare every source file and kit in memory,
+  // then create the binding, then commit the canonical project once. No asynchronous
+  // work is permitted between these steps; an unsuccessful source commit leaves
+  // existing source, kits and media untouched and the caller compensates its binding.
+  function createTemplateDocument(args = {}, beforeCommit = () => {}) {
+    const isNew = args.projectId === undefined;
+    const id = isNew ? idFactory() : args.projectId;
+    const filename = projectFilename(id);
+    if (isNew && (fileSystem.existsSync(filename) || fileSystem.existsSync(getFilename(id)))) throw new Error('The new project ID already exists. Retry creation.');
+    const name = validateFilePath(args.path);
+    if (!/^sketches\/[a-f0-9]{32}\/index\.html$/.test(name)) throw new Error('Template document path is invalid.');
+    const title = args.title;
+    if (typeof title !== 'string' || !title.trim() || title.trim().length > 120 || /[\u0000-\u001f\u007f]/.test(title)) throw new Error('Template title must contain 1 to 120 characters without control characters.');
+    const project = isNew ? { version: 1, id, title: title.trim(), manifest: { entry: name, kits: [], assets: [] }, files: {} } : loadProject(id);
+    const originalRevision = isNew ? null : projectRevision(project);
+    const staged = new Map();
+    const kitSources = {};
+    const kits = [...project.manifest.kits];
+    // Preserve the existing project's exact pinned kit bytes, even if the app's
+    // installed version has changed. Only newly requested kits use installed bytes.
+    for (const kit of kits) if (kit.digest) {
+      const source = fileSystem.readFileSync(path.join(dependenciesPath, `${kit.digest}.js`), 'utf8');
+      if (digest(source) !== kit.digest) throw new Error(`The ${kit.name} saved canvas kit is corrupted.`);
+      kitSources[kit.name] = source;
+    }
+    for (const kit of validateKitNames(args.kits || [])) {
+      if (kits.some((saved) => saved.name === kit)) continue;
+      if (['canvas-2d', 'html-deck'].includes(kit)) { kits.push({ name: kit }); continue; }
+      const source = kitBundles[kit];
+      if (typeof source !== 'string' || !source) throw new Error(`The ${kit} canvas kit is unavailable. Install it in Settings.`);
+      if (Buffer.byteLength(source) > 8 * 1_048_576) throw new Error('Canvas dependency exceeds 8 MiB.');
+      const hash = digest(source);
+      kits.push({ name: kit, digest: hash }); kitSources[kit] = source;
+      staged.set(path.join(dependenciesPath, `${hash}.js`), source);
+    }
+    // The existing policy applies the merged bundle budget before any cache writes.
+    const html = addCanvasMetadata(buildCanvasDocument({ html: stripManagedKitScripts(args.html), kits: kits.map((kit) => kit.name), kitBundles: kitSources }), id, title.trim());
+    const directory = path.posix.dirname(name);
+    const document = projectFromDocument(html, {
+      documentPath: name, scriptPath: `${directory}/app.js`, stylePath: `${directory}/styles.css`,
+      extractKits: () => [],
+      extractAssets: (content) => {
+        if (/data:[^\s"'<>]+;base64,/i.test(content)) throw new Error('Template starters must reference managed media rather than embed binary data.');
+        return content;
+      },
+    });
+    for (const [file, content] of Object.entries(document.files)) {
+      if (Object.hasOwn(project.files, file)) throw new Error(`The new template dependency conflicts with an existing file: ${file}.`);
+      project.files[file] = content;
+    }
+    project.manifest.kits = kits;
+    validateProject(project); // Includes extracted dependencies: 100 files / 1 MiB each / 4 MiB source.
+    validateJavaScriptFiles({ ...project, manifest: { ...project.manifest, entry: name } }, Object.keys(document.files));
+    for (const entry of projectDocuments(project)) buildCanvasSnapshotDocument(assembleProject(project, { documentPath: entry.path, validateOnly: true }), { maxBytes: Infinity });
+    const assembly = { readKit: (kit) => kitSources[kit.name] };
+    assemble(project, id, title.trim(), { ...assembly, documentPath: name });
+    assemble(project, id, project.title, assembly);
+    const newCaches = [];
+    try {
+      beforeCommit({ projectId: id, documentPath: name });
+      // A binding callback must not overwrite changes made after the preflight.
+      if (isNew ? fileSystem.existsSync(filename) || fileSystem.existsSync(getFilename(id)) : projectRevision(loadProject(id)) !== originalRevision) throw new Error('The project changed during template creation. Retry against the current source.');
+      for (const [file, source] of staged) {
+        if (fileSystem.existsSync(file)) {
+          if (fileSystem.readFileSync(file, 'utf8') !== source) throw new Error('The installed template kit cache is corrupted.');
+        } else { writeAtomic(file, source); newCaches.push([file, source]); }
+      }
+      const result = commitProject(id, project);
+      return { ...result, projectId: id, documentPath: name, documentTitle: title.trim(), kits: kits.map((kit) => kit.name), dependencyPaths: Object.keys(document.files).filter((file) => file !== name), atomic: true };
+    } catch (cause) {
+      // These content-addressed entries did not exist at admission. Never delete
+      // an existing cache or replace a changed entry during failure compensation.
+      for (const [file, source] of newCaches) {
+        try { if (fileSystem.readFileSync(file, 'utf8') === source) fileSystem.rmSync(file); } catch { /* An orphan cache is safe to retain. */ }
+      }
+      throw cause;
+    }
+  }
+
+  function restoreSourceSnapshot(id, html) {
+    const snapshot = projectSnapshot(html);
+    if (!snapshot || snapshot.id !== id) throw new Error('The saved source snapshot belongs to another project.');
+    loadProject(id);
+    return commitProject(id, snapshot);
+  }
+
   function update(id, snapshotHtml, { documentPath, restoreMetadata = false } = {}) {
     const existing = loadProject(id);
     const document = buildCanvasSnapshotDocument(snapshotHtml, { maxBytes: Infinity });
@@ -453,6 +542,12 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     // Only recognize Easel's unchanged starter source; a visually blank authored app is still an app.
     const normalize = (html) => html.replace(/<title\b[^>]*>[\s\S]*?<\/title>/gi, '').replace(/>\s+</g, '><').trim();
     return normalize(source) === normalize(empty.files[selected]) && project.files[stylePath] === empty.files[stylePath];
+  }
+
+  function getDocumentSource(id, documentPath) {
+    // Selected authored HTML and its reachable scripts only: no project snapshot,
+    // shared state, media payloads or installed-kit source from unrelated documents.
+    return { html: assembleProject(loadProject(id), { documentPath, validateOnly: true, includeModuleSources: true }) };
   }
 
   function getDocument(id, documentPath) {
@@ -768,10 +863,10 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     checkRevisions(project, undefined, args);
     const asset = project.manifest.assets.find((candidate) => candidate.id === args.assetId);
     if (!asset) throw new Error('This media asset is not attached to the selected project.');
-    const timeline = readTimeline(id);
+    const timelines = listTimelines(id);
     const referencingFiles = Object.entries(project.files).filter(([file, content]) => referencesProjectItem(content, file, asset.path, asset.id)).map(([file]) => file).sort();
     const summary = { id, assetId: asset.id, title: project.title, asset: { ...asset }, projectRevision: projectRevision(project), referencingFiles, ok: false };
-    if (timeline?.items.some((item) => item.assetId === asset.id)) return { project, summary: { ...summary, reason: 'This media is used by the video timeline. Remove its timeline clips before detaching it.' } };
+    if (timelines.some((timeline) => timeline.items.some((item) => item.assetId === asset.id))) return { project, summary: { ...summary, reason: 'This media is used by the video timeline. Remove its timeline clips before detaching it.' } };
     if (referencingFiles.length) return { project, summary: { ...summary, reason: `Media ${asset.path} is still referenced by: ${referencingFiles.join(', ')}. Remove these source references first.` } };
     project.manifest.assets = project.manifest.assets.filter((candidate) => candidate.id !== asset.id);
     const validationErrors = validateDeletionProject(project, id);
@@ -976,7 +1071,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
 
   function exportProject(id) {
     const project = loadProject(id);
-    const timeline = readTimeline(id);
+    const timelines = listTimelines(id);
     const documents = projectDocuments(project);
     const canonical = { ...project };
     delete canonical.updatedAt;
@@ -1000,10 +1095,14 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
       zip.add(name, value);
     };
     const exportedKits = project.manifest.kits.map((kit) => ({ ...kit, ...(kit.digest ? { path: `.easel/kits/${kit.name}-${kit.digest.slice(0, 16)}.js` } : {}) }));
-    const manifest = { format: 'easel-project-export', version: 1, ...(timeline ? { timeline: '.easel/timeline.json' } : {}), id, title: project.title, defaultDocument: project.manifest.entry, documents: documents.map(({ path: documentPath, title }) => ({ path: documentPath, title, sourcePath: `.easel/source/${documentPath}` })), sourceDirectory: '.easel/source/', canonicalProject: '.easel/project.json', media: project.manifest.assets, kits: exportedKits, contract: { documents: 'Open any listed HTML document directly in a modern browser. Each is self-contained with its shared project media and offline kits. Network access is not required.', source: 'Authored source is preserved separately in .easel/source/. Edit and rebuild it in Easel; runtime documents are compiled previews.', devices: 'Camera and microphone remain subject to browser device permission. Canvas-to-chat actions require the Easel host.', state: 'All documents start with the saved shared state.json; runtime changes are not persisted to the ZIP.' } };
+    const instances = listInstances(id);
+    const templates = listTemplates().filter((entry) => instances.some((instance) => instance.templateId === entry.id && instance.templateVersion === entry.version))
+      .map(({ id, version, title, purpose, requiredKits, outputs, limitations }) => ({ id, version, title, purpose, requiredKits, outputs, limitations }));
+    const manifest = { format: 'easel-project-export', version: 2, templateInstanceSchemaVersion: 1, templates, instances, timelines: timelines.map((timeline) => ({ timelineId: timeline.id, path: `.easel/timelines/${timeline.id}.json` })), ...(timelines.length === 1 ? { timeline: '.easel/timeline.json' } : {}), id, title: project.title, defaultDocument: project.manifest.entry, documents: documents.map(({ path: documentPath, title }) => ({ path: documentPath, title, sourcePath: `.easel/source/${documentPath}` })), sourceDirectory: '.easel/source/', canonicalProject: '.easel/project.json', media: project.manifest.assets, kits: exportedKits, contract: { documents: 'Open any listed HTML document directly in a modern browser. Each is self-contained with its shared project media and offline kits. Network access is not required.', source: 'Authored source is preserved separately in .easel/source/. Edit and rebuild it in Easel; runtime documents are compiled previews.', devices: 'Camera and microphone remain subject to browser device permission. Canvas-to-chat actions require the Easel host.', state: 'All documents start with the saved shared state.json; runtime changes are not persisted to the ZIP.' } };
     add('manifest.json', JSON.stringify(manifest, null, 2));
     add('.easel/project.json', canonicalText);
-    if (timeline) add('.easel/timeline.json', JSON.stringify(timeline, null, 2));
+    for (const timeline of timelines) add(`.easel/timelines/${timeline.id}.json`, JSON.stringify(timeline, null, 2));
+    if (timelines.length === 1) add('.easel/timeline.json', JSON.stringify(timelines[0], null, 2));
     add('README.txt', `Easel project: ${project.title}\n\nOpen ${project.manifest.entry} in a modern browser. All listed HTML documents\ncontain their own offline kits and media; no server or network is required.\n\nAuthored files: .easel/source/\nCanonical project: .easel/project.json\nMedia files: assets/ (at their original project aliases)\nKit source: .easel/kits/\nDocument list and capability notes: manifest.json\n\nCamera and microphone require browser permission. Chat input requires Easel.\n`);
     for (const [name, content] of Object.entries(project.files)) add(`.easel/source/${name}`, content);
     const cachedMedia = new Map();
@@ -1039,7 +1138,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return { ...archive, id, title: project.title, fileName: `${slug}.zip`, bytes: archive.data.length, documents, manifest, contributions };
   }
 
-  return { attachAsset, attachAssets, createDocument, createEmpty, createProject, deleteFile, deleteProject, detachAsset, exportProject, get, getAsset, getDocument, getLibraryAsset, getProject, getProjectKits, inspectAssetDeletion, inspectDeletion, inspectLibraryAssetDeletion, inspectProjectDeletion, insertImage, list, listAssets, listDocuments, listFiles, listLibraryAssets, migrateAssetReferences, patchFile, patchFiles, readAsset: getAsset, readFile, readProjectState, removeLibraryAsset, renameProject, save, saveProjectState, update, updateManifest, writeFile };
+  return { attachAsset, attachAssets, createDocument, createEmpty, createProject, createTemplateDocument, deleteFile, deleteProject, detachAsset, exportProject, get, getAsset, getDocument, getDocumentSource, getLibraryAsset, getProject, getProjectKits, inspectAssetDeletion, inspectDeletion, inspectLibraryAssetDeletion, inspectProjectDeletion, insertImage, list, listAssets, listDocuments, listFiles, listLibraryAssets, migrateAssetReferences, patchFile, patchFiles, readAsset: getAsset, readFile, readProjectState, removeLibraryAsset, renameProject, restoreSourceSnapshot, save, saveProjectState, update, updateManifest, writeFile };
 }
 
 module.exports = { EMPTY_CANVAS_HTML, MAX_DOCUMENT_EXPORT_BYTES, MAX_PROJECT_EXPORT_BYTES, createCanvasStore };

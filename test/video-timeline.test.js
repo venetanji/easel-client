@@ -264,3 +264,30 @@ test('rejects non-JSON hidden properties instead of accepting a document that ch
   Object.defineProperty(hiddenArray.tracks, '0', { enumerable: false });
   assert.throws(() => validateTimelineDocument(hiddenArray));
 });
+
+test('explicit remove-track cascade is atomic, reports removed IDs and preserves other tracks', () => {
+  const clips = Array.from({ length: 101 }, (_, i) => item({ id: `clip-${i}`, startFrame: i * 24, endFrame: (i + 1) * 24 }));
+  const retained = item({ id: 'audio-clip', trackId: 'audio-1' });
+  const doc = document({ items: [...clips, retained] });
+  const before = structuredClone(doc);
+  const operations = [{ type: 'remove-track', trackId: 'video-1', removeItems: true }];
+  const result = applyTimelineOperations(doc, operations);
+  assert.deepEqual(result.document.items, [retained]);
+  assert.deepEqual(result.document.tracks, doc.tracks.slice(1));
+  assert.equal(result.document.revision, 1);
+  assert.deepEqual(result.changedItemIds, clips.map(clip => clip.id));
+  assert.deepEqual(doc, before);
+  assert.throws(() => applyTimelineOperations(doc, [...operations, { type: 'remove', itemId: 'missing' }]));
+  assert.deepEqual(doc, before);
+});
+
+test('remove-track never infers cascade and rejects untyped or irrelevant cascade intent', () => {
+  const doc = document({ items: [item()] });
+  for (const operation of [{ type: 'remove-track', trackId: 'video-1' }, { type: 'remove-track', trackId: 'video-1', removeItems: false }]) {
+    assert.throws(() => applyTimelineOperations(doc, [operation]), /empty/i);
+  }
+  for (const removeItems of ['true', 1, null, {}, undefined]) {
+    assert.throws(() => validateTimelineOperations([{ type: 'remove-track', trackId: 'video-1', removeItems }]), /boolean/i);
+  }
+  assert.throws(() => validateTimelineOperations([{ type: 'remove', itemId: 'clip-1', removeItems: true }]), /unsupported/i);
+});

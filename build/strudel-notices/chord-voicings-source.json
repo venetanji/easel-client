@@ -1,0 +1,12 @@
+{
+  "package": "chord-voicings",
+  "version": "0.0.1",
+  "gitHead": "447ee7932851562dcfc480f54f5011430174a30d",
+  "sourceUrl": "https://github.com/felixroos/chord-voicings/tree/447ee7932851562dcfc480f54f5011430174a30d",
+  "archive": "chord-voicings-447ee793.tar.gz",
+  "archiveSha256": "9f2015889219f223dd9992fb68ce25c70eefc2a6eee5bbac593dc505e8912742",
+  "verification": "All 28 files shared with the installed npm package match this exact npm gitHead tree. The full tree includes source, tests, build configuration and upstream package-lock.json.",
+  "licenseDeclaration": "ISC",
+  "author": "Felix Roos <flix91@gmail.com>",
+  "upstreamNoticeStatus": "No LICENSE file exists in this gitHead tree or its reachable history. No notice text or copyright year has been fabricated."
+}

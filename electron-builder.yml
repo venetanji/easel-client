@@ -4,6 +4,7 @@ directories:
 files:
   - src/**/*
   - canvas-kits/*.js
+  - canvas-kits/strudel-source.zip
   - packages/media-mcp/dist/**/*
   - packages/media-mcp/package.json
   - .agents/skills/**/*

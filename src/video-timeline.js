@@ -161,7 +161,8 @@ function validateTimelineOperations(operations) {
         integer(operation.index, 0, MAX_TIMELINE_TRACKS - 1, 'Track index');
         break;
       case 'remove-track':
-        objectKeys(operation, ['type', 'trackId'], [], 'Remove track operation');
+        objectKeys(operation, ['type', 'trackId'], ['removeItems'], 'Remove track operation');
+        if (Object.hasOwn(operation, 'removeItems') && typeof operation.removeItems !== 'boolean') fail('Remove track removeItems must be a boolean.');
         id(operation.trackId, 'Track ID');
         break;
       case 'insert':
@@ -213,7 +214,10 @@ function applyTimelineOperations(input, operations) {
       document.tracks.splice(operation.index, 0, track);
     } else if (operation.type === 'remove-track') {
       if (!document.tracks.some((track) => track.id === operation.trackId)) fail('Track does not exist.');
-      if (document.items.some((item) => item.trackId === operation.trackId)) fail('Only empty tracks may be removed.');
+      const removed = document.items.filter((item) => item.trackId === operation.trackId);
+      if (removed.length && operation.removeItems !== true) fail('Only empty tracks may be removed unless removeItems is explicitly true.');
+      for (const item of removed) changedItemIds.add(item.id);
+      document.items = document.items.filter((item) => item.trackId !== operation.trackId);
       document.tracks = document.tracks.filter((track) => track.id !== operation.trackId);
     } else if (operation.type === 'insert') {
       if (document.items.some((item) => item.id === operation.item.id)) fail('Item ID already exists.');

@@ -1,6 +1,6 @@
 const { throwIfAborted } = require('./turn-abort');
 
-function createDeletionService({ canvasStore, mediaStore, confirm, previewFile, previewMedia, recordUndo, onChanged, onEvent, onProjectDeleted }) {
+function createDeletionService({ canvasStore, mediaStore, instances, confirm, previewFile, previewMedia, recordUndo, canRecordUndo, onChanged, onEvent, onProjectDeleted }) {
   function allowed(info) {
     if (info.ok === false) throw new Error(info.reason || 'This item cannot be deleted.');
     return info;
@@ -39,13 +39,20 @@ function createDeletionService({ canvasStore, mediaStore, confirm, previewFile, 
     const confirmed = await confirm({ kind: 'file', projectId, name: info.path, info }, { signal });
     throwIfAborted(signal);
     if (!confirmed) return { ok: true, deleted: false, canceled: true, projectId, path: info.path, effects: { source: 'unchanged', runtime: preview ? 'target previewed for confirmation' : 'unchanged' } };
+    const bound = instances?.list(projectId).filter((entry) => entry.documentPath === info.path) || [];
     const before = canvasStore.get(projectId).html;
+    const snapshots = bound.filter(() => typeof instances.capture === 'function').map((entry) => instances.capture(projectId, entry.instanceId));
+    const recovery = snapshots.length ? { instances: snapshots } : null;
+    if (recovery && (typeof recordUndo !== 'function' || typeof canRecordUndo !== 'function' || !canRecordUndo(projectId, before, recovery))) throw new Error('This sketch and its complete timeline history exceed the Undo storage budget. No document was deleted.');
     const result = canvasStore.deleteFile(projectId, { path: info.path, expectedRevision: info.revision, expectedProjectRevision: info.projectRevision });
-    recordUndo?.(projectId, before);
+    recordUndo?.(projectId, before, recovery);
+    let instanceWarning;
+    try { for (const instance of bound) instances.remove(projectId, instance.instanceId); }
+    catch (error) { instanceWarning = `The document is deleted, but its saved template state needs cleanup. ${error.message}`; }
     const opened = await refreshProject(controller, projectId);
-    const event = { type: 'project-file-deleted', projectId, canvasId: projectId, deletedPath: info.path, ...opened };
+    const event = { type: 'project-file-deleted', projectId, canvasId: projectId, deletedPath: info.path, ...opened, ...(instanceWarning ? { instanceWarning } : {}) };
     onEvent?.(event);
-    return { ...result, ...opened, ok: true, deleted: true, projectId, deletedPath: info.path, confirmation: 'user approved', effects: { source: 'file deleted from the project', runtime: opened.runtimeWarning ? 'refresh failed; reopen the document' : opened.documentPath ? 'current document reloaded' : 'unchanged; another project is open' } };
+    return { ...result, ...opened, ok: true, deleted: true, projectId, deletedPath: info.path, ...(instanceWarning ? { instanceWarning } : {}), confirmation: 'user approved', effects: { source: 'file deleted from the project', runtime: opened.runtimeWarning ? 'refresh failed; reopen the document' : opened.documentPath ? 'current document reloaded' : 'unchanged; another project is open' } };
   }
 
   async function deleteProject(controller, projectId, args = {}, { signal, lastFile, preview = false } = {}) {
@@ -56,7 +63,9 @@ function createDeletionService({ canvasStore, mediaStore, confirm, previewFile, 
     const confirmed = answer === true || answer?.confirmed === true;
     if (!confirmed) return { ok: true, deleted: false, canceled: true, projectId, ...(lastFile ? { path: lastFile } : {}), effects: { source: 'unchanged', runtime: preview ? 'target previewed for confirmation' : 'unchanged' } };
     const result = canvasStore.deleteProject(projectId, { expectedProjectRevision: info.projectRevision, deleteMedia: answer?.deleteMedia === true });
-    let runtimeWarning;
+    let runtimeWarning, instanceWarning;
+    try { instances?.removeProject(projectId); }
+    catch (error) { instanceWarning = `The project is deleted, but its saved template state needs cleanup. ${error.message}`; }
     try {
       if (onProjectDeleted) await onProjectDeleted(controller, projectId, result);
       else if (controller.getCurrentCanvasId() === projectId) await controller.closeCurrent?.({ save: false });
@@ -66,7 +75,7 @@ function createDeletionService({ canvasStore, mediaStore, confirm, previewFile, 
       try { await mediaStore.remove(assetId); }
       catch (error) { if (!/not found/i.test(error.message)) mediaWarnings.push({ assetId, message: error.message }); }
     }
-    const response = { ...result, ok: true, deleted: true, projectDeleted: true, projectId, ...(lastFile ? { deletedPath: lastFile } : {}), confirmation: 'user approved', ...(mediaWarnings.length ? { mediaWarnings } : {}), ...(runtimeWarning ? { runtimeWarning } : {}), effects: { ...result.effects, runtime: runtimeWarning ? 'preview cleanup failed' : 'deleted project closed if active' } };
+    const response = { ...result, ok: true, deleted: true, projectDeleted: true, projectId, ...(lastFile ? { deletedPath: lastFile } : {}), confirmation: 'user approved', ...(mediaWarnings.length ? { mediaWarnings } : {}), ...(runtimeWarning ? { runtimeWarning } : {}), ...(instanceWarning ? { instanceWarning } : {}), effects: { ...result.effects, runtime: runtimeWarning ? 'preview cleanup failed' : 'deleted project closed if active' } };
     onEvent?.({ type: 'project-deleted', canvasId: projectId, ...response });
     return response;
   }

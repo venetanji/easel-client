@@ -1,4 +1,4 @@
-const { timelineContextText, TIMELINE_METHODS } = require('./video-timeline-tools');
+const { bindTimelineToolTarget, timelineContextText, TIMELINE_METHODS } = require('./video-timeline-tools');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { buildUserContent, handleMcpResult, runAgentTurn } = require('./agent');
@@ -147,7 +147,7 @@ function createChatService({
     return {
       ...canvasController,
       ...Object.fromEntries(Object.values(TIMELINE_METHODS).map((method) => [method, (args) => {
-        if (turnOptions.timelineSelection && args.projectId !== turnOptions.timelineSelection.projectId) throw new Error('The timeline edit must target the project selected for this turn.');
+        args = bindTimelineToolTarget(args, turnOptions.timelineSelection, canvasController.assertTimelineSelectionOrigin);
         if (typeof canvasController?.[method] !== 'function') throw new Error('Timeline editing is unavailable.');
         return canvasController[method](args);
       }])),
