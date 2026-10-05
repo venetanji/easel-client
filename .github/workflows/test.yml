@@ -26,3 +26,11 @@ jobs:
         env:
           EASEL_RUN_BROWSER_TESTS: '1'
       - run: npm run build
+      - name: Verify offline video composition and export
+        run: xvfb-run -a npm run test:video-export
+      - name: Verify native editor preview geometry
+        run: xvfb-run -a sh -c 'EASEL_UI_TEST_DISPLAY="$DISPLAY" node --test --test-name-pattern="browser preview frame preserves" test/video-timeline-view.test.js'
+      - name: Verify native editor selection and media drops
+        run: xvfb-run -a node scripts/smoke-video-editor.cjs
+      - name: Verify native timeline direct controls and stacking parity
+        run: xvfb-run -a node scripts/smoke-timeline-controls.cjs

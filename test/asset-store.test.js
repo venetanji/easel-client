@@ -105,3 +105,17 @@ test('reuses unchanged thumbnails and refreshes only changed image files', async
   await store.remove(id);
   assert.deepEqual(await store.list(), []);
 });
+
+test('imported image names and byte sizes survive restart for library search and sorting', async (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-image-names-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const make = () => createAssetStore({ userDataPath, thumbnailFactory: () => 'data:image/png;base64,YQ==' });
+  const id = await make().save({ data: 'YWJj', mimeType: 'image/png', name: 'Opening title.png' });
+  const store = make();
+  assert.equal((await store.get(id)).name, 'Opening title.png');
+  const [image] = await store.list();
+  assert.equal(image.name, 'Opening title.png');
+  assert.equal(image.bytes, 3);
+  await store.remove(id);
+  assert.deepEqual(fs.readdirSync(path.join(userDataPath, 'assets')), []);
+});

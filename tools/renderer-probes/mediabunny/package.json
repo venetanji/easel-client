@@ -1,0 +1,10 @@
+{
+  "name": "@easel/mediabunny-feasibility-probe",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Disposable synthetic-media feasibility harness; not a product renderer",
+  "main": "main.cjs",
+  "devDependencies": {
+    "mediabunny": "1.61.0"
+  }
+}

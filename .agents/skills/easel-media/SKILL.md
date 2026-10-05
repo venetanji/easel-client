@@ -1,6 +1,6 @@
 ---
 name: easel-media
-description: Generate and edit Easel images, submit durable video jobs, choose camera and LoRA workflows, and prepare offline canvas previews. Use for Easel media requests, including multiprompt batches and guided-video planning.
+description: Generate and edit Easel media, assemble managed clips with revision-safe timeline tools, review stitching and audio continuity, and plan supported video workflows. Use for media requests, timeline edits and guided-video planning.
 ---
 
 # Easel Media
@@ -11,8 +11,9 @@ current tool schema and endpoint actually support.
 
 ## Models and references
 
-The target Easel service has two provider models: `qwen-image-2.1` for images and
-reference edits, and `ltx-2.5` for video. The legacy `flux2-9b` and `flux2-4b`
+Known provider models include `qwen-image-2.1` for images/reference edits and
+`ltx-2.5` for video; discover the enabled IDs rather than treating this list as
+exhaustive. The legacy `flux2-9b` and `flux2-4b`
 models are being retired. Do not substitute Flux for an unavailable model.
 `flux-2.5` is not the LTX video model ID.
 
@@ -44,21 +45,103 @@ The current Media MCP package exposes:
 - `list_models` to inspect enabled Media model IDs, endpoint names and discovered output types.
 - `generate_image` to create images from a prompt, optional model, `WIDTHxHEIGHT` size, and `n` from 1 to 4. Easel also interprets `|||` as independent image prompts; see the batching limits below.
 - `edit_image` and `create_image_variation` to transform saved reference images when supported by the endpoint.
-- `generate_video` to submit one video job with a video model, prompt, optional reference image, seconds and size.
+- `discover_video_capabilities({model})` and `list_video_loras({model})` for read-only, selected-endpoint discovery of limits, guide-node availability, supported/installed adapters and validation evidence.
+- `generate_video` to submit one video job with a video model, prompt, seconds, size, first-image or timed-image references, and the typed advanced controls below.
 - `get_video` and `get_image_job` to retrieve accepted jobs in standalone MCP use.
-- In-app `list_media_jobs`, `list_media_assets` and `inspect_media_asset` to inspect durable jobs and choose real saved references.
+- In-app `list_media_jobs` and `list_media_assets` to inspect jobs and real saved references; `inspect_media_asset` shows saved images, not decoded video frames.
+- In-app `inspect_timeline`, `create_timeline`, `apply_timeline_edit`, `undo_timeline` and `redo_timeline` for revision-safe hard-cut assembly; `attach_canvas_assets` attaches existing managed media to the active project.
 - `capture_canvas_screenshot` to render HTML and local image assets in an offline browser and return a PNG screenshot.
 
-There is no current MCP adapter-discovery tool, camera/LoRA argument or guide-video
-upload argument. Server-side features in the references are not valid MCP fields
-until exposed by the tool schema. Audio generation tools are not available yet,
-even if discovery lists audio output models. Do not imply that a job was submitted
-or finished without its tool result.
+Built-in, embedded Codex and external in-app MCP agents use the same saved-asset
+schema. Standalone MCP uses bounded image upload objects. Server capability
+schema version 1 is authoritative; unknown/older responses are unknown support,
+not permission to guess. Audio generation/source-audio tools and guide-video
+uploads are not available. Do not imply that a job was submitted or finished
+without its tool result.
+
+## Timeline stitching and review
+
+### Hard-cut assembly
+
+Use local timeline edits when the request is to arrange, trim or join existing
+clips. This preserves source files and does not submit a generation job.
+
+1. Call `inspect_timeline` for the active project and `list_media_assets` for
+   real managed sources. Read the current revision, frame rate, track types and
+   capabilities. Use `create_timeline` only if no timeline exists. Preserve the
+   user's selected range; if it is stale, request a fresh selection rather than
+   silently changing its scope.
+2. Reuse actual asset IDs and available duration/geometry metadata. A remote job
+   receipt is not a playable source. Use `attach_canvas_assets` for any library
+   sources not yet attached to this project before `apply_timeline_edit`. Match
+   video/images to video tracks, audio to audio tracks and images to overlays.
+   Never use paths, URLs or invented IDs as timeline sources.
+3. Plan retained ranges in integer half-open project frames
+   `[startFrame,endFrame)`, with exclusive end. `sourceStartSeconds` and
+   `sourceEndSeconds` are source times in seconds, not frame indexes. Compute
+   `fps = frameRate.numerator / frameRate.denominator` from the inspected
+   timeline. Export requires
+   `sourceEndSeconds - sourceStartSeconds = (endFrame - startFrame) / fps`;
+   speed changes are unsupported. Keep trims within the actual source duration.
+   At 24 fps, `[0,48)` then `[48,96)` is a four-second hard-cut sequence of two
+   two-second clips. The first item ends on project frame 47; frame 48 belongs
+   to the second. A source offset of 1 second for a two-second item uses source
+   seconds `[1,3)`, independent of where the item sits on the timeline.
+4. Submit a bounded batch of typed operations with `apply_timeline_edit` and the
+   inspected `expectedRevision`. Use actual item/track IDs and only fields for
+   each operation. There are no same-track overlaps; place the next cut at the
+   prior item's exclusive end. Transitions and retiming are unavailable. On a
+   revision conflict, reinspect and rebase instead of overwriting newer edits.
+   `undo_timeline` and `redo_timeline` also require the current revision.
+5. Review the resulting timeline and retained first/middle/last and boundary
+   frames with editor playback/frame stepping and captured views where
+   available. Check identity, motion direction, lighting, framing, aspect fit,
+   black gaps and duplicate retained boundary frames. A timeline selection is
+   compact context, not decoded media or proof that the footage was reviewed.
+6. Review source-clip audio and any separate music/voice track across each cut.
+   Keep an approved master audio bed once; avoid accidentally doubling it with
+   clip sound. Use `set-audio-level` operations with `gain`, `fadeInFrames` and
+   `fadeOutFrames` where needed; fades use project frames and must fit the item.
+   Ask for playback review if listening is unavailable; never claim to have
+   heard audio from metadata or a successful render alone.
+7. The user exports through the editor's **Export video** button; there is no
+   agent export tool. Do not trigger export via runtime JavaScript as a tool
+   workaround. The local WebM export is separate from saving the timeline or
+   exporting a project ZIP. Stay within the inspected/export limits (currently
+   60 seconds, 32 items and 32 MiB output). Treat editor preview as approximate;
+   verify the saved exported asset before claiming a finished video.
+
+### Generative stitching
+
+Generating a transition, extension or gap-fill means synthesizing new content;
+putting two clips next to each other is not that capability. Plan the missing
+shot and continuity constraints, then check the actual enabled tool schema.
+Do not promise exact motion, seamless joins or audio alignment from a still
+reference. For LTX, `guidingFrames` accepts 1–8 saved still-image anchors,
+including first/last positions, as soft conditioning. Alternatively use one
+`inputReferenceAssetId`; these modes are mutually exclusive. Inputs are stills,
+not a selected timeline range, guide video or source audio. If usable boundary
+stills are already saved, inspect and use their real IDs; otherwise ask the user
+to capture/import the intended stills. There is no agent frame-extraction tool.
+
+H3 server workflows support temporal video/audio guides, but the current client
+schema cannot submit them. LTX's current API guidance is still-image-only;
+temporal video guidance and source-video continuation are not exposed
+by this client. Timed stills do not guarantee exact first/last pixels. Do not infer callable support from model discovery, installed
+weights, a server feature or a successful text/image-to-video job. Do not invent
+fields, tools or direct API/shell bypasses to bridge this gap.
+
+For a currently supported new shot, submit once, let the host finish/download
+it, then inspect the saved result and attach it before typed timeline edits.
+Plan retained output spans separately from any conditioning context; never
+count context as extra delivered frames or duplicate a retained boundary frame.
+Review the join's identity, motion and lighting plus both sides' audio before
+calling it continuous. Report which continuity checks were actually possible.
 
 ## Video workflow
 
 1. Select a video model using its exact `list_models` ID. In-app tools resolve credentials from that model's endpoint.
-2. Submit `generate_video` once. Optional `inputReferenceAssetId` identifies a saved PNG/JPEG/WebP image in the app; standalone MCP uses an `inputReference` upload object.
+2. For advanced controls, discover capabilities and LoRAs for that exact model first. Check support, runtime availability, installed assets and recipe requirements separately; discovery is GET-only and does not generate. Submit `generate_video` once. Optional `inputReferenceAssetId` identifies a saved PNG/JPEG/WebP image in the app; standalone MCP uses an `inputReference` upload object.
 3. In Easel client, accepted jobs are saved in the host monitor before the turn ends. Return a brief generating status; the host polls and downloads across app restarts without spending agent tool calls. `list_media_jobs` gives a status snapshot.
 4. The originating conversation receives a durable completion notification. If it is idle, its original project is open, and its Agent model/endpoint has not changed, the host resumes it automatically. Otherwise the next message receives the notification. Stop pauses agent continuation while polling continues.
 5. Completed downloads are saved to Media, attached to the original project, and previewed automatically in chat. Use the notification's asset IDs to continue the original request; never regenerate a completed job. A brief completion message is enough; do not send only a View/Watch link. Removing a job asks the user to confirm losing the monitor's ID; it does not cancel server generation or remove downloaded files.
@@ -112,6 +195,10 @@ a small coherent batch over many individual submissions; review before expanding
   a closed conversation must not trigger regeneration of an accepted job.
 - Do not blindly retry a generation POST after receipt loss or a timeout;
   acceptance is ambiguous and the server has no idempotency recovery contract.
+- H3 job receipts may disappear after a ComfyUI restart. Prefer downloaded
+  managed assets over upstream receipts for reuse; the host's persisted job ID
+  does not restore lost server history. Check local assets and monitor state,
+  report an unresolved receipt, and never blindly resubmit a possibly billed job.
 - Queue estimates are approximate and may be absent. `estimated_wait_seconds`
   on Easel means time to completion, including generation, not queue time alone.
 - HTTP 429 with `Retry-After` is admission backpressure, not permission for a
@@ -140,8 +227,9 @@ guarantees. Do not transfer Flux-specific sampler settings or prompt tricks.
   need actual registered depth/edge/pose frames, not renamed RGB footage.
 - For longer sequences, plan cuts and retained frame spans. Use an approved
   anchor or the previous clip's actual retained endpoint for continuity. Guide
-  context must not appear as extra delivered frames. Continuation/first-last
-  controls are not currently exposed by Easel MCP.
+  context must not appear as extra delivered frames. Timed stills can guide the
+  first/last positions through `guidingFrames`; continuation and source-video
+  controls are not exposed. Soft guidance does not guarantee exact endpoints.
 - For music videos, review the track and anchors before rendering every scene.
   Derive timing from the real track/phrases; preserve and mux the approved master
   audio once during assembly. Supplied-audio control is a separate capability,
@@ -159,43 +247,83 @@ guarantees. Do not transfer Flux-specific sampler settings or prompt tricks.
 
 ## Advanced video boundaries and recipes
 
-These are **server-side recipes, not current MCP arguments**. Use them only
-when the actual tool schema exposes the feature. Live authenticated server
-discovery is `/v1/videos/loras`; the in-app agent currently has no discovery
-tool. Do not bypass app asset/credential handling with direct API/shell calls.
+Use the fields the current tool schema exposes. The validated Easel API owns
+the graph contract; do not bypass app asset/credential handling with direct
+API/shell calls, raw graphs, model filenames, host paths or download URLs.
+The published creative-skills runtime is legacy LTX-2.3; its intended canonical
+LTX-2.5 runtime remains unavailable. This client is an Easel API consumer, not a
+claimed port of that unpublished runtime.
+
+Both in-app and standalone `generate_video` accept `cameraLora`,
+`cameraLoraStrength`, typed `loras: [{id,strength?}]`, exact decimal-string
+`seed`, `motionSpeed` and `loraReferenceStrength`. In-app uses
+`loraReferenceAssetId` for an Ingredients sheet and
+`guidingFrames: [{assetId,frameIndex,strength?}]` for timed stills. Standalone
+uses `loraReference: {data,mimeType,name?}` and
+`guidingFrames: [{image:{data,mimeType,name?},frameIndex,strength?}]` instead.
+All references combined are bounded to 32 MiB and PNG/JPEG/WebP. Use real saved
+asset IDs; in-app arguments must never contain image bytes, local paths or URLs.
 
 Camera shorthand: `dolly-in`, `dolly-out`, `dolly-left`, `dolly-right`, `jib-up`,
 `jib-down`, `static`. Dolly left/right means camera translation, not pan;
-jib up/down means vertical movement. Use either `camera_lora=dolly-in` with
-`camera_lora_strength=0.8`, or a registered camera entry in `loras`, not both
+jib up/down means vertical movement. Use `cameraLora: "dolly-in"` with
+`cameraLoraStrength: 0.8`, or a registered camera entry in `loras`, not both
 for the same adapter. There are no registered pan/tilt/orbit IDs.
 
-The `loras` wire field is a JSON string such as
-`[{"id":"camera-static","strength":0.8}]`. At most four distinct registered
-adapters may be selected, counting the shorthand camera. Finite strengths are
-0-2; camera shorthand defaults to 0.8, other entries to 1. The stack cap is not
-evidence that arbitrary combinations are validated.
+`loras` is a typed array, such as `[{"id":"camera-static","strength":0.8}]`,
+not a JSON string. At most four distinct registered adapters may be selected,
+counting the shorthand camera. Finite strengths are 0–2; camera shorthand
+defaults to 0.8, other entries to 1. The stack cap is not evidence that arbitrary
+combinations are validated. Support and installation must be discovered live.
 
-- `cinemagraph`: needs `input_reference`; the server inserts
-  `CINEMAGRAPH_MOTION`. Describe localized subject motion; moving camera stacks
-  are rejected. A cinemagraph is not a guaranteed seamless loop.
-- `slow-motion`: needs `input_reference` and `motion_speed` in 0.025-1; 0.2 is
-  a tested example. Conditioning becomes 120 FPS while output/audio remain
-  24 FPS. This generates slow motion; it does not interpolate an uploaded clip.
-- `ingredients`: needs a separate `lora_reference` sheet, at least 5 seconds,
-  and no other adapter stack. Match sheet aspect ratio to the output canvas.
-  `lora_reference_strength` is finite 0-1, default 1. Frame geometry/identity
-  fidelity remains experimental.
+- `cinemagraph`: needs `inputReferenceAssetId` (standalone `inputReference`);
+  the server inserts `CINEMAGRAPH_MOTION`. Describe localized subject motion;
+  moving camera stacks are rejected. A cinemagraph is not a guaranteed loop.
+- `slow-motion`: needs the first-image reference and `motionSpeed` in 0.025–1;
+  0.2 is a tested example. Conditioning becomes 120 FPS while output/audio
+  remain 24 FPS. It does not interpolate an uploaded clip.
+- `ingredients`: needs a separate `loraReferenceAssetId` sheet (standalone
+  `loraReference`), at least 5 seconds, and no other adapter stack. Match sheet
+  aspect ratio to output. `loraReferenceStrength` is finite 0–1, default 1.
+  Frame geometry/identity fidelity remains experimental.
 
-The server-only seed range is 0 through `2**64-2`. Current LTX output is 24 FPS
-with `seconds * 24 + 1` frames. Camera/regular patches feed both sampling passes;
-IC adapters need loader metadata and guide/crop handling, not just model patches.
+Seed must be an exact decimal string from `"0"` through
+`"18446744073709551614"`, never a JSON number, so uint64 precision is retained.
+Current LTX output is 24 FPS with `seconds * 24 + 1` frames. Camera/regular
+patches feed both sampling passes; IC adapters need loader metadata and
+control-specific guide/crop handling, not just model patches.
+
+### Timed still-image guides
+
+`guidingFrames` accepts 1–8 stills at unique integer **pixel-frame** positions
+from 0 through `seconds * 24` inclusive, step **one**, not multiples of eight.
+Strength is finite 0–1, default 1. The server requires decoded still images
+with at most 32 million pixels each and format matching the declared MIME;
+animated PNG/WebP and malformed images are rejected before submission.
+Guide mode is exclusive with first-image
+and Ingredients/reference-sheet modes. Cinemagraph and slow-motion require a
+first image and therefore are unavailable with timed guides.
+
+Check `guiding_frames.supported`, `available` and `validation` separately.
+The new path is `graph_contract_tested`, not live-GPU/visually verified. The
+server applies guides to video-only latents in each pass, crops their context
+before spatial upscale and decode, and preserves generated audio. Strength 1
+is still soft conditioning: never promise exact frame copying, hard endpoints,
+seamless continuity or loop closure. Inspect actual first/middle/last frames.
+
+The synchronized CLI exposes `video capabilities`, `video loras`, repeated
+`--lora ID[=STRENGTH]` and `--guide-frame FRAME IMAGE STRENGTH`. Its local image
+files are bounded regular files; Python integer seeds retain exact precision.
+Legacy `--loras` JSON cannot be combined with typed `--lora`. These CLI forms
+are not MCP tool argument syntax.
 
 ### Guiding-video preparation
 
-There is no current typed guide-video submission path in Easel API/MCP. Most
-video-conditioned IC adapters remain disabled even when their weights are
-installed. A private ComfyUI prototype is not a portable callable workflow.
+The current client has no typed guide-video submission path. The LTX API
+still accepts image references only; its video-conditioned IC adapters mostly
+remain disabled even when their weights are installed. H3 server temporal
+guidance does not expose that capability to this client. A private ComfyUI
+prototype is not a portable callable workflow.
 
 Prepare depth for spatial layout/occlusion/parallax, real Canny for silhouettes,
 or pose for body motion. Register RGB and control frames at matching aspect,
@@ -217,8 +345,8 @@ loop, exact topology, camera speed or beat alignment.
 ## Complete adapter ID inventory
 
 This compact snapshot is included for in-app agents that cannot open supporting
-files. "Enabled" means supported by the inspected server workflow, not exposed
-by current MCP or installed on every backend. Require live support, installation,
+files. "Enabled" means supported by the inspected server workflow, not installed
+on every backend or visually guaranteed. Require live support, installation,
 required inputs **and** an exposed tool path before submission. All disabled
 entries have no execution validation in this server snapshot.
 

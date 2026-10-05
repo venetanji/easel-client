@@ -25,6 +25,7 @@ function element(tagName = 'div', id = '') {
       return descendants.filter((child) => selector.split(',').some((query) => matches(child, query.trim().split(' ').at(-1))));
     },
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null; },
+    contains(node) { return this === node || this.children.some((child) => child.contains(node)); },
     focus() { this.focused = true; },
     pause() { this.paused = true; },
     load() {},
@@ -41,6 +42,7 @@ function fixture() {
     'project-image-count', 'canvases-empty', 'project-rename', 'project-delete', 'project-source-files', 'image-use-chat', 'image-download', 'library-collapse',
     'project-new', 'drawer-new-document', 'export-current',
     'media-unread', 'project-kit-list', 'project-kit-status',
+    'media-search', 'media-type-filter', 'media-sort', 'media-filters-reset',
   ];
   const nodes = new Map(ids.map((id) => [id, element('div', id)]));
   const drawer = nodes.get('project-drawer');
@@ -562,4 +564,339 @@ test('an unavailable kit already saved in a legacy project can be unchecked', as
   await cached.listeners.change();
   assert.deepEqual(state.kitRequests[0], [state.projectId, { kits: ['canvas-2d'], expectedProjectRevision: 'legacy-revision' }]);
   assert.equal(state.nodes.get('project-kit-list').querySelectorAll('input').find((input) => input.dataset.projectKit === 'p5').disabled, true);
+});
+
+function mediaIds(state, list = 'all-media-list') {
+  return state.nodes.get(list).children.map((card) => card.dataset.assetId || card.dataset.jobId);
+}
+
+function mediaControl(state, id, value) {
+  const control = state.nodes.get(id);
+  control.value = value;
+  return control.listeners[id === 'media-search' ? 'input' : 'change']();
+}
+
+test('media search and type filters compose across both lists without changing selection or source arrays', async () => {
+  const state = fixture();
+  const video = { id: 'b'.repeat(32), name: 'Ocean 2.mp4', mimeType: 'video/mp4', updatedAt: 30 };
+  const image = { id: 'd'.repeat(32), name: 'Ocean still.png', mimeType: 'image/png', updatedAt: 20 };
+  const audio = { id: 'e'.repeat(32), name: 'Ocean waves.wav', mimeType: 'audio/wav', updatedAt: 10 };
+  state.projectAssets.push(video, image, audio);
+  state.libraryAssets.push(video, image, audio);
+  const sourceOrder = state.libraryAssets.map((asset) => asset.id);
+  await state.workspace.openProject(state.projectId);
+  const selection = state.selections.at(-1);
+  const savedTabs = state.stored.get('easel-studio.project-tabs.v1');
+  const search = state.nodes.get('media-search');
+  search.focus();
+  mediaControl(state, 'media-search', '  OCEAN   MP4  ');
+  mediaControl(state, 'media-type-filter', 'video');
+  assert.deepEqual(mediaIds(state), [video.id]);
+  assert.deepEqual(mediaIds(state, 'media-list'), [video.id]);
+  assert.equal(state.nodes.get('all-media-count').textContent, '1 / 4');
+  assert.equal(state.nodes.get('project-image-count').attributes['aria-label'], '1 of 4 media items');
+  assert.equal(search.focused, true);
+  assert.equal(state.selections.at(-1), selection);
+  assert.equal(state.stored.get('easel-studio.project-tabs.v1'), savedTabs);
+  assert.deepEqual(state.libraryAssets.map((asset) => asset.id), sourceOrder);
+  assert.equal(state.nodes.get('all-media-list').children[0].querySelector('.delete-control').disabled, true);
+  mediaControl(state, 'media-type-filter', 'audio');
+  assert.deepEqual(mediaIds(state), []);
+  assert.equal(state.nodes.get('all-media-empty').hidden, false);
+  assert.match(state.nodes.get('all-media-empty').textContent, /No media matches/);
+  assert.match(state.nodes.get('media-empty').textContent, /No media matches/);
+  mediaControl(state, 'media-search', '');
+  assert.deepEqual(mediaIds(state), [audio.id]);
+});
+
+test('media sort uses stable natural names and numeric metadata with missing values last', async () => {
+  const state = fixture();
+  const items = [
+    { id: 'b'.repeat(32), name: 'Clip 10', mimeType: 'video/mp4', createdAt: 10, duration: 2, bytes: 600 },
+    { id: 'd'.repeat(32), name: 'clip 2', mimeType: 'video/mp4', updatedAt: 30, duration: 20, bytes: 500 },
+    { id: 'e'.repeat(32), name: 'CLIP 2', mimeType: 'audio/wav', updatedAt: 30, duration: 20, bytes: 500 },
+    { id: 'f'.repeat(32), name: 'Poster', mimeType: 'image/png', createdAt: NaN, updatedAt: 20, duration: null, bytes: Infinity },
+    { id: '1'.repeat(32), name: 'Unknown', mimeType: 'image/png', updatedAt: 'bad', duration: -1 },
+  ];
+  state.libraryAssets.splice(0, 1, ...items);
+  await state.workspace.openProject(state.projectId);
+  const ids = (...indexes) => indexes.map((index) => items[index].id);
+  assert.deepEqual(mediaIds(state), ids(1, 2, 3, 0, 4));
+  mediaControl(state, 'media-sort', 'oldest');
+  assert.deepEqual(mediaIds(state), ids(0, 3, 1, 2, 4));
+  mediaControl(state, 'media-sort', 'name');
+  assert.deepEqual(mediaIds(state), ids(1, 2, 0, 3, 4));
+  mediaControl(state, 'media-sort', 'duration');
+  assert.deepEqual(mediaIds(state), ids(1, 2, 0, 3, 4));
+  mediaControl(state, 'media-sort', 'size');
+  assert.deepEqual(mediaIds(state), ids(0, 1, 2, 3, 4));
+  assert.deepEqual(state.libraryAssets, items);
+  assert.equal(state.nodes.get('all-media-count').textContent, '5');
+});
+
+test('reset clears media search, type, and sort while filters survive refresh and keep read-only controls usable when busy', async () => {
+  const state = fixture();
+  await state.workspace.openProject(state.projectId);
+  const reset = state.nodes.get('media-filters-reset');
+  assert.equal(reset.disabled, true);
+  mediaControl(state, 'media-search', 'missing');
+  mediaControl(state, 'media-type-filter', 'audio');
+  mediaControl(state, 'media-sort', 'name');
+  assert.equal(reset.disabled, false);
+  await state.workspace.refreshAssets();
+  assert.deepEqual(mediaIds(state), []);
+  state.busy(true);
+  state.workspace.updateBusy();
+  assert.equal(reset.disabled, false);
+  reset.listeners.click();
+  assert.equal(state.nodes.get('media-search').value, '');
+  assert.equal(state.nodes.get('media-type-filter').value, 'all');
+  assert.equal(state.nodes.get('media-sort').value, 'newest');
+  assert.equal(reset.disabled, true);
+  assert.deepEqual(mediaIds(state), [state.assetId]);
+  assert.equal(state.nodes.get('all-media-list').children[0].querySelector('.project-thumbnail').disabled, true);
+  assert.equal(state.nodes.get('all-media-count').textContent, '1');
+  assert.equal(state.nodes.get('all-media-empty').hidden, true);
+});
+
+test('generation jobs match type and prompt search while polling preserves matching card identity', async () => {
+  const state = fixture();
+  const job = { id: 'f'.repeat(32), status: 'generating', mediaType: 'video', prompt: 'Lighthouse at sunset', createdAt: 10, updatedAt: 50 };
+  const asset = { id: job.id, name: 'Lighthouse', mimeType: 'video/mp4', kind: 'job', updatedAt: 50, job };
+  state.libraryAssets.push(asset);
+  await state.workspace.openProject(state.projectId);
+  mediaControl(state, 'media-type-filter', 'video');
+  mediaControl(state, 'media-search', 'SUNSET');
+  assert.deepEqual(mediaIds(state), [job.id]);
+  const card = state.nodes.get('all-media-list').children[0];
+  assert.equal(state.workspace.updateMediaJob({ ...job, progress: 60 }), true);
+  assert.equal(state.nodes.get('all-media-list').children[0], card);
+  assert.equal(card.querySelector('.media-job-progress').value, 60);
+  mediaControl(state, 'media-type-filter', 'image');
+  assert.deepEqual(mediaIds(state), []);
+  assert.equal(state.workspace.updateMediaJob({ ...job, progress: 70 }), true);
+  assert.match(state.nodes.get('nav-media').attributes['aria-label'], /1 media job in progress/);
+  mediaControl(state, 'media-type-filter', 'video');
+  assert.equal(state.nodes.get('all-media-list').children[0].querySelector('.media-job-progress').value, 70);
+});
+
+test('project media search includes subsequent pages and deduplicates generation jobs', async () => {
+  const state = fixture();
+  const job = { id: 'f'.repeat(32), status: 'generating', mediaType: 'video' };
+  const pending = { id: job.id, name: 'Rendering', mimeType: 'video/mp4', kind: 'job', job };
+  const later = { id: 'b'.repeat(32), name: 'Older sound', mimeType: 'audio/wav' };
+  const pages = [];
+  state.client.getProjectAssets = async (id, options = {}) => {
+    pages.push([id, options]);
+    return options.offset ? { assets: [pending, later], totalAssets: 2, nextOffset: null }
+      : { assets: [pending, state.asset], totalAssets: 2, nextOffset: 1 };
+  };
+  await state.workspace.openProject(state.projectId);
+  assert.deepEqual(pages, [[state.projectId, {}], [state.projectId, { offset: 1, limit: 200 }]]);
+  assert.deepEqual(mediaIds(state, 'media-list'), [pending.id, state.assetId, later.id]);
+  mediaControl(state, 'media-search', 'Older');
+  assert.deepEqual(mediaIds(state, 'media-list'), [later.id]);
+  assert.equal(state.nodes.get('project-image-count').textContent, '1 / 3');
+});
+
+test('a superseded project media page cannot replace a newer refresh', async () => {
+  const state = fixture();
+  await state.workspace.openProject(state.projectId);
+  let resolvePage;
+  state.client.getProjectAssets = async (_id, options = {}) => options.offset
+    ? new Promise((resolve) => { resolvePage = resolve; })
+    : { assets: [state.asset], nextOffset: 1 };
+  const staleRefresh = state.workspace.refreshAssets();
+  while (!resolvePage) await new Promise((resolve) => setImmediate(resolve));
+  const newest = { id: 'b'.repeat(32), name: 'Newest audio', mimeType: 'audio/wav' };
+  state.client.getProjectAssets = async () => ({ assets: [newest], nextOffset: null });
+  await state.workspace.refreshAssets();
+  resolvePage({ assets: [{ ...state.asset, id: 'd'.repeat(32) }], nextOffset: null });
+  await staleRefresh;
+  assert.deepEqual(mediaIds(state, 'media-list'), [newest.id]);
+});
+
+test('invalid pagination rejects without replacing the previously loaded media', async () => {
+  const state = fixture();
+  await state.workspace.openProject(state.projectId);
+  let requests = 0;
+  state.client.getProjectAssets = async () => { requests += 1; return { assets: [], nextOffset: 1 }; };
+  await assert.rejects(state.workspace.refreshAssets(), /pagination did not advance/);
+  assert.equal(requests, 2);
+  assert.deepEqual(mediaIds(state, 'media-list'), [state.assetId]);
+});
+
+test('whitespace-only search remains resettable and empty libraries keep their onboarding copy', async () => {
+  const state = fixture();
+  state.projectAssets.length = 0;
+  state.libraryAssets.length = 0;
+  await state.workspace.openProject(state.projectId);
+  mediaControl(state, 'media-search', '   ');
+  assert.equal(state.nodes.get('media-filters-reset').disabled, false);
+  assert.equal(state.nodes.get('all-media-count').textContent, '0');
+  assert.match(state.nodes.get('all-media-empty').textContent, /will be saved here/);
+  assert.doesNotMatch(state.nodes.get('media-empty').textContent, /No media matches/);
+  state.nodes.get('media-filters-reset').listeners.click();
+  assert.equal(state.nodes.get('media-search').value, '');
+  assert.equal(state.nodes.get('media-search').focused, true);
+});
+
+test('filtered library actions keep their asset identity after sorting and adding to a project', async () => {
+  const state = fixture();
+  const video = { id: 'b'.repeat(32), name: 'Beach video', mimeType: 'video/mp4', bytes: 20, data: 'YWJj' };
+  state.libraryAssets.push(video);
+  state.client.getLibraryAsset = async (id) => { state.calls.push(['preview-library', id]); return state.libraryAssets.find((asset) => asset.id === id); };
+  await state.workspace.openProject(state.projectId);
+  mediaControl(state, 'media-sort', 'size');
+  mediaControl(state, 'media-type-filter', 'video');
+  const card = state.nodes.get('all-media-list').children[0];
+  await card.querySelector('.project-thumbnail').listeners.click();
+  assert.equal(state.workspace.getPreviewKind(), 'video');
+  assert.equal(state.selections.at(-1).assetId, video.id);
+  assert.deepEqual(state.calls.find(([action]) => action === 'preview-library'), ['preview-library', video.id]);
+  await card.querySelector('.project-media-actions').children[0].listeners.click();
+  assert.deepEqual(state.calls.at(-1), ['attach', state.projectId, video.id]);
+  assert.deepEqual(mediaIds(state, 'media-list'), [video.id]);
+  assert.equal(state.nodes.get('all-media-list').children[0].querySelector('.delete-control').disabled, true);
+  const selected = state.selections.at(-1);
+  mediaControl(state, 'media-search', 'no match');
+  assert.deepEqual(mediaIds(state), []);
+  assert.equal(state.workspace.getPreviewKind(), 'video');
+  assert.equal(state.selections.at(-1), selected);
+});
+
+function mediaDragEvent() {
+  const data = new Map([['text/uri-list', 'https://example.invalid/thumbnail.png']]);
+  return {
+    data,
+    prevented: false,
+    preventDefault() { this.prevented = true; },
+    dataTransfer: {
+      effectAllowed: 'uninitialized',
+      clearData() { data.clear(); },
+      setData(type, value) { data.set(type, value); },
+    },
+  };
+}
+
+test('managed media cards drag only an asset ID with a copy operation from either drawer section', async () => {
+  const state = fixture();
+  state.asset.thumbnail = 'data:image/png;base64,YWJj';
+  state.asset.path = '/private/reference.png';
+  await state.workspace.openProject(state.projectId);
+  for (const id of ['media-list', 'all-media-list']) {
+    const card = state.nodes.get(id).children[0];
+    assert.equal(card.draggable, true);
+    const event = mediaDragEvent();
+    card.listeners.dragstart(event);
+    assert.equal(event.prevented, false);
+    assert.equal(event.dataTransfer.effectAllowed, 'copy');
+    assert.deepEqual([...event.data], [['application/x-easel-media-asset', JSON.stringify({ assetId: state.assetId })]]);
+    assert.equal(card.dataset.dragging, 'true');
+    card.listeners.dragend();
+    assert.equal(card.dataset.dragging, undefined);
+    assert.equal(card.draggable, true);
+    const thumbnail = card.querySelector('.project-thumbnail');
+    assert.match(thumbnail.title, /Drag.*timeline/);
+    assert.equal(thumbnail.querySelector('img').draggable, false);
+    assert.equal(thumbnail.querySelector('.project-media-drag-hint').attributes['aria-hidden'], 'true');
+  }
+  assert.deepEqual(state.calls, [], 'Starting a drag must not attach, open, or mutate an asset');
+});
+
+test('media drag sources reject busy starts and clear an active drag when busy state changes', async () => {
+  const state = fixture();
+  await state.workspace.openProject(state.projectId);
+  const card = state.nodes.get('media-list').children[0];
+  assert.equal(card.draggable, true);
+  card.listeners.dragstart(mediaDragEvent());
+  assert.equal(card.dataset.dragging, 'true');
+  state.busy(true);
+  const event = mediaDragEvent();
+  card.listeners.dragstart(event);
+  assert.equal(event.prevented, true, 'Live busy state must guard against stale enabled DOM');
+  assert.equal(event.data.has('application/x-easel-media-asset'), false);
+  state.workspace.updateBusy();
+  assert.equal(card.draggable, false);
+  assert.equal(card.dataset.dragging, undefined);
+  state.busy(false);
+  state.workspace.updateBusy();
+  assert.equal(card.draggable, true);
+  assert.equal(card.querySelector('.project-thumbnail').disabled, false);
+});
+
+test('only valid, supported, ready media cards expose the drag affordance', async () => {
+  const state = fixture();
+  const job = { id: 'f'.repeat(32), status: 'generating', mediaType: 'video' };
+  state.libraryAssets.splice(0, 1,
+    { id: 'b'.repeat(32), mimeType: 'video/mp4', name: 'Clip' },
+    { id: 'd'.repeat(32), mimeType: 'audio/wav', name: 'Sound' },
+    { id: 'e'.repeat(32), mimeType: 'image/svg+xml', name: 'Vector' },
+    { id: 'file:///private/movie.mp4', mimeType: 'video/mp4', name: 'Invalid ID' },
+    { id: job.id, mimeType: 'video/mp4', name: 'Generating', kind: 'job', job });
+  await state.workspace.openProject(state.projectId);
+  const cards = state.nodes.get('all-media-list').children;
+  assert.equal(cards[0].draggable, true);
+  assert.equal(cards[1].draggable, true);
+  for (const card of cards.slice(2)) {
+    assert.notEqual(card.draggable, true);
+    assert.equal(card.listeners.dragstart, undefined);
+    assert.equal(card.querySelector('.project-media-drag-hint'), null);
+  }
+});
+
+test('media drag affordance retains click preview and Add to project as keyboard-accessible buttons', async () => {
+  const state = fixture();
+  const orphan = { ...state.asset, id: 'b'.repeat(32), name: 'Library reference' };
+  state.libraryAssets.push(orphan);
+  await state.workspace.openProject(state.projectId);
+  const card = state.nodes.get('all-media-list').children[1];
+  assert.equal(card.draggable, true);
+  const thumbnail = card.querySelector('.project-thumbnail');
+  assert.equal(thumbnail.tagName, 'button');
+  assert.equal(thumbnail.attributes['aria-label'], 'Open Library reference in viewer');
+  assert.equal(thumbnail.disabled, false);
+  const add = card.querySelector('.project-media-actions').children[0];
+  assert.equal(add.tagName, 'button');
+  assert.equal(add.attributes['aria-label'], 'Add to project');
+  await add.listeners.click();
+  assert.deepEqual(state.calls, [['attach', state.projectId, orphan.id]]);
+  await state.nodes.get('media-list').children[0].querySelector('.project-thumbnail').listeners.click();
+  assert.equal(state.workspace.getPreviewKind(), 'image');
+});
+
+test('media action controls cannot accidentally initiate a parent card drag', async () => {
+  const state = fixture();
+  await state.workspace.openProject(state.projectId);
+  const card = state.nodes.get('media-list').children[0];
+  for (const target of [...card.querySelector('.project-media-actions').children, card.querySelector('.delete-control').children[0]]) {
+    const event = mediaDragEvent();
+    event.target = target;
+    card.listeners.dragstart(event);
+    assert.equal(event.prevented, true);
+    assert.equal(event.data.has('application/x-easel-media-asset'), false);
+    assert.equal(card.dataset.dragging, undefined);
+  }
+});
+
+test('a rejected native data transfer cancels the drag without leaving visual state behind', async () => {
+  const state = fixture();
+  await state.workspace.openProject(state.projectId);
+  const card = state.nodes.get('media-list').children[0];
+  const event = mediaDragEvent();
+  event.dataTransfer.setData = () => { throw new Error('Transfer is not writable'); };
+  assert.doesNotThrow(() => card.listeners.dragstart(event));
+  assert.equal(event.prevented, true);
+  assert.equal(card.dataset.dragging, undefined);
+  assert.deepEqual([...event.data], []);
+});
+
+test('media drawer drag sources accept both managed ID lengths used by the host bridge', async () => {
+  const state = fixture(); const assetId = 'a'.repeat(64);
+  state.libraryAssets.push({ id: assetId, mimeType: 'image/png', name: 'Managed reference' });
+  await state.workspace.openProject(state.projectId);
+  const card = state.nodes.get('all-media-list').children.find((node) => node.dataset.assetId === assetId);
+  assert.equal(card.draggable, true);
+  const event = mediaDragEvent(); card.listeners.dragstart(event);
+  assert.deepEqual(JSON.parse(event.data.get('application/x-easel-media-asset')), { assetId });
 });

@@ -48,11 +48,33 @@ test('first-run setup saves an endpoint, enables a chat model and respects dismi
       await fs.mkdir(directory, { recursive: true });
       await page.screenshot({ path: path.join(directory, name), fullPage: true });
     };
+    const assertWizardFits = async () => {
+      for (const viewport of [{ width: 960, height: 540 }, { width: 800, height: 450 }, { width: 600, height: 400 }]) {
+        await page.setViewportSize(viewport);
+        const geometry = await page.evaluate(() => {
+          const bounds = (id) => {
+            const node = document.getElementById(id);
+            const rect = node.getBoundingClientRect();
+            const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+            return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, clickable: node === hit || node.contains(hit) };
+          };
+          return { dialog: bounds('settings-dialog'), next: bounds('setup-next'), back: bounds('setup-back'), skip: bounds('setup-skip') };
+        });
+        for (const [name, bounds] of Object.entries(geometry)) {
+          assert.ok(bounds.top >= 0 && bounds.bottom <= viewport.height && bounds.left >= 0 && bounds.right <= viewport.width,
+            `${name} must fit the ${viewport.width}x${viewport.height} viewport: ${JSON.stringify(bounds)}`);
+          if (name !== 'dialog') assert.equal(bounds.clickable, true, `${name} must remain reachable without scrolling`);
+        }
+      }
+      await page.setViewportSize({ width: 960, height: 540 });
+    };
     await capture('setup-desktop.png');
     await page.setViewportSize({ width: 960, height: 720 });
     await capture('setup-small-desktop.png');
+    await assertWizardFits();
     await page.locator('#setup-next').click();
     assert.equal(await page.locator('#setup-next').isDisabled(), true);
+    await assertWizardFits();
     await page.locator('#connection-url').fill('https://example.test/v1');
     await page.locator('#connection-name').fill('Example endpoint');
     await page.locator('#connection-key').fill('synthetic-test-key');
@@ -63,6 +85,7 @@ test('first-run setup saves an endpoint, enables a chat model and respects dismi
     await capture('setup-credentials.png');
     await page.locator('#setup-next').click();
     assert.equal(await page.locator('#setup-next').isDisabled(), true);
+    await assertWizardFits();
     await capture('setup-model.png');
     await page.locator('#setup-model-trigger').click();
     await page.locator('#setup-model-options').getByRole('option', { name: 'Example endpoint / Example chat model', exact: true }).click();
@@ -85,6 +108,7 @@ test('first-run setup saves an endpoint, enables a chat model and respects dismi
     await page.locator('#settings-open').click();
     await page.locator('#setup-open').click();
     await page.locator('#agent-backend-external').check();
+    await assertWizardFits();
     await page.locator('#setup-next').click();
     await page.locator('#setup-next').click();
     assert.equal(await page.locator('#setup-model-field').isVisible(), false);

@@ -265,15 +265,15 @@
       .canvas-empty[data-composing="false"] { gap: 20px; }
       .canvas-empty[data-composing="false"] .canvas-start-heading h3 { font-size: 28px; }
       .canvas-start-composer:empty { display: none; }
-      dialog { width: min(520px, calc(100% - 28px)); max-height: calc(100% - 28px); overflow: auto; border: 0; border-radius: 13px; padding: 0; color: var(--ink); background: var(--paper); box-shadow: 0 18px 60px #17251f38; }
+      dialog { width: min(520px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); overflow: auto; border: 0; border-radius: 13px; padding: 0; color: var(--ink); background: var(--paper); box-shadow: 0 18px 60px #17251f38; }
       dialog::backdrop { background: #17251f75; }
-      dialog.settings-dialog { width: min(980px, calc(100% - 28px)); height: min(720px, calc(100% - 28px)); max-height: calc(100% - 28px); overflow: hidden; }
+      dialog.settings-dialog { width: min(980px, calc(100vw - 28px)); height: min(720px, calc(100dvh - 28px)); max-height: calc(100dvh - 28px); overflow: hidden; }
       dialog.settings-dialog[open] { display: flex; flex-direction: column; }
       .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 17px; border-bottom: 1px solid #e0e5dd; }
       .dialog-head h2 { font: 600 20px/1.1 var(--display); letter-spacing: -.02em; }
       .dialog-description { max-width: 58ch; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
       .settings-dialog .dialog-head { flex: 0 0 auto; }
-      dialog.canvas-files-dialog { width: min(900px, calc(100% - 28px)); height: min(680px, calc(100% - 28px)); overflow: hidden; }
+      dialog.canvas-files-dialog { width: min(900px, calc(100vw - 28px)); height: min(680px, calc(100dvh - 28px)); overflow: hidden; }
       dialog.canvas-files-dialog[open] { display: flex; flex-direction: column; }
       .canvas-files-dialog .dialog-head { flex: 0 0 auto; }
       .canvas-files-summary { flex: 0 0 auto; margin: 0; padding: 10px 17px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }
@@ -293,13 +293,13 @@
       .settings-shell { flex: 1; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 164px minmax(0, 1fr); }
       .settings-dialog[data-setup="true"] .settings-shell { grid-template-columns: minmax(0, 1fr); }
       .settings-dialog[data-setup="true"] .settings-nav { display: none; }
-      .setup-header { padding: 16px 24px 0; }
+      .setup-header { flex: 0 0 auto; padding: 16px 24px 0; }
       .setup-header p { max-width: 62ch; color: var(--muted); }
       .setup-steps { display: flex; gap: 22px; list-style: none; padding: 0; margin: 18px 0 0; border-bottom: 1px solid var(--line); }
       .setup-steps li { padding: 0 0 10px; color: var(--muted); }
       .setup-steps li[aria-current="step"] { color: var(--green-deep); border-bottom: 2px solid var(--green); font-weight: 600; }
-      .setup-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 24px; border-top: 1px solid var(--line); }
-      .setup-footer #setup-status { flex: 1 1 180px; font-size: 12px; }
+      .setup-footer { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 24px; border-top: 1px solid var(--line); }
+      .setup-footer #setup-status { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
       .setup-footer #setup-progress { color: var(--muted); font-size: 12px; }
       .setup-model-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 18px; }
       .setup-model-body { padding: 16px 19px; }
@@ -463,6 +463,11 @@
       #project-kit-status[data-error="true"] { color: #9d3727; }
       .project-source-file { display: block; width: 100%; min-height: 30px; border: 0; border-radius: 4px; padding: 5px 8px; color: var(--muted); background: transparent; text-align: left; overflow-wrap: anywhere; font-size: 11px; }
       .project-media-item { min-width: 0; }
+      .project-media-item[draggable="true"], .project-media-item[draggable="true"] .project-thumbnail { cursor: grab; }
+      .project-media-item[data-dragging="true"] { opacity: .55; cursor: grabbing; }
+      .project-media-item[data-dragging="true"] .project-thumbnail { cursor: grabbing; }
+      .project-media-drag-hint { position: absolute; top: 7px; right: 7px; width: 20px; height: 20px; padding: 2px; border-radius: 3px; color: var(--paper); background: var(--green-deep); pointer-events: none; }
+      .project-media-item:not([draggable="true"]) .project-media-drag-hint { display: none; }
       .project-thumbnail { position: relative; display: grid; place-items: center; width: 100%; aspect-ratio: 1; overflow: hidden; border: 0; border-radius: 4px; padding: 0; color: var(--muted); background: var(--paper-deep); }
       .project-thumbnail img { display: block; width: 100%; height: 100%; object-fit: cover; transition: opacity 120ms ease; }
       .project-thumbnail:hover:not(:disabled) img { opacity: .85; }
@@ -487,6 +492,15 @@
       .project-media-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
       .project-media-actions .button { min-height: 26px; padding: 3px 0; font-size: 11px; text-align: left; }
       .project-media-actions .button:hover:not(:disabled) { color: var(--green); background: transparent; text-decoration: underline; text-underline-offset: 3px; }
+      .media-filter-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); }
+      .media-filter-controls input { grid-column: 1 / -1; min-width: 0; }
+      .media-filter-controls select { width: 100%; min-width: 0; }
+      .media-filter-controls label { font-size: 11px; color: var(--muted); display: grid; gap: 4px; }
+      .media-filter-controls p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+      .media-filter-controls #media-filters-reset { justify-self: start; }
+      .timeline-chat-context { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; background: var(--green-wash); font-size: 12px; color: var(--green-deep); }
+      .timeline-chat-context[hidden] { display: none; }
+      #open-video-editor { flex: 0 0 auto; margin: 4px 6px; }
       .image-viewer { position: absolute; inset: 0; display: flex; flex-direction: column; min-height: 0; background: var(--paper-deep); }
       .image-viewer-stage { display: flex; align-items: center; justify-content: center; flex: 1; min-height: 0; overflow: auto; padding: 16px; }
       .image-viewer-stage img { display: block; width: 100%; height: 100%; object-fit: contain; }
@@ -583,6 +597,14 @@
         </section>
         <section id="media-drawer" class="panel media-drawer" aria-labelledby="media-drawer-title" hidden>
           <div class="section-head"><h2 id="media-drawer-title">Media</h2><button id="media-collapse" class="fold-button" type="button" aria-label="Close media" title="Close drawer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+          <div class="media-filter-controls" aria-label="Media search and sorting">
+            <input id="media-search" type="search" aria-label="Search media" placeholder="Search name, type, or ID" />
+            <label>Type<select id="media-type-filter" aria-label="Filter media type"><option value="all">All types</option><option value="image">Images</option><option value="video">Videos</option><option value="audio">Audio</option></select></label>
+            <label>Sort<select id="media-sort" aria-label="Sort media"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="name">Name A–Z</option><option value="duration">Longest first</option><option value="size">Largest first</option></select></label>
+            <button id="media-import" type="button" class="button small">Import media</button>
+            <button id="media-filters-reset" type="button" class="button quiet small" aria-label="Reset media search and filters">Reset</button>
+            <p>All media includes the latest 200 items.</p>
+          </div>
           <div class="library-panel-content">
             <section class="library-content project-media-section" id="media-content" aria-labelledby="project-media-title"><div class="drawer-section-head"><h3 id="project-media-title">In this project <span id="project-image-count" class="drawer-count">0</span></h3></div><div id="media-list" class="media-grid" aria-label="Media in this project"></div><p id="media-empty" class="empty-library">Generated media appears here automatically.</p></section>
             <section class="library-content project-media-section" aria-labelledby="all-media-title"><div class="drawer-section-head"><h3 id="all-media-title">All media <span id="all-media-count" class="drawer-count">0</span></h3></div><div id="all-media-list" class="media-grid" aria-label="All saved media"></div><p id="all-media-empty" class="empty-library">Generated media and captures will be saved here, ready to use in any project.</p></section>
@@ -624,6 +646,7 @@
                 <select id="prompt-template" aria-label="Insert a prompt template"><option value="">Templates</option><option value="image">Generate an image</option><option value="video">Generate a video</option><option value="canvas">Interactive canvas</option><option value="audio">Audio sketch</option><option value="storyboard">Video storyboard</option></select>
                 <button id="composer-skills" class="button quiet small" type="button" aria-haspopup="dialog">Use skills</button>
               </div>
+              <div id="timeline-chat-context" class="timeline-chat-context" hidden><span id="timeline-chat-selection"></span><button id="timeline-chat-clear" type="button" class="button quiet small" aria-label="Clear timeline selection from next message">Clear</button></div>
               <div id="attachment-strip" class="attachment-strip" aria-label="Pending attachments" hidden></div>
               <textarea id="message" name="message" placeholder="Describe what you want to make or change…" aria-label="Message to Easel"></textarea>
               <div class="composer-footer">
@@ -638,7 +661,7 @@
       <div id="workbench-splitter" class="workbench-splitter" role="separator" aria-label="Resize sidebar and canvas panels" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="55" aria-valuenow="36" tabindex="0"></div>
       <section class="panel canvas-panel" aria-label="HTML canvas workspace">
         <h2 id="canvas-title" hidden>Canvas</h2>
-        <div class="canvas-tabs"><div id="open-canvas-tabs" class="canvas-tab-list" role="group" aria-label="Open project files and images"></div><button id="new-canvas-open" class="canvas-tab-add" type="button" aria-label="New HTML canvas" title="New HTML canvas"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button></div>
+        <div class="canvas-tabs"><div id="open-canvas-tabs" class="canvas-tab-list" role="group" aria-label="Open project files and images"></div><button id="open-video-editor" class="button quiet small" type="button" title="Open the editable video editor template">Video editor</button><button id="new-canvas-open" class="canvas-tab-add" type="button" aria-label="New HTML canvas" title="New HTML canvas"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button></div>
         <div id="canvas-host" class="canvas-host">
           <div id="canvas-empty" class="canvas-empty" aria-labelledby="canvas-start-title">
             <div class="canvas-start-heading"><h3 id="canvas-start-title">Your next idea goes here</h3><p>Describe what you want to make. We can shape it together.</p></div>
@@ -760,6 +783,7 @@
     <dialog id="new-canvas-dialog" aria-labelledby="new-canvas-title">
       <div class="dialog-head"><h2 id="new-canvas-title">Create canvas</h2><button id="new-canvas-close" class="button outline small" type="button">Cancel</button></div>
       <form id="new-canvas-form" class="settings-form">
+        <label id="new-project-template-field" class="field" for="new-project-template" hidden>Template<select id="new-project-template"><option value="blank">Blank canvas</option><option value="video">Video editor</option></select></label>
         <label class="field" for="new-canvas-name"><span id="new-item-name-label">Project name</span><input id="new-canvas-name" name="title" type="text" maxlength="120" autocomplete="off" placeholder="e.g. Spring campaign" required /></label>
         <div class="new-canvas-kits">
           <div class="new-canvas-kits-head"><strong id="new-canvas-kits-label">Project kits</strong></div>

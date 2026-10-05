@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { readInstalledSkills } = require('../src/skill-catalog');
 const { MEDIA_REFERENCE_TOOLS } = require('../src/media-reference-tools');
+const { TIMELINE_TOOLS } = require('../src/video-timeline-tools');
 
 const skillDirectory = path.join(__dirname, '..', '.agents', 'skills', 'easel-media');
 const referencesDirectory = path.join(skillDirectory, 'references');
@@ -65,13 +66,27 @@ test('skill reference links remain local and resolve inside the bundled skill', 
   assert.ok(referenceCount >= 6);
 });
 
-test('the skill distinguishes target models, tool gaps and current fan-out limits', () => {
+test('the skill distinguishes target models, typed generation controls and current fan-out limits', () => {
   const skill = fs.readFileSync(path.join(skillDirectory, 'SKILL.md'), 'utf8');
   assert.match(skill, /name: easel-media/);
   assert.match(skill, /`qwen-image-2\.1`/);
   assert.match(skill, /`ltx-2\.5`/);
   assert.match(skill, /Current client limit: at most four nonempty segments/);
-  assert.match(skill, /no current MCP adapter-discovery tool/);
+  for (const name of ['discover_video_capabilities({model})', 'list_video_loras({model})', 'cameraLora', 'cameraLoraStrength', 'loras: [{id,strength?}]', 'motionSpeed', 'loraReferenceAssetId', 'loraReferenceStrength', 'guidingFrames: [{assetId,frameIndex,strength?}]', 'guidingFrames: [{image:{data,mimeType,name?},frameIndex,strength?}]']) {
+    assert.ok(skill.includes(name), name);
+  }
+  assert.match(skill, /exact decimal string/);
+  assert.match(skill, /18446744073709551614/);
+  assert.match(skill, /32 MiB/);
+  assert.match(skill, /1–8 stills/);
+  assert.match(skill, /seconds \* 24/);
+  assert.match(skill, /step \*\*one\*\*/);
+  assert.match(skill, /graph_contract_tested/);
+  assert.match(skill, /not live-GPU\/visually verified/);
+  assert.match(skill, /soft conditioning/);
+  assert.match(skill, /LTX-2\.5 runtime remains unavailable/);
+  assert.match(skill.replace(/\s+/g, ' '), /decoded still images.*32 million pixels.*declared MIME/);
+  assert.doesNotMatch(skill, /no current MCP adapter-discovery tool|server-side recipes, not current MCP arguments/);
   assert.match(skill, /not a video timeline/);
   assert.match(skill, /no idempotency recovery contract/);
 });
@@ -86,11 +101,58 @@ test('in-app skill injection includes every adapter and the essential creative g
     .map((match) => match[1]);
   assert.deepEqual(documentedIds.sort(), catalog.map((entry) => entry.id).sort());
   const normalizedInstructions = skill.instructions.replace(/\s+/g, ' ');
-  for (const practice of ['pose-neutral', 'master audio', 'motion_speed', 'guide-token', '8n+1']) {
+  for (const practice of ['pose-neutral', 'master audio', 'motionSpeed', 'guide-token', '8n+1']) {
     assert.ok(normalizedInstructions.includes(practice), practice);
   }
   for (const toolName of ['list_media_jobs', 'list_media_assets', 'inspect_media_asset']) {
     assert.ok(MEDIA_REFERENCE_TOOLS.some((tool) => tool.function.name === toolName));
     assert.ok(skill.instructions.includes('`' + toolName + '`'));
   }
+});
+
+
+function injectedMediaInstructions() {
+  return readInstalledSkills(path.dirname(skillDirectory))
+    .find((entry) => entry.name === 'easel-media').instructions.replace(/\s+/g, ' ');
+}
+
+test('injected media skill explains managed timeline assembly without source retiming', () => {
+  const instructions = injectedMediaInstructions();
+  for (const { function: tool } of TIMELINE_TOOLS) {
+    assert.ok(instructions.includes('`' + tool.name + '`'), tool.name);
+  }
+  assert.match(instructions, /`inspect_timeline`.*`list_media_assets`.*`attach_canvas_assets`.*`apply_timeline_edit`/);
+  assert.match(instructions, /`expectedRevision`/);
+  assert.match(instructions, /stale.*fresh selection/);
+  assert.match(instructions, /integer half-open.*\[startFrame,endFrame\)/);
+  assert.match(instructions, /sourceStartSeconds.*sourceEndSeconds.*seconds/);
+  assert.match(instructions, /frameRate.numerator \/ frameRate.denominator/);
+  assert.match(instructions, /sourceEndSeconds - sourceStartSeconds = \(endFrame - startFrame\) \/ fps/);
+  assert.match(instructions, /\[0,48\).*\[48,96\)/);
+  assert.match(instructions, /no same-track overlaps/);
+  assert.match(instructions, /Export video.*no agent export tool/);
+});
+
+test('injected stitching recipes separate local cuts from unsupported temporal generation', () => {
+  const instructions = injectedMediaInstructions();
+  assert.match(instructions, /Hard-cut assembly/);
+  assert.match(instructions, /Generative stitching/);
+  assert.match(instructions, /H3.*temporal video\/audio guides.*client.*cannot submit/);
+  assert.match(instructions, /LTX.*still-image.*temporal.*not exposed/);
+  assert.match(instructions, /retained.*boundary frames/);
+  assert.match(instructions, /duplicate.*boundary frame/);
+  assert.match(instructions, /identity.*motion.*lighting/);
+  assert.match(instructions, /gain.*fadeInFrames.*fadeOutFrames/);
+  assert.match(instructions, /never claim.*heard.*metadata/);
+  assert.match(instructions, /ComfyUI restart.*downloaded managed assets/);
+  assert.match(instructions, /never.*resubmit.*billed/);
+  assert.doesNotMatch(instructions, /prepare_timeline_guides/);
+});
+
+test('integrated stitching guidance preserves timed still guides without promising temporal uploads', () => {
+  const instructions = injectedMediaInstructions();
+  assert.doesNotMatch(instructions, /Current `generate_video` accepts one saved still-image reference/);
+  assert.doesNotMatch(instructions, /continuation\/first-last controls are not exposed/);
+  assert.match(instructions, /For LTX.*`guidingFrames`.*1–8.*first\/last.*soft/);
+  assert.match(instructions, /not a selected timeline range, guide video or source audio/);
 });

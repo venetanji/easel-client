@@ -42,7 +42,8 @@ test('preload exposes a narrow frozen API with an explicit MCP connection action
     'onAgentEvent', 'openCanvas', 'openChat', 'openExternal', 'openProjectDocument', 'readCanvasFile', 'removeConnection', 'renameProject', 'retryCanvasInput', 'retryMediaJob',
     'saveCanvas', 'saveConnection', 'saveLibraryAsset', 'saveProjectAsset', 'saveSettings', 'selectCodexModel', 'selectModel', 'sendMessage', 'setAgentBackend', 'setCanvasBounds', 'stopAgent',
     'testLiteLLMChat', 'testLiteLLMImage', 'undoCanvas', 'updateModel', 'updateProjectKits',
-  ]);
+    'importMedia', 'openVideoEditor', 'readTimeline', 'createTimeline', 'applyTimeline', 'undoTimeline', 'redoTimeline', 'getTimelineHistory',
+  ].sort());
   assert.equal(Object.isFrozen(api), true);
   await api.getSettings();
   await api.listLiteLLMModels();
@@ -90,4 +91,17 @@ test('agent controls invoke only their declared trusted IPC channels', async () 
     { channel: 'agent:codex:login:cancel', args: ['pending-login'] }, { channel: 'agent:codex:logout', args: [] },
     { channel: 'agent:codex:model', args: ['model-a'] },
   ]);
+});
+
+test('timeline bridge methods use only named channels', async () => {
+  const { exposed, calls } = runPreload();
+  const client = exposed.easelClient;
+  const id = 'a'.repeat(32);
+  await client.readTimeline(id);
+  await client.createTimeline(id, {});
+  await client.applyTimeline(id, { expectedRevision: 0, operations: [] });
+  await client.undoTimeline(id, { expectedRevision: 1 });
+  await client.redoTimeline(id, { expectedRevision: 2 });
+  await client.getTimelineHistory(id);
+  assert.deepEqual(calls.map((call) => call.channel), ['timeline:read', 'timeline:create', 'timeline:apply', 'timeline:undo', 'timeline:redo', 'timeline:history']);
 });

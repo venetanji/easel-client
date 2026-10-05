@@ -19,7 +19,9 @@ Tools:
 - `generate_image` — generate an image and return image content plus non-secret metadata.
 - `edit_image` - edit one or more reference images with a prompt; optional masks depend on provider support.
 - `create_image_variation` - make variations from a reference image.
-- `generate_video` - submit a video job, returning its durable job ID and status.
+- `discover_video_capabilities` - read the selected endpoint’s typed bounds and guide-node availability without generation.
+- `list_video_loras` - read curated LoRA support, installation, requirements and validation evidence.
+- `generate_video` - submit a typed basic or advanced video job, returning its durable job ID and status.
 - `get_video` - check that job and download completed MP4/WebM media as an embedded MCP resource.
 - `capture_canvas_screenshot` — render offline HTML with local image assets and return a PNG.
 
@@ -43,7 +45,7 @@ The Easel application supplies `EASEL_MEDIA_MODELS` as a JSON array of enabled m
 ]
 ```
 
-With this configuration, media tools require the exact `id` returned by `list_models`. The server selects that entry's endpoint, key, and provider model. Optional `mediaTypes` narrows tool routing to discovered image/video/audio output types; unspecified types remain unknown. An empty array disables generation and video retrieval tools. Without the array, standalone tools use `EASEL_BASE_URL` and `EASEL_API_KEY`. A provider model is required for video generation. Audio models can be categorized now, but audio generation tools will be added when an endpoint contract is available.
+With this configuration, media tools require the exact `id` returned by `list_models`. The server selects that entry's endpoint, key, and provider model. Optional `mediaTypes` narrows tool routing to discovered image/video/audio output types; unspecified types remain unknown. An empty array disables generation, video discovery and video retrieval tools. Without the array, standalone tools use `EASEL_BASE_URL` and `EASEL_API_KEY`. A provider model is required for video generation. Audio models can be categorized now, but audio generation tools will be added when an endpoint contract is available.
 
 ## Video jobs
 
@@ -69,6 +71,66 @@ Easel's live API exposes multipart `POST /v1/videos`, JSON `GET /v1/videos/{vide
 ```
 
 `generate_video` submits exactly one job with no automatic retries. It returns `job.id`, `job.modelId`, status and available progress/duration/size metadata. Keep the ID even when pending. The optional standalone `inputReference` uses the same validated PNG/JPEG/WebP upload object as image tools and is sent as `input_reference`. The in-app agent supplies `inputReferenceAssetId` instead; the host uploads the saved reference bytes.
+
+### Advanced controls and read-only discovery
+
+Call `discover_video_capabilities({"model":"EXACT_ENABLED_MODEL_ID"})` and
+`list_video_loras({"model":"EXACT_ENABLED_MODEL_ID"})` to inspect the same selected
+endpoint and credentials used for generation. Standalone use supplies its provider
+model ID. Discovery performs authenticated GET requests only, never uploads or
+submits a generation. It returns `{modelId,capabilities}` or `{modelId,loras}`.
+Unsupported/older capability contracts fail explicitly. A model entry, installed
+weight or available node does not establish GPU execution or visual fidelity.
+
+`generate_video` exposes these additional fields:
+
+| Field | Contract |
+| --- | --- |
+| `cameraLora` | `dolly-in`, `dolly-out`, `dolly-left`, `dolly-right`, `jib-up`, `jib-down`, or `static` |
+| `cameraLoraStrength` | Finite 0–2; requires `cameraLora`; server default 0.8 |
+| `loras` | Typed `[{id,strength?}]`, up to 4 distinct IDs including camera shorthand; finite strength 0–2, server default 1. Copy curated IDs from live discovery; never pass raw JSON or filenames |
+| `seed` | Exact decimal **string** `"0"` through `"18446744073709551614"`; JSON numbers are rejected to avoid rounding |
+| `motionSpeed` | Finite 0.025–1; requires the `slow-motion` LoRA and first-image reference |
+| `loraReference` | Standalone PNG/JPEG/WebP upload object for `ingredients`; requires at least 5 seconds and no other LoRA |
+| `loraReferenceStrength` | Finite 0–1; requires `ingredients`; server default 1 |
+| `guidingFrames` | One to eight strict `{image,frameIndex,strength?}` anchors. `image` is a standalone upload object; unique integer pixel-frame positions are 0 through `seconds*24`, strength 0–1 defaults to 1 |
+
+In-app tools replace `loraReference` with `loraReferenceAssetId` and guide `image`
+with `assetId`. The host resolves the same project/library IDs used for ordinary
+references. All first-image, Ingredients and guiding-image bytes share one 32 MiB
+upload budget. No raw bytes, paths or URLs enter saved in-app tool arguments.
+
+For example, an in-app request may use:
+
+```json
+{
+  "model": "EXACT_ENABLED_MODEL_ID",
+  "prompt": "The subject moves smoothly between the two anchors, fixed camera",
+  "seconds": 1,
+  "seed": "18446744073709551614",
+  "cameraLora": "static",
+  "guidingFrames": [
+    {"assetId": "REAL_SAVED_IMAGE_ID", "frameIndex": 0},
+    {"assetId": "ANOTHER_REAL_SAVED_IMAGE_ID", "frameIndex": 24, "strength": 0.8}
+  ]
+}
+```
+
+Guides are exclusive with first-image and Ingredients/reference-sheet modes.
+Cinemagraph and slow-motion require a first image, so cannot combine with guides.
+Cinemagraph also rejects moving camera LoRAs. Guiding mode supports Easel's 1–12
+seconds. Temporal guides currently have graph-contract tests, not live GPU or
+visual-quality validation. Check `guiding_frames.available` separately from
+`supported`, and preserve its `validation` label when reporting readiness.
+
+On HTTP, typed guide objects become `guiding_frames` JSON metadata with
+`image_index`, `frame_index`, and `strength`, plus repeated `guiding_images`
+uploads in their original order. Camel-case options map to the corresponding
+snake-case API fields. The API remains authoritative for curated supported
+LoRA IDs and installed weights. Clients validate structure, bounds, known recipe
+conflicts and aggregate bytes before POST; unknown options are never silently
+dropped. Basic requests do not require discovery, and generic endpoints retain
+existing basic behavior. No generation POST is retried automatically.
 
 Retrieve using `get_video`:
 

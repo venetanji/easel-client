@@ -1,3 +1,4 @@
+const { validateTimelineSelectionInput } = require('./video-timeline-controller');
 const IPC_CHANNELS = Object.freeze({
   GET_SETTINGS: 'settings:get',
   GET_AGENT_CONTROL: 'agent:control:get',
@@ -41,6 +42,14 @@ const IPC_CHANNELS = Object.freeze({
   CLOSE_CANVAS: 'canvases:close',
   LIST_CANVAS_INPUTS: 'canvas:inputs:list',
   RETRY_CANVAS_INPUT: 'canvas:inputs:retry',
+  IMPORT_MEDIA: 'media:import',
+  OPEN_VIDEO_EDITOR: 'timeline:open-editor',
+  READ_TIMELINE: 'timeline:read',
+  CREATE_TIMELINE: 'timeline:create',
+  APPLY_TIMELINE: 'timeline:apply',
+  UNDO_TIMELINE: 'timeline:undo',
+  REDO_TIMELINE: 'timeline:redo',
+  TIMELINE_HISTORY: 'timeline:history',
   SEND_MESSAGE: 'chat:send',
   STOP_AGENT: 'chat:stop',
   CLEAR_CHAT: 'chat:clear',
@@ -144,7 +153,7 @@ function validateChatOptions(value) {
   if (value === undefined) return { mode: 'chat', size: '1024x1024', skills: [] };
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Chat options must be an object.');
   for (const key of Object.keys(value)) {
-    if (!['mode', 'size', 'skills', 'kits', 'attachments'].includes(key)) throw new Error(`Unsupported chat option: ${key}`);
+    if (!['mode', 'size', 'skills', 'kits', 'attachments', 'timelineSelection'].includes(key)) throw new Error(`Unsupported chat option: ${key}`);
   }
   const mode = value.mode ?? 'chat';
   if (!['chat', 'image'].includes(mode)) throw new Error('Chat mode is invalid.');
@@ -233,6 +242,7 @@ function validateChatOptions(value) {
     mode,
     size,
     skills: cleanSkills,
+    ...(Object.hasOwn(value, 'timelineSelection') ? { timelineSelection: validateTimelineSelectionInput(value.timelineSelection) } : {}),
     ...(Object.hasOwn(value, 'kits') ? { kits: cleanKits } : {}),
     ...(Object.hasOwn(value, 'attachments') ? { attachments: cleanAttachments } : {}),
   };
