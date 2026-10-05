@@ -19,9 +19,11 @@ test('Templates remains discoverable and creation reveals the result at desktop 
     await page.addInitScript(entries => {
       localStorage.setItem('easel-setup-v1', 'skipped');
       let projects = [];
+      const settings = { connections: [], models: [], activeConnectionId: '', litellmModel: '' };
       const result = { projectId: 'a'.repeat(32), instanceId: 'b'.repeat(32), documentPath: 'sketches/video/index.html', title: 'Video sketch', opened: true };
       const api = {
-        getSettings: async () => ({ connections: [], models: [] }),
+        getSettings: async () => settings,
+        getModelCatalog: async () => ({ settings, catalog: [] }),
         getAgentControl: async () => ({ backend: 'builtin', busy: false, codex: {}, external: { enabled: true, connectedClients: 0 } }),
         getAvailableKits: async () => [{ id: 'canvas-2d', name: 'Canvas 2D', installed: true }],
         getCurrentChat: async () => ({ history: [], backend: 'builtin' }),
@@ -58,7 +60,10 @@ test('Templates remains discoverable and creation reveals the result at desktop 
       assert.equal(geometry.overflow, false);
       if (viewport.width <= 850) assert.ok(geometry.drawerHeight <= viewport.height * 0.6 + 1);
       await page.locator('#templates-detail').getByRole('button', { name: 'Create project', exact: true }).click();
-      await page.locator('#templates-drawer').waitFor({ state: 'hidden' });
+      await page.locator('#templates-drawer').waitFor({ state: 'hidden' }).catch(async error => {
+        console.error({ viewport, errors, status: await page.locator('#templates-status').textContent(), recovery: await page.locator('#templates-recovery').textContent() });
+        throw error;
+      });
       if (viewport.width <= 850) {
         assert.equal(await page.locator('.studio').getAttribute('data-sidebar'), 'closed');
         const canvas = await page.locator('.canvas-panel').evaluate(node => ({ focused: document.activeElement === node, top: node.getBoundingClientRect().top }));
