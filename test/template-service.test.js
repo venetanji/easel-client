@@ -8,6 +8,7 @@ const { createVideoTimelineStore } = require('../src/video-timeline-store');
 const { createTemplateInstanceStore } = require('../src/template-instance-store');
 const { createVideoTimelineTemplate } = require('../src/video-timeline-template');
 const { createCanvasHistory, restoreCanvasHistory } = require('../src/canvas-history');
+const { createSourceArchiveFixture } = require('./helpers/canvas-kit-source');
 const SMALL_SOURCE = '<main>Sound</main><style>main{color:red}</style><script>const pattern = "c3";</script>';
 function fixture(t, options = {}) {
   const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-template-service-'));
@@ -16,6 +17,7 @@ function fixture(t, options = {}) {
   let instances;
   const kitBundles = options.kitBundles || {};
   const canvases = createCanvasStore({ userDataPath, kitBundles, fileSystem: options.sourceFs || fs,
+    readKitSourceArchive: (name) => name === 'strudel' && kitBundles.strudel ? createSourceArchiveFixture(kitBundles.strudel) : null,
     listTimelines: (id) => timelines.list(id), listInstances: (id) => instances?.list(id) || [] });
   instances = createTemplateInstanceStore({ userDataPath, timelineStore: timelines, projectStore: canvases, fileSystem: options.registryFs || fs });
   let active = options.noProject ? '' : canvases.createProject({ title: 'Student work', kits: options.kits || ['canvas-2d'] }).id;

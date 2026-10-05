@@ -21,8 +21,8 @@ function fixture(options = {}) {
   const { createStrudelExportController } = require("../src/strudel-export-controller");
   const { encodePCM16Wav } = require("../src/strudel-export-renderer");
   const { snapshotTiming } = require("../src/strudel-export-policy");
-  const gate = deferred(), saveGate = deferred(), saved = [], attached = [], notifications = [];
-  let valid = true, committed;
+  const gate = deferred(), saveGate = deferred(), saved = [], attached = [], notifications = [], renders = [], membershipReads = [];
+  let valid = true, committed, membership = false;
   const result = () => {
     const frames = snapshotTiming(snapshot()).frames;
     return { wavBytes: Buffer.from(encodePCM16Wav({ sampleRate: 48e3, numberOfChannels: 2, length: frames, getChannelData: () => new Float32Array(frames) })), duration: frames / 48e3, sampleRate: 48e3, channels: 2 };
@@ -33,6 +33,7 @@ function fixture(options = {}) {
     },
     captureDependency: () => ({ source: "pinned A", digest: "e".repeat(64) }),
     render: async (_s, { signal, kitSource }) => {
+      renders.push(_s);
       assert.equal(kitSource, "pinned A");
       if (options.renderFailure) throw new Error("render failed");
       if (options.onRender) options.onRender(signal);
@@ -40,7 +41,11 @@ function fixture(options = {}) {
       return result();
     },
     findExport: async () => options.existing || committed || null,
-    isAttached: async () => false,
+    isAttached: async (projectId, assetId) => {
+      membershipReads.push({ projectId, assetId });
+      if (options.isAttached) return options.isAttached(projectId, assetId);
+      return membership;
+    },
     saveMedia: async (payload) => {
       saved.push(payload);
       if (options.deferredSave) await saveGate.promise;
@@ -51,13 +56,14 @@ function fixture(options = {}) {
     attach: async (projectId, ids) => {
       attached.push({ projectId, ids });
       if (options.attachFailure) throw new Error("attachment failed");
+      membership = true;
     },
     onExport: (receipt) => {
       notifications.push(receipt);
       if (options.notifyFailure) throw new Error("notification failed");
     }
   });
-  return { controller, gate, saveGate, saved, attached, notifications, invalidate: () => {
+  return { controller, gate, saveGate, saved, attached, notifications, renders, membershipReads, setMembership: (value) => { membership = value; }, invalidate: () => {
     valid = false;
     controller.invalidate("Runtime changed");
   }, result };
@@ -93,6 +99,48 @@ test("repeat_id_returns_same_receipt", async () => {
   assert.equal(f.saved.length, 1);
   assert.equal(f.saved[0].scope.kind, "strudel-export");
   assert.equal(f.saved[0].scope.kitDigest, "e".repeat(64));
+});
+// Returning the cached attachment status must fail these membership transitions.
+test('completed_retry_reports_detachment_without_rendering_saving_or_attaching_again', async () => {
+  const f = fixture();
+  const first = await f.controller.start(scope, request());
+  assert.equal(first.attachmentStatus, 'attached');
+  f.setMembership(false);
+
+  const retry = await f.controller.start({ ...scope, runtimeGeneration: 2 }, request());
+  assert.equal(retry.assetId, first.assetId);
+  assert.equal(retry.attachmentStatus, 'saved-only');
+  assert.match(retry.warning, /already saved in Media.*Attach it to this project manually/);
+  assert.deepEqual(f.membershipReads, [{ projectId: scope.projectId, assetId: first.assetId }]);
+  assert.deepEqual([f.renders.length, f.saved.length, f.attached.length, f.notifications.length], [1, 1, 1, 1]);
+});
+test('completed_retry_clears_saved_only_warning_after_manual_attachment', async () => {
+  const f = fixture({ attachFailure: true });
+  const first = await f.controller.start(scope, request());
+  assert.equal(first.attachmentStatus, 'saved-only');
+  assert.match(first.warning, /attachment failed/);
+  f.setMembership(true);
+
+  const retry = await f.controller.start({ ...scope, runtimeGeneration: 2 }, request());
+  assert.equal(retry.assetId, first.assetId);
+  assert.equal(retry.attachmentStatus, 'attached');
+  assert.equal(Object.hasOwn(retry, 'warning'), false);
+  assert.deepEqual(f.membershipReads, [1, 2].map(() => ({ projectId: scope.projectId, assetId: first.assetId })));
+  assert.deepEqual([f.renders.length, f.saved.length, f.attached.length, f.notifications.length], [1, 1, 1, 1]);
+});
+test('completed_retry_preserves_durable_asset_when_project_membership_cannot_be_read', async () => {
+  const options = {}, f = fixture(options);
+  const first = await f.controller.start(scope, request());
+  options.isAttached = async () => { throw Error('Original project metadata is unavailable'); };
+
+  const retry = await f.controller.start(scope, request());
+  assert.equal(retry.assetId, first.assetId);
+  assert.equal(retry.attachmentStatus, 'saved-only');
+  assert.match(retry.warning, /already saved in Media/);
+  assert.deepEqual(f.membershipReads, [{ projectId: scope.projectId, assetId: first.assetId }]);
+  delete options.isAttached;
+  assert.equal((await f.controller.start(scope, request())).attachmentStatus, 'attached');
+  assert.deepEqual([f.renders.length, f.saved.length, f.attached.length, f.notifications.length], [1, 1, 1, 1]);
 });
 test("changed_content_rejects_same_id", async () => {
   const f = fixture();

@@ -77,8 +77,15 @@ function createTemplatesDrawer({ document, client, onOpen, onPrompt, onStatus, i
     retryButton = button('Retry Open', retryOpen, 'recovery');
     dismissButton = button('Dismiss Open retry', () => {
       if (blocked()) return;
+      const view = viewVersion;
+      const focused = document.activeElement;
+      const ownedFocus = focused === retryButton || focused === dismissButton;
       clearRecovery('Open retry dismissed. No sketch was deleted or recreated. Existing work is in Project files.');
-      if (open) detail.querySelector('button')?.focus();
+      if (ownedFocus && !destroyed && open && view === viewVersion && (document.activeElement === focused || document.activeElement === document.body)) {
+        const current = detail.hidden ? list : detail;
+        [...current.querySelectorAll('button'), refreshButton, document.getElementById('templates-collapse')]
+          .find((item) => item?.isConnected && !item.disabled && !item.hidden)?.focus();
+      }
     }, 'recovery', 'button quiet');
     recovery.append(retryButton, dismissButton);
     updateBusy();

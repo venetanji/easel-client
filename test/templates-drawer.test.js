@@ -11,6 +11,7 @@ function fixture() {
     let text = '';
     const node = {
       tagName, children: [], dataset: {}, attributes: {}, hidden: false, disabled: false, listeners: new Map(),
+      get isConnected() { return this === nodes.get('templates-drawer') || nodes.get('templates-drawer').querySelectorAll('*').includes(this); },
       get textContent() { return text + this.children.map((child) => child.textContent).join(''); },
       set textContent(value) { text = String(value); this.children = []; },
       append(...children) { this.children.push(...children); },
@@ -30,7 +31,7 @@ function fixture() {
     };
     return node;
   }
-  const nodes = new Map(['templates-drawer', 'templates-list', 'templates-detail', 'templates-status', 'templates-recovery', 'templates-refresh'].map((id) => [id, element(id === 'templates-refresh' ? 'button' : 'div')]));
+  const nodes = new Map(['templates-drawer', 'templates-list', 'templates-detail', 'templates-status', 'templates-recovery', 'templates-refresh', 'templates-collapse'].map((id) => [id, element(['templates-refresh', 'templates-collapse'].includes(id) ? 'button' : 'div')]));
   nodes.get('templates-drawer').append(...[...nodes.entries()].filter(([id]) => id !== 'templates-drawer').map(([, node]) => node));
   document.getElementById = (id) => nodes.get(id);
   document.createElement = element;
@@ -258,6 +259,105 @@ test('explicit retry dismissal releases creation without deleting, reopening or 
   assert.equal(f.calls.create.length, 1);
   assert.deepEqual(f.calls.open, [{ projectId: f.saved.projectId, instanceId: f.saved.instanceId }]);
   assert.deepEqual(f.calls.onOpen, []);
+});
+
+// Removing the gallery/header fallback must leave the removed recovery focused.
+test('gallery_retry_dismissal_focuses_an_enabled_connected_catalog_control', async () => {
+  const f = fixture(); await f.drawer.refresh(); f.drawer.setOpen(true); await f.choose('video-editor');
+  f.client.createTemplateInstance = async () => ({ ...f.saved, opened: false, openError: 'Preview failed' });
+  await f.button('templates-detail', 'Create project').click();
+  await f.button('templates-detail', 'All templates').click();
+  const choices = f.buttons('templates-list'); choices[0].disabled = true;
+  const dismiss = f.button('templates-recovery', 'Dismiss Open retry'); dismiss.focus();
+  await dismiss.click();
+
+  assert.equal(f.document.activeElement, choices[1]);
+  assert.equal(f.document.activeElement.isConnected, true);
+  assert.equal(f.document.activeElement.disabled, false);
+  assert.equal(dismiss.isConnected, false);
+  assert.equal(f.nodes.get('templates-recovery').hidden, true);
+  assert.equal(f.nodes.get('templates-drawer').hidden, false);
+  assert.deepEqual([f.calls.open, f.calls.onOpen], [[], []]);
+});
+test('empty_gallery_retry_dismissal_focuses_an_enabled_header_control', async () => {
+  const f = fixture(); await f.drawer.refresh(); f.drawer.setOpen(true); await f.choose('video-editor');
+  f.client.createTemplateInstance = async () => ({ ...f.saved, opened: false, openError: 'Preview failed' });
+  await f.button('templates-detail', 'Create project').click();
+  f.client.listTemplates = async () => []; await f.drawer.refresh();
+  const dismiss = f.button('templates-recovery', 'Dismiss Open retry'); dismiss.focus();
+  await dismiss.click();
+
+  assert.equal(f.document.activeElement, f.nodes.get('templates-refresh'));
+  assert.equal(f.document.activeElement.isConnected, true);
+  assert.equal(f.nodes.get('templates-drawer').hidden, false);
+});
+test('retry_dismissal_skips_a_disabled_refresh_header_during_catalog_loading', async () => {
+  const f = fixture(); await f.drawer.refresh(); f.drawer.setOpen(true); await f.choose('video-editor');
+  f.client.createTemplateInstance = async () => ({ ...f.saved, opened: false, openError: 'Preview failed' });
+  await f.button('templates-detail', 'Create project').click();
+  f.client.listTemplates = async () => []; await f.drawer.refresh();
+  let finish; f.client.listTemplates = () => new Promise((resolve) => { finish = resolve; });
+  const pending = f.drawer.refresh();
+  const dismiss = f.button('templates-recovery', 'Dismiss Open retry'); dismiss.focus();
+  await dismiss.click();
+
+  assert.equal(f.nodes.get('templates-refresh').disabled, true);
+  assert.equal(f.document.activeElement, f.nodes.get('templates-collapse'));
+  assert.equal(f.document.activeElement.isConnected, true);
+  assert.equal(f.nodes.get('templates-drawer').hidden, false);
+  finish([]); await pending;
+});
+test('focused_recovery_dismissal_returns_to_the_current_detail_control', async () => {
+  const f = fixture(); await f.drawer.refresh(); f.drawer.setOpen(true); await f.choose('video-editor');
+  f.client.createTemplateInstance = async () => ({ ...f.saved, opened: false, openError: 'Preview failed' });
+  await f.button('templates-detail', 'Create project').click();
+  assert.equal(f.document.activeElement, f.button('templates-recovery', 'Retry Open'));
+  await f.button('templates-recovery', 'Dismiss Open retry').click();
+
+  assert.equal(f.document.activeElement, f.button('templates-detail', 'All templates'));
+  assert.equal(f.document.activeElement.isConnected, true);
+});
+test('recovery_dismissal_does_not_restore_focus_after_its_view_changes_during_removal', async () => {
+  const f = fixture(); await f.drawer.refresh(); f.drawer.setOpen(true); await f.choose('video-editor');
+  f.client.createTemplateInstance = async () => ({ ...f.saved, opened: false, openError: 'Preview failed' });
+  await f.button('templates-detail', 'Create project').click();
+  const dismiss = f.button('templates-recovery', 'Dismiss Open retry'); dismiss.focus();
+  const recovery = f.nodes.get('templates-recovery'), replace = recovery.replaceChildren;
+  recovery.replaceChildren = function (...children) {
+    replace.call(this, ...children);
+    f.drawer.setOpen(false); f.drawer.setOpen(true);
+    f.nodes.get('templates-refresh').focus();
+  };
+  await dismiss.click();
+
+  assert.equal(f.document.activeElement, f.nodes.get('templates-refresh'));
+  assert.equal(f.nodes.get('templates-drawer').hidden, false);
+  assert.equal(f.nodes.get('templates-recovery').hidden, true);
+});
+test('retry_dismissal_does_not_steal_focus_from_newer_template_navigation', async () => {
+  const f = fixture(); await f.drawer.refresh(); f.drawer.setOpen(true); await f.choose('video-editor');
+  f.client.createTemplateInstance = async () => ({ ...f.saved, opened: false, openError: 'Preview failed' });
+  await f.button('templates-detail', 'Create project').click();
+  await f.button('templates-detail', 'All templates').click(); await f.choose('strudel-sound');
+  const focused = f.document.activeElement;
+  await f.button('templates-recovery', 'Dismiss Open retry').click();
+
+  assert.equal(f.document.activeElement, focused);
+  assert.equal(f.document.activeElement.isConnected, true);
+  assert.match(f.nodes.get('templates-detail').textContent, /Strudel sound/);
+  assert.equal(f.nodes.get('templates-drawer').hidden, false);
+});
+test('matching_external_deletion_does_not_steal_focus_from_current_catalog_navigation', async () => {
+  const f = fixture(); await f.drawer.refresh(); f.drawer.setOpen(true); await f.choose('video-editor');
+  f.client.createTemplateInstance = async () => ({ ...f.saved, opened: false, openError: 'Preview failed' });
+  await f.button('templates-detail', 'Create project').click();
+  await f.button('templates-detail', 'All templates').click();
+  const focused = f.document.activeElement;
+  f.drawer.acceptDeletion({ type: 'project-file-deleted', projectId: f.saved.projectId, deletedPath: f.saved.documentPath });
+
+  assert.equal(f.document.activeElement, focused);
+  assert.equal(f.document.activeElement.isConnected, true);
+  assert.equal(f.nodes.get('templates-recovery').hidden, true);
 });
 
 test('matching deletion during a pending retry invalidates its late opened result', async () => {

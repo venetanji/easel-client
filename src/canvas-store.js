@@ -2,10 +2,12 @@ const { isMediaBase64 } = require('./media-base64');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { parse } = require('parse5');
 const { buildCanvasDocument, buildCanvasSnapshotDocument } = require('./canvas-policy');
 const { imageElement, imageInsertionLocation } = require('./canvas-html');
 const { MAX_FILE_BYTES, MAX_FILES, assembleProject, digest, documentTitle, managedKitScripts, projectDocuments, projectFromDocument, projectSnapshot, readChunk, resolveDocumentPath, stripManagedKitScripts, validateFilePath, validateJavaScriptFiles, validateProject, validateStateText } = require('./canvas-project');
 const { createProjectZip } = require('./project-zip');
+const { createCanvasKitSourceCache } = require('./canvas-kit-source');
 const { listTemplates } = require('./template-catalog');
 const { assertStorageSpace, storageWriteError } = require('./storage-space');
 
@@ -116,11 +118,12 @@ function referencesProjectItem(content, fromFile, targetPath, assetId) {
   return false;
 }
 
-function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, assetStore, readTimeline = () => null, listTimelines = (id) => [readTimeline(id)].filter(Boolean), listInstances = () => [], thumbnailFactory = (bytes, mimeType) => `data:${mimeType};base64,${bytes.toString('base64')}`, idFactory = () => crypto.randomUUID().replaceAll('-', '') }) {
+function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, readKitSourceArchive, assetStore, readTimeline = () => null, listTimelines = (id) => [readTimeline(id)].filter(Boolean), listInstances = () => [], thumbnailFactory = (bytes, mimeType) => `data:${mimeType};base64,${bytes.toString('base64')}`, idFactory = () => crypto.randomUUID().replaceAll('-', '') }) {
   const canvasesPath = path.join(userDataPath, 'canvases');
   const dependenciesPath = path.join(canvasesPath, '.dependencies');
   const projectAssetsPath = path.join(canvasesPath, '.assets');
   const libraryMediaFilename = path.join(canvasesPath, '.library-media.json');
+  const kitSourceCache = createCanvasKitSourceCache({ dependenciesPath, readInstalledArchive: readKitSourceArchive, writeAtomic, fileSystem });
   const mediaMetadataCache = new Map();
   const mediaThumbnailCache = new Map();
   let thumbnailCacheBytes = 0;
@@ -165,6 +168,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     const hash = digest(source);
     const filename = path.join(dependenciesPath, `${hash}.js`);
     if (!fileSystem.existsSync(filename)) writeAtomic(filename, source);
+    kitSourceCache.tryRetain(name, hash);
     return { name, digest: hash };
   }
 
@@ -465,6 +469,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
         } else { writeAtomic(file, source); newCaches.push([file, source]); }
       }
       const result = commitProject(id, project);
+      for (const kit of kits) if (kit.digest) kitSourceCache.tryRetain(kit.name, kit.digest);
       return { ...result, projectId: id, documentPath: name, documentTitle: title.trim(), kits: kits.map((kit) => kit.name), dependencyPaths: Object.keys(document.files).filter((file) => file !== name), atomic: true };
     } catch (cause) {
       // These content-addressed entries did not exist at admission. Never delete
@@ -1087,6 +1092,8 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
 
   function exportProject(id) {
     const project = loadProject(id);
+    const kitSources = distributionKitSources(project);
+    const kitSourceBytes = [...kitSources.values()].reduce((total, source) => total + source.bytes, 0);
     const timelines = listTimelines(id);
     const documents = projectDocuments(project);
     const canonical = { ...project };
@@ -1099,18 +1106,18 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     const kitBytes = project.manifest.kits.reduce((total, kit) => total + (kit.digest ? fileSystem.statSync(path.join(dependenciesPath, `${kit.digest}.js`)).size : 0), 0);
     const payloadBytes = [...uniqueMedia.values()].reduce((total, asset) => total + Math.ceil(asset.bytes / 3) * 4, 0);
     const minimumRenderedBytes = documents.length * (kitBytes + payloadBytes);
-    const contributions = { sourceBytes, canonicalBytes: Buffer.byteLength(canonicalText), uniqueMediaBytes, mediaAliasBytes, kitBytes, documentCount: documents.length, minimumRenderedBytes, renderedBytes: 0, limitBytes: MAX_PROJECT_EXPORT_BYTES, documentLimitBytes: MAX_DOCUMENT_EXPORT_BYTES };
+    const contributions = { sourceBytes, canonicalBytes: Buffer.byteLength(canonicalText), uniqueMediaBytes, mediaAliasBytes, kitBytes, kitSourceBytes, documentCount: documents.length, minimumRenderedBytes, renderedBytes: 0, limitBytes: MAX_PROJECT_EXPORT_BYTES, documentLimitBytes: MAX_DOCUMENT_EXPORT_BYTES };
     const failSize = (reason) => {
       throw new Error(`Project ZIP export exceeds its 256 MiB total or 128 MiB document limit. ${reason} Contributions: ${JSON.stringify(contributions)}. Split a large project or remove unused media before exporting. No partial ZIP was written.`);
     };
-    if (sourceBytes + contributions.canonicalBytes + mediaAliasBytes + kitBytes + minimumRenderedBytes > MAX_PROJECT_EXPORT_BYTES) failSize('The minimum export size is already over budget.');
+    if (sourceBytes + contributions.canonicalBytes + mediaAliasBytes + kitBytes + kitSourceBytes + minimumRenderedBytes > MAX_PROJECT_EXPORT_BYTES) failSize('The minimum export size is already over budget.');
     const zip = createProjectZip({ maxUncompressedBytes: MAX_PROJECT_EXPORT_BYTES, timestamp: project.updatedAt });
     const add = (name, value) => {
       const bytes = Buffer.isBuffer(value) ? value.length : Buffer.byteLength(value, 'utf8');
       if (zip.uncompressedBytes + bytes > MAX_PROJECT_EXPORT_BYTES) failSize(`${name} requires ${bytes} bytes.`);
       zip.add(name, value);
     };
-    const exportedKits = project.manifest.kits.map((kit) => ({ ...kit, ...(kit.digest ? { path: `.easel/kits/${kit.name}-${kit.digest.slice(0, 16)}.js` } : {}) }));
+    const exportedKits = project.manifest.kits.map((kit) => ({ ...kit, ...(kit.digest ? { path: `.easel/kits/${kit.name}-${kit.digest.slice(0, 16)}.js` } : {}), ...(kitSources.has(kit.digest) ? { correspondingSource: sourceIdentity(kitSources.get(kit.digest)) } : {}) }));
     const instances = listInstances(id);
     const templates = listTemplates().filter((entry) => instances.some((instance) => instance.templateId === entry.id && instance.templateVersion === entry.version))
       .map(({ id, version, title, purpose, requiredKits, outputs, limitations }) => ({ id, version, title, purpose, requiredKits, outputs, limitations }));
@@ -1120,6 +1127,7 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     for (const timeline of timelines) add(`.easel/timelines/${timeline.id}.json`, JSON.stringify(timeline, null, 2));
     if (timelines.length === 1) add('.easel/timeline.json', JSON.stringify(timelines[0], null, 2));
     add('README.txt', `Easel project: ${project.title}\n\nOpen ${project.manifest.entry} in a modern browser. All listed HTML documents\ncontain their own offline kits and media; no server or network is required.\n\nAuthored files: .easel/source/\nCanonical project: .easel/project.json\nMedia files: assets/ (at their original project aliases)\nKit source: .easel/kits/\nDocument list and capability notes: manifest.json\n\nCamera and microphone require browser permission. Chat input requires Easel.\n`);
+    for (const source of kitSources.values()) add(sourceIdentity(source).path, source.data);
     for (const [name, content] of Object.entries(project.files)) add(`.easel/source/${name}`, content);
     const cachedMedia = new Map();
     for (const asset of project.manifest.assets) {
@@ -1140,6 +1148,9 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
       let html;
       try {
         html = assemble(project, id, document.title, { documentPath: document.path, includeSnapshot: false, maxOutputBytes: budget, readKit: (kit) => cachedKits.get(kit.digest), readAsset: (asset) => cachedMedia.get(asset.digest) });
+        const sourceHref = (source) => path.posix.relative(path.posix.dirname(document.path), sourceIdentity(source).path);
+        if (Buffer.byteLength(html) + Buffer.byteLength(distributionSourceLinks(kitSources, sourceHref)) > budget) failSize(`${document.path} exceeds its remaining document budget including corresponding source links.`);
+        html = addDistributionSourceLinks(html, kitSources, sourceHref);
       } catch (error) {
         if (/exceeds|assembly uses.*limit/i.test(error.message)) failSize(`${document.path}: ${error.message}`);
         throw error;
@@ -1154,7 +1165,66 @@ function createCanvasStore({ userDataPath, fileSystem = fs, kitBundles = {}, ass
     return { ...archive, id, title: project.title, fileName: `${slug}.zip`, bytes: archive.data.length, documents, manifest, contributions };
   }
 
-  return { attachAsset, attachAssets, createDocument, createEmpty, createProject, createTemplateDocument, deleteFile, deleteProject, detachAsset, exportProject, get, getAsset, getDocument, getDocumentSource, getLibraryAsset, getProject, getProjectKits, getProjectKitSource, inspectAssetDeletion, inspectDeletion, inspectLibraryAssetDeletion, inspectProjectDeletion, insertImage, list, listAssets, listDocuments, listFiles, listLibraryAssets, migrateAssetReferences, patchFile, patchFiles, readAsset: getAsset, readFile, readProjectState, removeLibraryAsset, renameProject, restoreSourceSnapshot, save, saveProjectState, update, updateManifest, writeFile };
+  function distributionKitSources(project) {
+    const sources = new Map();
+    for (const kit of project.manifest.kits) if (kit.name === 'strudel') {
+      if (!kit.digest) throw new Error('Strudel corresponding source requires a valid pinned runtime before exporting.');
+      if (!sources.has(kit.digest)) sources.set(kit.digest, kitSourceCache.retain(kit.name, kit.digest));
+    }
+    return sources;
+  }
+
+  function sourceIdentity(source) {
+    return { path: `.easel/kits/strudel-${source.runtimeSha256.slice(0, 16)}.source.zip`, runtimeSha256: source.runtimeSha256, sha256: source.archiveSha256, bytes: source.bytes };
+  }
+
+  function distributionSourceLinks(sources, href) {
+    return [...sources.values()].map((source) => `<p data-easel-corresponding-source="strudel"><a download="strudel-${source.runtimeSha256.slice(0, 16)}.source.zip" href="${escapeAttribute(href(source))}">Strudel corresponding source</a> (source archive for runtime ${source.runtimeSha256})</p>`).join('');
+  }
+
+  function addDistributionSourceLinks(html, sources, href) {
+    if (!sources.size) return html;
+    // Use the HTML parser's actual body offsets. Literal tags in attributes,
+    // raw-text/RCDATA and inert templates cannot be mistaken for a body close.
+    // Splice only; serializing the parsed tree would rewrite authored bytes.
+    const document = parse(html, { sourceCodeLocationInfo: true });
+    const root = document.childNodes.find((node) => node.tagName === 'html');
+    const body = root?.childNodes.find((node) => node.tagName === 'body');
+    const location = body?.sourceCodeLocation;
+    // An omitted close may leave an open plaintext/raw-text element. Insert at
+    // the actual body start instead of appending into that element's text.
+    const offset = location?.endTag?.startOffset ?? location?.startTag?.endOffset
+      ?? body?.childNodes.find((node) => Number.isInteger(node.sourceCodeLocation?.startOffset))?.sourceCodeLocation.startOffset
+      ?? (body && root.sourceCodeLocation?.endTag?.startOffset);
+    if (!Number.isInteger(offset) || offset < 0 || offset > html.length) throw new Error('Strudel corresponding source has no safe active body insertion point. Close the authored raw-text/head content or add an explicit body before exporting. Preview and editing remain available.');
+    const links = distributionSourceLinks(sources, href);
+    return `${html.slice(0, offset)}${links}${html.slice(offset)}`;
+  }
+
+  // Distribution-only accessor. Internal get()/getDocument(), history and WAV
+  // source reads never carry archive bytes or depend on source availability.
+  function exportDocument(id, { documentPath } = {}) {
+    const project = loadProject(id);
+    const selected = resolveDocumentPath(project, documentPath);
+    const title = documentTitle(project.files[selected], selected === project.manifest.entry ? project.title : path.posix.basename(selected));
+    const sources = distributionKitSources(project);
+    // Exact source-link overhead and base64 expansion are known before parsing
+    // the HTML or allocating the embedded archive string.
+    const sourceLinkBytes = Buffer.byteLength(distributionSourceLinks(sources, () => 'data:application/zip;base64,'))
+      + [...sources.values()].reduce((total, source) => total + Math.ceil(source.bytes / 3) * 4, 0);
+    const failSize = () => { throw new Error('Standalone HTML export exceeds its 128 MiB document limit including corresponding source archives. Use Project ZIP or remove unused media. No partial HTML was written.'); };
+    if (sourceLinkBytes >= MAX_DOCUMENT_EXPORT_BYTES) failSize();
+    let html;
+    try { html = assemble(project, id, title, { documentPath: selected, maxOutputBytes: MAX_DOCUMENT_EXPORT_BYTES - sourceLinkBytes }); }
+    catch (error) { if (sources.size && /exceeds|assembly uses.*limit/i.test(error.message)) failSize(); throw error; }
+    if (Buffer.byteLength(html) + sourceLinkBytes > MAX_DOCUMENT_EXPORT_BYTES) failSize();
+    html = addDistributionSourceLinks(html, sources, (source) => `data:application/zip;base64,${source.data.toString('base64')}`);
+    const bytes = Buffer.byteLength(html, 'utf8');
+    if (bytes > MAX_DOCUMENT_EXPORT_BYTES) failSize();
+    return { id, title: project.title, documentPath: selected, documentTitle: title, html, bytes, correspondingSources: [...sources.values()].map(sourceIdentity) };
+  }
+
+  return { attachAsset, attachAssets, createDocument, createEmpty, createProject, createTemplateDocument, deleteFile, deleteProject, detachAsset, exportDocument, exportProject, get, getAsset, getDocument, getDocumentSource, getLibraryAsset, getProject, getProjectKits, getProjectKitSource, inspectAssetDeletion, inspectDeletion, inspectLibraryAssetDeletion, inspectProjectDeletion, insertImage, list, listAssets, listDocuments, listFiles, listLibraryAssets, migrateAssetReferences, patchFile, patchFiles, readAsset: getAsset, readFile, readProjectState, removeLibraryAsset, renameProject, restoreSourceSnapshot, save, saveProjectState, update, updateManifest, writeFile };
 }
 
 module.exports = { EMPTY_CANVAS_HTML, MAX_DOCUMENT_EXPORT_BYTES, MAX_PROJECT_EXPORT_BYTES, createCanvasStore };

@@ -77,6 +77,7 @@ const { validateFilePath } = require('./canvas-project');
 const { createLiteLLMModelService } = require('./litellm-models');
 const { readInstalledSkills, assertHarnessSkills } = require('./skill-catalog');
 const { loadCanvasKitBundles } = require('./canvas-kits');
+const { createInstalledKitSourceReader } = require('./canvas-kit-source');
 const { availableCanvasKits, assertInstalledKits } = require('./canvas-kit-catalog');
 
 const SETTINGS = createSettingsStore({
@@ -137,7 +138,7 @@ const MEDIA_ASSETS = {
     return result;
   },
 };
-const CANVASES = createCanvasStore({ userDataPath: app.getPath('userData'), kitBundles: CANVAS_KIT_BUNDLES, assetStore: MEDIA_ASSETS, thumbnailFactory: projectThumbnail, listTimelines: (id) => TIMELINES.list(id), listInstances: (id) => TEMPLATE_INSTANCES.list(id) });
+const CANVASES = createCanvasStore({ userDataPath: app.getPath('userData'), kitBundles: CANVAS_KIT_BUNDLES, readKitSourceArchive: createInstalledKitSourceReader(path.join(app.getAppPath(), 'canvas-kits')), assetStore: MEDIA_ASSETS, thumbnailFactory: projectThumbnail, listTimelines: (id) => TIMELINES.list(id), listInstances: (id) => TEMPLATE_INSTANCES.list(id) });
 const CANVAS_HISTORY = createCanvasHistory();
 const TIMELINES = createVideoTimelineStore({ userDataPath: app.getPath('userData') });
 const TEMPLATE_INSTANCES = createTemplateInstanceStore({ userDataPath: app.getPath('userData'), timelineStore: TIMELINES, projectStore: CANVASES });
@@ -1334,7 +1335,7 @@ function registerIpcHandlers() {
     const canvasId = validateOpaqueId(id, 'Canvas ID');
     const controller = requireCanvasView();
     if (controller.getCurrentCanvasId() === canvasId) emitCanvasSaved(await controller.saveCurrent());
-    const canvas = CANVASES.get(canvasId);
+    const canvas = CANVASES.exportDocument(canvasId);
     const safeTitle = canvas.title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').trim().slice(0, 80) || 'Easel Canvas';
     const result = await dialog.showSaveDialog(mainWindow, {
       defaultPath: `${safeTitle}.html`,

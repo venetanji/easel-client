@@ -15,6 +15,15 @@ function createStrudelExportController({ render, saveMedia, findExport, isAttach
     }
     assertScope(entry.scope);
   }
+  async function recoveredReceipt(scope, exportId, assetId) {
+    let attached = false;
+    try {
+      attached = await isAttached(scope.projectId, assetId);
+    } catch {
+      // Missing project metadata cannot undo the durable Media asset.
+    }
+    return { exportId, assetId, projectId: scope.projectId, instanceId: scope.instanceId, mimeType: "audio/wav", attachmentStatus: attached ? "attached" : "saved-only", ...!attached ? { warning: "Loop already saved in Media. Attach it to this project manually from Media." } : {} };
+  }
   function start(scope, request) {
     try {
       if (!request || typeof request !== "object" || Array.isArray(request) || Object.keys(request).some((key2) => !["exportId", "expectedSourceRevision", "snapshot"].includes(key2))) throw new Error("Export request contains unsupported fields.");
@@ -37,7 +46,7 @@ function createStrudelExportController({ render, saveMedia, findExport, isAttach
           if (!saved || saved.id !== previous.receipt.assetId) throw new Error('The original saved export was removed or cannot be found in Media.');
           if (saved.scope.contentDigest !== contentDigest || saved.scope.sourceRevision !== scope.sourceRevision || saved.scope.kitDigest !== dependency.digest) throw new Error('This export ID was used for different content.');
           validateStrudelWav(saved.wavBytes, snapshot);
-          return previous.receipt;
+          return recoveredReceipt(scope, request.exportId, saved.id);
         });
       }
       if (active) throw new Error("A Strudel export is already in progress. Cancel it or wait.");
@@ -55,13 +64,7 @@ function createStrudelExportController({ render, saveMedia, findExport, isAttach
         if (existing) {
           if (existing.scope.contentDigest !== contentDigest || existing.scope.sourceRevision !== scope.sourceRevision || existing.scope.kitDigest !== dependency.digest) throw new Error("This export ID was used for different content.");
           validateStrudelWav(existing.wavBytes, snapshot);
-          let attached = false;
-          try {
-            attached = await isAttached(scope.projectId, existing.id);
-          } catch {
-            // Missing project metadata cannot undo the durable Media asset.
-          }
-          return { exportId: request.exportId, assetId: existing.id, projectId: scope.projectId, instanceId: scope.instanceId, mimeType: "audio/wav", attachmentStatus: attached ? "attached" : "saved-only", ...!attached ? { warning: "Loop already saved in Media. Attach it to this project manually from Media." } : {} };
+          return recoveredReceipt(scope, request.exportId, existing.id);
         }
         check(entry);
         const output = await render(snapshot, { signal: entry.abort.signal, kitSource: dependency.source });

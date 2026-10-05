@@ -8,6 +8,7 @@ const acorn = require('acorn');
 const { toOpenAITools, executeEaselTool, runAgentTurn, validateToolArguments } = require('../src/agent');
 const { createEaselToolHost } = require('../src/easel-tool-host');
 const { createTemplateService } = require('../src/template-service');
+const { createVideoTimelineTemplate } = require('../src/video-timeline-template');
 const { createCanvasStore } = require('../src/canvas-store');
 const { createCanvasInputStore } = require('../src/canvas-input-store');
 const { createTemplateInstanceStore } = require('../src/template-instance-store');
@@ -26,7 +27,12 @@ function fixture(t) {
   const instances = createTemplateInstanceStore({ userDataPath: root, timelineStore: timelines, projectStore: canvases });
   const active = canvases.createProject({ title: 'Original project', kits: ['canvas-2d'] }).id;
   const service = createTemplateService({ projectStore: canvases, instanceStore: instances, timelineStore: timelines,
-    getCurrentProjectId: () => active, history: createCanvasHistory(), kitBundles: {}, openDocument: async () => ({}) });
+    getCurrentProjectId: () => active, history: createCanvasHistory(), kitBundles: {}, openDocument: async () => ({}),
+    // Retain the real editable factory and stores. Only its generated offline
+    // runtime is inert: CI runs unit tests before build:video-runtime generates it.
+    videoFactory: () => createVideoTimelineTemplate({ readSource: (name) => name === '../canvas-kits/mediabunny.js'
+      ? 'const EaselMediabunny = {};' : fs.readFileSync(path.join(__dirname, '../src', name), 'utf8') }),
+  });
   const controller = { listTemplates: service.listTemplates, createTemplateInstance: service.createTemplateInstance, getCurrentCanvasId: () => active };
   const host = createEaselToolHost({ canvasController: controller, getOrigin: () => ({ chatId, origin: { backend: 'codex', chatId, threadId: 'saved-thread' } }),
     createMediaClient: async () => ({ listTools: async () => [], close: async () => {} }) });
@@ -61,7 +67,7 @@ test('creation_requires_specific_target', async (t) => {
   const foreign = await f.host.callTool('create_template_instance', { templateId: 'video-editor', target: 'current-project', projectId });
   assert.equal(foreign.isError, true);
   const created = await f.host.callTool('create_template_instance', { templateId: 'video-editor', target: 'new-project', title: 'My movie' });
-  assert.equal(created.isError, undefined);
+  assert.equal(created.isError, undefined, JSON.stringify(created));
   assert.equal(created.structuredContent.opened, true);
   assert.equal(created.structuredContent.templateId, 'video-editor');
   assert.equal(f.instances.list(created.structuredContent.projectId).length, 1);
@@ -229,4 +235,30 @@ for (const bound of [false, true]) test(`main_restores_legacy_unbound_question_o
   assert.match(f.calls[0][1], new RegExp(request.id));
   assert.equal(f.inputs.get(request.id).status, 'pending');
   assert.equal(f.recoveries(), 1, 'Startup reaches continuation recovery after restoring the legacy overlay');
+});
+
+test('template_creation_fixtures_run_before_generated_video_artifacts_exist', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-unbuilt-video-fixture-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const preload = path.join(directory, 'without-generated-video.cjs');
+  // Only this child process denies the generated artifact read. Shared build
+  // outputs and other test processes stay untouched, whether built or unbuilt.
+  fs.writeFileSync(preload, `const fs = require('node:fs');
+const read = fs.readFileSync;
+fs.readFileSync = function (filename, ...args) {
+  if (typeof filename === 'string' && /[\\/]canvas-kits[\\/]mediabunny\\.js$/.test(filename)) {
+    throw Object.assign(new Error('ENOENT: generated Mediabunny fixture artifact is absent: ' + filename), { code: 'ENOENT' });
+  }
+  return read.call(this, filename, ...args);
+};
+`);
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT; // Run the child's own test runner, rather than inherit this test worker's mode.
+  const result = require('node:child_process').spawnSync(process.execPath, [
+    '--require', preload, '--test', '--test-name-pattern=^(creation_requires_specific_target|mixed_template_host_workflow_preserves_instances_answers_media_and_distribution)$',
+    path.join(__dirname, 'template-tools.test.js'), path.join(__dirname, 'template-workflow-acceptance.test.js'),
+  ], { cwd: path.resolve(__dirname, '..'), encoding: 'utf8', env, timeout: 30_000 });
+  assert.match(result.stdout, /creation_requires_specific_target/);
+  assert.match(result.stdout, /mixed_template_host_workflow_preserves_instances_answers_media_and_distribution/);
+  assert.equal(result.status, 0, `Clean-checkout template fixture failed:\n${result.stdout}\n${result.stderr}\n${result.error || ''}`);
 });
