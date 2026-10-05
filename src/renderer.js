@@ -1,6 +1,7 @@
 const RendererRemovedSkills = typeof module !== 'undefined' ? require('./removed-skills') : EaselRemovedSkills;
 const RendererActionIcons = typeof module !== 'undefined' ? require('./ui-icons') : EaselUiIcons;
 const RendererMediaResults = typeof module !== 'undefined' ? require('./media-tool-results') : { producedMediaAssets };
+const RendererTemplates = typeof module !== 'undefined' ? require('./templates-drawer') : { createTemplatesDrawer };
 const RendererSetupWizard = typeof module !== 'undefined' ? require('./setup-wizard') : { createSetupWizard };
 
 function setStatus(element, message, isError = false) {
@@ -1101,6 +1102,9 @@ function wireRenderer({ document, client }) {
   let activeCanvasId = '';
   let timelineSelection = null;
   let videoEditorOpening = false;
+  let templatesOperating = false;
+  let rendererDisposed = false;
+  let templatesDrawer = null;
   function setTimelineSelection(selection) {
     timelineSelection = selection;
     const badge = document.getElementById('timeline-chat-context');
@@ -1166,7 +1170,8 @@ function wireRenderer({ document, client }) {
     onFiles: openCanvasFiles,
     onDevices: openCanvasDevices,
     onBusy: updateSendState,
-    onDrawerChange: (open) => {
+    onDrawerChange: (open, kind) => {
+      templatesDrawer?.setOpen(open && kind === 'templates');
       if (open) {
         studio.dataset.sidebar = 'open';
         chatHistoryPanel.hidden = true;
@@ -1178,7 +1183,30 @@ function wireRenderer({ document, client }) {
       chatHistoryButton.setAttribute('aria-pressed', String(!open && !chatHistoryPanel.hidden));
       if (!conversationPanel.inert) clearUnreadMessages();
     },
-    isBusy: () => chatBusy || canvasResumeBusy || backendHistoryBusy || Boolean(agentControlUi?.getState()?.busy),
+    isBusy: () => templatesOperating || chatBusy || canvasResumeBusy || backendHistoryBusy || Boolean(agentControlUi?.getState()?.busy),
+  });
+  templatesDrawer = RendererTemplates.createTemplatesDrawer({
+    document, client,
+    getProjectId: () => workspace.getProjectId(),
+    isBusy: () => chatBusy || canvasResumeBusy || backendHistoryBusy || videoEditorOpening || workspace.isOperating() || templatesOperating || Boolean(agentControlUi?.getState()?.busy),
+    onBusy: (busy) => { templatesOperating = busy; updateSendState(); },
+    onOpen: async (result, { isCurrentView }) => {
+      // The service already opened the host document. Adopt its metadata and reload
+      // Files/Media without opening a second time or losing the instance identity.
+      await workspace.changed(result);
+      if (rendererDisposed) return;
+      if (isCurrentView()) workspace.setDrawer(false, true, 'templates');
+      updateCanvasBounds();
+    },
+    onPrompt: (prompt) => {
+      if (agentControlUi?.isExternal()) {
+        throw new Error('Switch agents under Settings > Agent to explore this idea in the editable conversation.');
+      }
+      messageInput.value = messageInput.value ? `${messageInput.value}\n\n${prompt}` : prompt;
+      showConversation();
+      updateSendState();
+    },
+    onStatus: (text, error) => setStatus(statusElement, text, error),
   });
   async function loadChatMedia(asset) {
     try { return await client.getLibraryAsset(asset.assetId); }
@@ -1390,7 +1418,7 @@ function wireRenderer({ document, client }) {
 
   function updateFileControls() {
     canvasFilesList.querySelectorAll('.canvas-file-item').forEach((button) => { button.disabled = fileReading || fileDeleting; });
-    canvasFilesList.querySelectorAll('.delete-control').forEach((button) => { button.disabled = fileReading || fileDeleting || chatBusy || canvasResumeBusy || workspace.isOperating(); });
+    canvasFilesList.querySelectorAll('.delete-control').forEach((button) => { button.disabled = fileReading || fileDeleting || chatBusy || canvasResumeBusy || workspace.isOperating() || templatesOperating; });
     canvasFilePrevious.disabled = fileReading || fileDeleting || !currentFilePage || currentFilePage.offsets.length < 2;
     canvasFileNext.disabled = fileReading || fileDeleting || !currentFilePage || currentFilePage.nextOffset === null;
   }
@@ -1479,6 +1507,9 @@ function wireRenderer({ document, client }) {
   }
 
   async function handleDeletionEvent(event) {
+    // The host has already confirmed deletion; reconcile recovery even if the
+    // following Files/Media refresh fails. Unrelated identities remain intact.
+    templatesDrawer.acceptDeletion(event);
     const selectedPath = currentFilePage?.path;
     await workspace.acceptDeletion(event);
     if ((event.type === 'project-deleted' || event.projectDeleted) && canvasFilesDialog.open && filesCanvasId === event.projectId) {
@@ -1491,7 +1522,7 @@ function wireRenderer({ document, client }) {
   }
 
   async function deleteCanvasSourceFile(path) {
-    if (!filesCanvasId || fileReading || fileDeleting || chatBusy || canvasResumeBusy || workspace.isOperating()) return;
+    if (!filesCanvasId || fileReading || fileDeleting || chatBusy || canvasResumeBusy || workspace.isOperating() || templatesOperating) return;
     const projectId = filesCanvasId;
     fileDeleting = true;
     nativeDialogOpen = true;
@@ -1550,12 +1581,13 @@ function wireRenderer({ document, client }) {
   function updateSendState() {
     const control = agentControlUi?.getState();
     const external = agentControlUi?.isExternal();
-    const busy = chatBusy || canvasResumeBusy || backendHistoryBusy || Boolean(control?.busy) || workspace.isOperating();
+    const busy = chatBusy || canvasResumeBusy || backendHistoryBusy || Boolean(control?.busy) || workspace.isOperating() || templatesOperating;
     const running = agentRunning || canvasResumeBusy || Boolean(control?.busy);
     const ready = agentControlUi?.isReady() && (control.backend !== 'builtin' || Boolean(savedSettings.litellmModel));
-    agentControlUi?.setBusy(chatBusy || canvasResumeBusy || backendHistoryBusy || agentRunning || workspace.isOperating());
+    agentControlUi?.setBusy(chatBusy || canvasResumeBusy || backendHistoryBusy || agentRunning || workspace.isOperating() || templatesOperating);
     setupWizard?.update(settingsLoaded ? savedSettings : undefined, agentControlUi?.getState());
     workspace.updateBusy();
+    templatesDrawer?.updateBusy();
     document.getElementById('new-canvas-open').disabled = busy;
     document.querySelectorAll('[data-starter], .prompt-suggestion').forEach((button) => { button.disabled = busy || external; });
     const videoEditorButton = document.getElementById('open-video-editor');
@@ -2191,7 +2223,7 @@ function wireRenderer({ document, client }) {
       updateSendState();
       return;
     }
-    if (chatBusy || canvasResumeBusy || backendHistoryBusy || workspace.isOperating() || modelSaving || credentialsSaving || !agentControlUi.isReady() || (agentControlUi.getState()?.backend === 'builtin' && !savedSettings.litellmModel)) return;
+    if (chatBusy || canvasResumeBusy || backendHistoryBusy || workspace.isOperating() || templatesOperating || modelSaving || credentialsSaving || !agentControlUi.isReady() || (agentControlUi.getState()?.backend === 'builtin' && !savedSettings.litellmModel)) return;
     if (!messageInput.value.trim() && pendingAttachments.length === 0) return;
     const startNewChat = chatForm.parentElement === starterComposer && !starterSubmitted && Boolean(activeChatId);
     chatSnapshotEpoch += 1;
@@ -2302,7 +2334,7 @@ function wireRenderer({ document, client }) {
   };
   document.querySelectorAll('[data-starter]').forEach((button) => {
     button.addEventListener('click', () => {
-      if (chatBusy || canvasResumeBusy || workspace.isOperating() || agentControlUi.isExternal() || agentControlUi.getState()?.busy) return;
+      if (chatBusy || canvasResumeBusy || workspace.isOperating() || templatesOperating || agentControlUi.isExternal() || agentControlUi.getState()?.busy) return;
       const prompt = starterPrompts[button.dataset.starter];
       if (!prompt) return;
       if (messageInput.value.trim() && messageInput.value !== insertedStarterPrompt) messageInput.value = `${messageInput.value.trim()}\n\n${prompt}`;
@@ -2475,7 +2507,7 @@ function wireRenderer({ document, client }) {
   }
   document.getElementById('media-import')?.addEventListener('click', async () => {
     const button = document.getElementById('media-import');
-    if (chatBusy || canvasResumeBusy || backendHistoryBusy || workspace.isOperating()) return;
+    if (chatBusy || canvasResumeBusy || backendHistoryBusy || workspace.isOperating() || templatesOperating) return;
     button.disabled = true; nativeDialogOpen = true; updateCanvasBounds();
     try {
       const result = await client.importMedia(activeCanvasId ? { projectId: activeCanvasId } : {});
@@ -2488,7 +2520,7 @@ function wireRenderer({ document, client }) {
   });
   document.getElementById('timeline-chat-clear')?.addEventListener('click', () => setTimelineSelection(null));
   document.getElementById('open-video-editor')?.addEventListener('click', async () => {
-    if (videoEditorOpening || chatBusy || canvasResumeBusy || backendHistoryBusy || workspace.isOperating()) return;
+    if (videoEditorOpening || chatBusy || canvasResumeBusy || backendHistoryBusy || workspace.isOperating() || templatesOperating) return;
     videoEditorOpening = true; updateSendState();
     try {
       const result = await client.openVideoEditor(activeCanvasId ? { projectId: activeCanvasId } : {});
@@ -2789,6 +2821,9 @@ function wireRenderer({ document, client }) {
 
   return {
     dispose() {
+      if (rendererDisposed) return;
+      rendererDisposed = true;
+      templatesDrawer.destroy();
       unsubscribe();
       agentControlUi.dispose();
       setupWizard.dispose();

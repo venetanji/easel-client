@@ -24,6 +24,8 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   const drawerToggle = document.getElementById('nav-explorer');
   const mediaDrawer = document.getElementById('media-drawer');
   const mediaDrawerToggle = document.getElementById('nav-media');
+  const templatesDrawer = document.getElementById('templates-drawer');
+  const templatesDrawerToggle = document.getElementById('nav-templates');
   const mediaList = document.getElementById('media-list');
   const allMediaList = document.getElementById('all-media-list');
   const mediaSearch = document.getElementById('media-search');
@@ -172,13 +174,18 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   function markMediaSeen(assetId) { if (/^[a-f0-9]{32}$/.test(assetId || '')) knownMedia.add(assetId); mediaNotices.delete(assetId); updateMediaNotices(); }
   function setDrawer(open, focus = true, kind = 'files') {
     const showMedia = open && kind === 'media';
-    const showFiles = open && !showMedia;
-    const target = kind === 'media' ? mediaDrawer : drawer;
-    const toggle = kind === 'media' ? mediaDrawerToggle : drawerToggle;
+    const showTemplates = open && kind === 'templates';
+    const showFiles = open && kind === 'files';
+    const target = kind === 'templates' ? templatesDrawer : kind === 'media' ? mediaDrawer : drawer;
+    const toggle = kind === 'templates' ? templatesDrawerToggle : kind === 'media' ? mediaDrawerToggle : drawerToggle;
     drawer.hidden = !showFiles;
     drawer.inert = !showFiles;
     mediaDrawer.hidden = !showMedia;
     mediaDrawer.inert = !showMedia;
+    if (templatesDrawer) { templatesDrawer.hidden = !showTemplates; templatesDrawer.inert = !showTemplates; }
+    templatesDrawerToggle?.setAttribute('aria-expanded', String(showTemplates));
+    templatesDrawerToggle?.setAttribute('aria-pressed', String(showTemplates));
+    templatesDrawerToggle?.setAttribute('aria-label', showTemplates ? 'Hide templates' : 'Show templates');
     document.querySelector('.conversation').inert = open;
     drawerToggle.setAttribute('aria-expanded', String(showFiles));
     drawerToggle.setAttribute('aria-pressed', String(showFiles));
@@ -190,7 +197,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     updateMediaNotices();
     onDrawerChange?.(open, kind);
     if (focus) {
-      if (open) (target.querySelector('button') || target).focus();
+      if (open) (Array.from(target.querySelectorAll('button')).find((button) => !button.disabled) || target).focus();
       else toggle.focus();
     }
   }
@@ -989,6 +996,8 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   document.getElementById('library-collapse').addEventListener('click', () => setDrawer(false));
   mediaDrawerToggle.addEventListener('click', () => setMediaDrawer(mediaDrawer.hidden));
   document.getElementById('media-collapse').addEventListener('click', () => setMediaDrawer(false));
+  templatesDrawerToggle?.addEventListener('click', () => setDrawer(templatesDrawer.hidden, true, 'templates'));
+  document.getElementById('templates-collapse')?.addEventListener('click', () => setDrawer(false, true, 'templates'));
   mediaSearch?.addEventListener('input', renderAssets);
   mediaTypeFilter?.addEventListener('change', renderAssets);
   mediaSort?.addEventListener('change', renderAssets);
@@ -1016,7 +1025,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     document.getElementById('image-size-toggle').textContent = zoomed ? 'Fit image' : 'Actual size';
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && (!drawer.hidden || !mediaDrawer.hidden) && !document.querySelector('dialog[open]')) setDrawer(false, true, drawer.hidden ? 'media' : 'files');
+    if (event.key === 'Escape' && (!drawer.hidden || !mediaDrawer.hidden || templatesDrawer?.hidden === false) && !document.querySelector('dialog[open]')) setDrawer(false, true, templatesDrawer?.hidden === false ? 'templates' : drawer.hidden ? 'media' : 'files');
   });
   setDrawer(false, false);
   return { refreshProjects, refreshAssets, refreshKits, updateMediaJob, announceMediaReady, markMediaSeen, openMediaReference, openProject, openDocument, changed, assetsChanged, acceptDeletion, previewMedia, create, exportCurrent, updateBusy,
