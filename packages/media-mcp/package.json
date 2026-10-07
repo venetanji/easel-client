@@ -17,6 +17,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "pretest": "npm run build",
     "test": "tsx --test test/*.test.ts",
     "start": "node dist/cli.js"
   },
