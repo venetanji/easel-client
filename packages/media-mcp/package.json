@@ -1,6 +1,6 @@
 {
   "name": "@easel/media-mcp",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Easel-backed media tools over MCP stdio",
   "type": "module",
   "main": "dist/server.js",

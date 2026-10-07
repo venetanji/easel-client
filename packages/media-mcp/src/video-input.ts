@@ -14,6 +14,12 @@ export const VideoGenerationSchema = z.object({
   seconds: z.number().int().min(1).max(60).describe('Easel accepts 1-12 whole seconds; other endpoint limits vary.').optional(),
   size: z.string().regex(/^\d{2,5}x\d{2,5}$/).optional(),
   inputReference: VideoImageUploadSchema.optional(),
+  frames: z.number().int().min(124).max(362).describe('H3 only: native frame count on the 17k+5 grid; default 124. Never combine with seconds.').optional(),
+  semanticReferences: z.array(VideoImageUploadSchema).min(1).max(2).optional(),
+  temporalGroups: z.array(z.object({
+    frameIndex: z.number().int().min(0).max(361),
+    images: z.array(VideoImageUploadSchema).min(1).max(39),
+  }).strict()).min(1).max(3).optional(),
   cameraLora: z.enum(CAMERA_LORAS).optional(),
   cameraLoraStrength: z.number().min(0).max(2).optional(),
   loras: z.array(z.object({ id: z.string().max(128).regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/), strength: z.number().min(0).max(2).optional() }).strict()).max(4).optional(),
@@ -38,7 +44,25 @@ export function validateVideoInput(value: unknown): z.infer<typeof VideoGenerati
   if (!parsed.success) invalidVideoArguments('Invalid video arguments: ' + parsed.error.issues.map(issue => `${issue.path.join('.') || 'arguments'}: ${issue.message}`).join('; '));
   const input = parsed.data;
   const seconds = input.seconds ?? 4;
-  if (input.seed !== undefined && BigInt(input.seed) > BigInt(VIDEO_SEED_MAX)) invalidVideoArguments(`seed must be an exact decimal string from 0 to ${VIDEO_SEED_MAX}.`);
+  const h3 = input.model === 'minimax-h3';
+  const seedMaximum = h3 ? BigInt(VIDEO_SEED_MAX) + 1n : BigInt(VIDEO_SEED_MAX);
+  if (input.seed !== undefined && BigInt(input.seed) > seedMaximum) invalidVideoArguments(`seed must be an exact decimal string from 0 to ${seedMaximum}.`);
+  if (h3) {
+    for (const field of ['seconds', 'cameraLora', 'cameraLoraStrength', 'loras', 'motionSpeed', 'loraReference', 'loraReferenceStrength', 'guidingFrames'] as const) {
+      if (input[field] !== undefined) invalidVideoArguments(`${field} is not supported by H3.`);
+    }
+    const frames = input.frames ?? 124;
+    if ((frames - 5) % 17 !== 0) invalidVideoArguments('H3 frames must lie on the 17k+5 grid.');
+    if (input.inputReference && (input.semanticReferences || input.temporalGroups)) invalidVideoArguments('H3 inputReference cannot combine with semanticReferences or temporalGroups.');
+    const groups = [...(input.temporalGroups || [])].sort((first, second) => first.frameIndex - second.frameIndex);
+    for (const [index, group] of groups.entries()) {
+      if (![1, 5, 22, 39].includes(group.images.length) || group.frameIndex + group.images.length > frames) invalidVideoArguments('H3 temporal groups require 1, 5, 22 or 39 images within the native frame bounds.');
+      const previous = groups[index - 1];
+      if (previous && previous.frameIndex + previous.images.length > group.frameIndex) invalidVideoArguments('H3 temporal groups must not overlap.');
+    }
+    return input;
+  }
+  if (input.frames !== undefined || input.semanticReferences !== undefined || input.temporalGroups !== undefined) invalidVideoArguments('frames, semanticReferences and temporalGroups are H3-only controls.');
   if (input.cameraLoraStrength !== undefined && !input.cameraLora) invalidVideoArguments('cameraLoraStrength requires cameraLora.');
   const ids = (input.loras || []).map(lora => lora.id);
   if (input.cameraLora) ids.push('camera-' + input.cameraLora);

@@ -56,6 +56,7 @@ test('serves the allowlisted tools through MCP without external services', async
   assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
     'capture_canvas_screenshot', 'generate_image', 'list_models',
   ]);
+  assert.doesNotMatch(listed.tools.find((tool) => tool.name === 'list_models')!.description || '', /not yet implemented/);
   const generated = await client.callTool({ name: 'generate_image', arguments: { prompt: 'a cat' } });
   assert.equal(generated.isError, undefined);
   assert.deepEqual(generated.content.map((item) => item.type), ['text', 'image']);

@@ -2,3 +2,5 @@ node_modules
 release/
 packages/media-mcp/dist/
 canvas-kits/
+__pycache__/
+.pytest_cache/
