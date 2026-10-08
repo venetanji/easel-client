@@ -4,6 +4,13 @@ import { mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prepareOutputDirectory, saveMedia } from '../src/output.js';
+import { generateImages } from '../src/easel.js';
+import { images as imageFixtures } from './fixtures/images.js';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const { createAssetStore } = require('../../../src/asset-store');
+const { importMediaFiles } = require('../../../src/media-import');
 
 test('atomic media output returns verified paths, preserves encoding and never overwrites files', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'easel-output-')); t.after(() => rm(root, { recursive: true, force: true }));
@@ -28,3 +35,26 @@ test('output rejects traversal, missing policy and symlinks outside the workspac
   await assert.rejects(saveMedia(root, [{ data: '', mimeType: 'image/png' }], roots), /32 MiB/);
   assert.deepEqual(await readdir(outside), []);
 });
+
+for (const fixture of imageFixtures) {
+  test(`generated ${fixture.mimeType} output retains its extension and imports without conversion`, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'easel-image-output-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const images = await generateImages({ prompt: 'a dot', baseUrl: 'https://easel.test', responseFormat: 'url',
+      fetchImpl: async (_url, init) => init?.method === 'POST'
+        ? Response.json({ data: [{ url: '/generated/image' }] })
+        : new Response(Buffer.from(fixture.data, 'base64'), { headers: { 'Content-Type': fixture.mimeType } }),
+    });
+    assert.ok(Array.isArray(images));
+    const [saved] = await saveMedia(join(root, 'output'), images, JSON.stringify([root]));
+    assert.ok(saved!.path.endsWith('.' + fixture.extension));
+    assert.equal(saved!.mimeType, fixture.mimeType);
+    assert.deepEqual(await readFile(saved!.path), Buffer.from(fixture.data, 'base64'));
+    const imageStore = createAssetStore({ userDataPath: root });
+    const imported = await importMediaFiles({ filenames: [saved!.path], imageStore });
+    assert.deepEqual(imported.errors, []);
+    assert.equal(imported.assets.length, 1);
+    assert.equal(imported.assets[0].mimeType, fixture.mimeType);
+    assert.equal((await imageStore.get(imported.assets[0].assetId)).data, fixture.data);
+  });
+}

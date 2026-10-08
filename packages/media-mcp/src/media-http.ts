@@ -79,7 +79,10 @@ export async function requestBinary(url: string, init: RequestInit, apiKey: stri
   const response = await request(url, init, fetchImpl, operation);
   if (!response.ok) await jsonResponse(response, init.signal, apiKey, operation);
   const length = Number(response.headers.get('content-length'));
-  if (length > limit) { await response.body?.cancel(); throw new Error(`Returned media exceeds the ${limit / 1_048_576} MiB limit.`); }
+  // Fetch decodes compressed responses but retains their wire Content-Length.
+  const encoding = response.headers.get('content-encoding')?.trim().toLowerCase();
+  const decodedLength = !encoding || encoding === 'identity';
+  if (decodedLength && length > limit) { await response.body?.cancel(); throw new Error(`Returned media exceeds the ${limit / 1_048_576} MiB limit.`); }
   if (!response.body) throw new Error('The media endpoint returned no content.');
   const reader = response.body.getReader();
   const chunks: Buffer[] = [];
@@ -97,6 +100,6 @@ export async function requestBinary(url: string, init: RequestInit, apiKey: stri
   finally { reader.releaseLock(); }
   init.signal?.throwIfAborted();
   if (!total) throw new Error('The media endpoint returned empty content.');
-  if (response.headers.has('content-length') && total !== length) throw new Error('The media endpoint returned truncated content.');
+  if (decodedLength && response.headers.has('content-length') && total !== length) throw new Error('The media endpoint returned truncated content.');
   return { bytes: Buffer.concat(chunks, total), mimeType: (response.headers.get('content-type') || '').split(';')[0]!.trim().toLowerCase() };
 }

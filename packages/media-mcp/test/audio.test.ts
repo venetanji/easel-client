@@ -63,3 +63,25 @@ test('audio metadata errors redact credentials, and malformed IDs never reach th
   await assert.rejects(getAudioGenerationStatus(options), error => !String(error).includes('private-token'));
   await assert.rejects(downloadAudio('../other-track', { fetchImpl: async () => { throw new Error('must not call'); } }), /Invalid/);
 });
+
+for (const [name, apiKey, echo] of [
+  ['raw', 'private-token', 'private-token'],
+  ['padded raw', '  private-token  ', '  private-token  '],
+  ['normalized', '  private-token  ', 'private-token'],
+  ['JSON-escaped raw', '  private-"token\\value  ', '  private-"token\\value  '],
+  ['JSON-escaped normalized', '  private-"token\\value  ', 'private-"token\\value'],
+]) {
+  test(`audio metadata rejects an echoed ${name} credential`, async () => {
+    await assert.rejects(getAudioGenerationStatus({ apiKey, fetchImpl: async (_url, init) => {
+      assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${apiKey!.trim()}`);
+      return Response.json({ status: 'ready', nested: { note: `Bearer ${echo}` } });
+    } }), (error: Error) => error.message === 'Credential found in audio metadata.');
+  });
+}
+
+test('audio metadata permits normal success without a nonempty credential', async () => {
+  const payload = { status: 'ready', note: 'track is available' };
+  for (const apiKey of [undefined, '', '   ', '  private-token  ']) {
+    assert.deepEqual(await getAudioGenerationStatus({ apiKey, fetchImpl: async () => Response.json(payload) }), payload);
+  }
+});
