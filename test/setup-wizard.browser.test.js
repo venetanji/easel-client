@@ -31,17 +31,20 @@ test('first-run setup saves an endpoint, enables a chat model and respects dismi
           return settings;
         },
         getModelCatalog: async () => {
-          if (settings.connections.length && !settings.models.length) settings = { ...settings, models: [{ connectionId: 'example', model: 'example-chat', name: 'Example chat model', enabled: false, roles: ['agent'] }] };
+          if (settings.connections.length && !settings.models.length) settings = { ...settings, models: [
+            { connectionId: 'example', model: 'example-chat', name: 'Example chat model', enabled: false, roles: ['agent'] },
+            { connectionId: 'example', model: 'minimax/H3', name: 'MiniMax H3', enabled: false, roles: ['media'], mediaTypes: ['video'] },
+          ] };
           return { settings, catalog: settings.connections.map((connection) => ({ connectionId: connection.id, models: [{ id: 'example-chat' }] })) };
         },
-        updateModel: async (input) => { calls.push('updateModel'); return (settings = { ...settings, models: settings.models.map((model) => ({ ...model, enabled: input.enabled })) }); },
+        updateModel: async (input) => { calls.push(`updateModel:${input.model}`); return (settings = { ...settings, models: settings.models.map((model) => model.model === input.model ? { ...model, enabled: input.enabled } : model) }); },
         selectModel: async (input) => { calls.push('selectModel'); return (settings = { ...settings, activeConnectionId: input.connectionId, litellmModel: input.model }); },
       };
       window.setupTestCalls = calls;
       window.easelClient = new Proxy(api, { get: (target, name) => target[name] || (async () => []) });
     });
     await page.goto(pathToFileURL(path.join(__dirname, '..', 'src', 'index.html')).href);
-    await page.locator('#setup-progress').filter({ hasText: 'Step 1 of 3' }).waitFor();
+    await page.locator('#setup-progress').filter({ hasText: 'Step 1 of 4' }).waitFor();
     const capture = async (name) => {
       if (process.env.EASEL_SETUP_SCREENSHOTS !== '1') return;
       const directory = path.join(__dirname, '..', '.impeccable', 'review');
@@ -98,8 +101,12 @@ test('first-run setup saves an endpoint, enables a chat model and respects dismi
       throw error;
     });
     await page.locator('#setup-next').click();
+    assert.equal(await page.locator('#setup-media-panel').isVisible(), true);
+    assert.match(await page.locator('#setup-media-models').textContent(), /MiniMax H3.*Video/);
+    await page.locator('#setup-media-models input[type=checkbox]').check();
+    await page.locator('#setup-next').click();
     assert.equal(await page.locator('#settings-dialog').evaluate((dialog) => dialog.open), false);
-    assert.deepEqual(await page.evaluate(() => window.setupTestCalls), ['saveConnection', 'updateModel', 'selectModel']);
+    assert.deepEqual(await page.evaluate(() => window.setupTestCalls), ['saveConnection', 'updateModel:example-chat', 'selectModel', 'updateModel:minimax/H3']);
     assert.equal(await page.evaluate(() => localStorage.getItem('easel-setup-v1')), 'complete');
     assert.equal(await page.evaluate(() => JSON.stringify(localStorage).includes('synthetic-test-key')), false);
     await page.reload();

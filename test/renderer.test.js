@@ -7,6 +7,7 @@ const {
   testLiteLLMConnection,
   undoCanvas,
   renderAgentEvent,
+  updateMediaCapabilityNotice,
   renderAssetLibrary,
   renderCanvasLibrary,
   submitChatWithShortcut,
@@ -457,6 +458,20 @@ test('Settings kit inventory reports installation availability without selection
   assert.match(list.textContent, /Installed 15/);
   assert.match(list.textContent, /Unavailable/);
   assert.equal(list.querySelectorAll('input').length, 0);
+  assert.equal(list.children[0].dataset.kitId, 'tone');
+  assert.equal(list.children[0].tabIndex, -1);
+});
+
+test('media-model reminder appears only when neither image nor video generation is enabled', () => {
+  const status = element();
+  const shortcut = element('button');
+  assert.equal(updateMediaCapabilityNotice([], status, shortcut), true);
+  assert.equal(shortcut.hidden, false);
+  assert.match(status.textContent, /Enable an image or video Media model/);
+  assert.equal(updateMediaCapabilityNotice(['generate_image'], status, shortcut), false);
+  assert.equal(shortcut.hidden, true);
+  assert.equal(updateMediaCapabilityNotice(['generate_video'], status, shortcut), false);
+  assert.equal(shortcut.hidden, true);
 });
 
 test('unsupported bundled skill copies stay editable but cannot be enabled', () => {

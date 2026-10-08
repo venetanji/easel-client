@@ -25,6 +25,7 @@ function normalizeModelCatalog(response) {
       : ['audio_generation', 'audio', 'speech', 'tts'].includes(mode) ? 'audio'
       : ['image_generation', 'image'].includes(mode) ? 'image'
       : !mode && /(?:^|[/_-])(?:ltx|sora|veo|wan|hunyuan-video)(?:[/_.-]|$)/i.test(id) ? 'video'
+      : !mode && /(?:^|[/_-])h3(?:[/_.-]|$)/i.test(id) ? 'video'
       : !mode && /(?:^|[/_-])(?:tts|kokoro|musicgen|suno|lyria)(?:[/_.-]|$)/i.test(id) ? 'audio'
       : !mode && /(?:image|dall-e|flux|sdxl|stable-diffusion)/i.test(id) ? 'image' : '';
     return [{ id, name, suggestedRoles: [mediaType ? 'media' : 'agent'], ...(mediaType ? { suggestedMediaTypes: [mediaType] } : {}) }];

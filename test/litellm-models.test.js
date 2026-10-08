@@ -14,6 +14,18 @@ test('normalizes LiteLLM model catalogs to unique selectable IDs', () => {
   ]);
 });
 
+test('classifies MiniMax H3 as video when the model catalog omits modality metadata', () => {
+  assert.deepEqual(normalizeModelCatalog([{ id: 'minimax/H3' }]), [
+    { id: 'minimax/H3', name: 'minimax/H3', suggestedRoles: ['media'], suggestedMediaTypes: ['video'] },
+  ]);
+  assert.deepEqual(normalizeModelCatalog([{ id: 'minimax/H3', output_modalities: ['text', 'video'] }])[0], {
+    id: 'minimax/H3', name: 'minimax/H3', suggestedRoles: ['agent', 'media'], suggestedMediaTypes: ['video'],
+  });
+  assert.deepEqual(normalizeModelCatalog([{ id: 'provider/video', architecture: { output_modalities: ['video'] } }])[0], {
+    id: 'provider/video', name: 'provider/video', suggestedRoles: ['media'], suggestedMediaTypes: ['video'],
+  });
+});
+
 test('lists models from the configured OpenAI-compatible API', async () => {
   let options;
   const service = createLiteLLMModelService({
