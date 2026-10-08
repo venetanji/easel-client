@@ -49,7 +49,9 @@ async function audioRequest(options: ProviderOptions, path: string, method = 'GE
     apiKey, options.fetchImpl || globalThis.fetch, { label: 'Audio ' + path, path: '/v1/audio' + path });
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('The endpoint returned invalid audio metadata.');
   const encoded = JSON.stringify(payload);
-  if (apiKey && (encoded.includes(apiKey) || encoded.includes(JSON.stringify(apiKey).slice(1, -1)))) throw new Error('Credential found in audio metadata.');
+  if ([apiKey, apiKey.trim()].filter(Boolean).some(secret => encoded.includes(secret) || encoded.includes(JSON.stringify(secret).slice(1, -1)))) {
+    throw new Error('Credential found in audio metadata.');
+  }
   return payload;
 }
 

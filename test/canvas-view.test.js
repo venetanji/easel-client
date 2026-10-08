@@ -326,3 +326,106 @@ test('project kit reload keeps a hidden preview hidden and accepts legacy runtim
   assert.equal(canvas.getContract().previewHidden, true);
   assert.equal(fake.state.visible, false);
 });
+
+// Exercise the shared template service against real source/instance/timeline
+// stores and the actual canvas controller; only Electron's platform is inert.
+async function templateRecoveryFixture(t) {
+  const { createTemplateService } = require('../src/template-service');
+  const { createTemplateInstanceStore } = require('../src/template-instance-store');
+  const { createVideoTimelineStore } = require('../src/video-timeline-store');
+  const { createCanvasHistory } = require('../src/canvas-history');
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-template-recovery-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const timelines = createVideoTimelineStore({ userDataPath });
+  let instances;
+  const store = createCanvasStore({ userDataPath, listTimelines: (id) => timelines.list(id), listInstances: (id) => instances.list(id) });
+  instances = createTemplateInstanceStore({ userDataPath, timelineStore: timelines, projectStore: store });
+  const fake = createFakeViewDependencies();
+  const canvas = await createCanvasView({ WebContentsView: fake.WebContentsView, sessionFactory: async () => ({ session: fake.session }), canvasStore: store });
+  t.after(() => canvas.destroy());
+  const service = createTemplateService({ projectStore: store, instanceStore: instances, timelineStore: timelines, history: createCanvasHistory(),
+    getCurrentProjectId: () => canvas.getCurrentCanvasId(),
+    saveBeforeSwitch: async () => { if (canvas.getCurrentCanvasId()) await canvas.saveCurrent(); },
+    openDocument: (id, documentPath) => canvas.openSaved(id, documentPath),
+    videoFactory: () => '<main id="video-editor">Editable sketch</main>',
+  });
+  const writes = () => fake.state.commands.filter(({ method, params }) => method === 'Runtime.evaluate' && params.expression.startsWith('document.open();'));
+  return { service, store, instances, timelines, canvas, fake, writes };
+}
+
+for (const failure of ['rejected injection', 'CDP exception', 'navigation']) {
+  for (const target of ['new-project', 'current-project']) test(`template Retry Open recovers ${failure} in ${target} without duplicating source`, async (t) => {
+    const f = await templateRecoveryFixture(t);
+    let original;
+    if (target === 'current-project') {
+      original = f.store.save({ title: 'Existing work', html: '<main>My original work</main>' });
+      f.store.writeFile(original.id, { path: 'notes.txt', content: 'User edits must survive' });
+      await f.canvas.openSaved(original.id);
+    }
+    const before = f.writes().length;
+    let fail = true;
+    const loadURL = f.canvas.view.webContents.loadURL;
+    f.canvas.view.webContents.loadURL = async (url) => {
+      if (fail && failure === 'navigation') throw new Error('Preview navigation failed');
+      return loadURL(url);
+    };
+    f.fake.state.commandHandler = (method, params) => {
+      if (!fail || method !== 'Runtime.evaluate' || !params.expression.startsWith('document.open();')) return undefined;
+      if (failure === 'rejected injection') throw new Error('Preview injection failed');
+      if (failure === 'CDP exception') return { exceptionDetails: { text: 'Preview injection failed' } };
+    };
+    const created = await f.service.createTemplateInstance({ templateId: 'video-editor', target });
+    assert.equal(created.opened, false);
+    assert.match(created.openError, /Preview .* failed/);
+    assert.equal(f.canvas.getContract().loadedSourceValid, false);
+    const binding = { projectId: created.projectId, instanceId: created.instanceId };
+    // A persistent platform failure must stay a failure, not become a false
+    // success merely because the failed navigation already selected its ID.
+    await assert.rejects(f.service.openTemplateInstance(binding), /Preview .* failed/);
+    assert.equal(f.canvas.getContract().loadedSourceValid, false);
+    const beforeRecovery = f.writes().length;
+    fail = false;
+    const reopened = await f.service.openTemplateInstance(binding);
+    assert.equal(reopened.opened, true);
+    assert.equal(reopened.documentPath, created.documentPath);
+    assert.equal(f.writes().length, beforeRecovery + 1);
+    assert.ok(f.writes().length > before);
+    assert.match(f.writes().at(-1).params.expression, /Editable sketch/);
+    assert.equal(f.canvas.getContract().loadedSourceValid, true);
+    assert.equal(f.canvas.getContract().sourcePendingReload, false);
+    assert.equal(f.instances.list(created.projectId).length, 1);
+    assert.equal(f.timelines.list(created.projectId).length, 1);
+    if (original) {
+      assert.equal(f.store.readFile(original.id, { path: 'notes.txt' }).text, 'User edits must survive');
+      assert.match(f.store.getDocument(original.id, original.documentPath).html, /My original work/);
+    }
+    // Reopening a healthy instance keeps live state rather than reinjecting it.
+    const validGeneration = f.canvas.getContract().runtimeGeneration;
+    const recoveredWrites = f.writes().length;
+    await f.service.openTemplateInstance(binding);
+    assert.equal(f.writes().length, recoveredWrites);
+    assert.equal(f.canvas.getContract().runtimeGeneration, validGeneration);
+  });
+}
+
+test('failed open of another template does not reload an unrelated healthy document', async (t) => {
+  const f = await templateRecoveryFixture(t);
+  const created = await f.service.createTemplateInstance({ templateId: 'video-editor', target: 'new-project' });
+  const other = f.store.createDocument(created.projectId, { path: 'my-work.html', html: '<main>Keep this live view</main>' });
+  await f.canvas.openSaved(created.projectId, other.documentPath);
+  f.store.writeFile(created.projectId, { path: 'notes.txt', content: 'Unrelated saved work' });
+  const before = f.canvas.getContract();
+  const writes = f.writes().length;
+  const get = f.store.get;
+  f.store.get = (id, options) => {
+    if (options?.documentPath === created.documentPath) throw new Error('Template source unavailable');
+    return get(id, options);
+  };
+  await assert.rejects(f.service.openTemplateInstance({ projectId: created.projectId, instanceId: created.instanceId }), /Template source unavailable/);
+  assert.equal(f.canvas.getContract().loadedSourceValid, true);
+  assert.equal(f.canvas.getCurrentDocumentPath(), other.documentPath);
+  await f.canvas.openSaved(created.projectId, other.documentPath);
+  assert.equal(f.canvas.getContract().runtimeGeneration, before.runtimeGeneration);
+  assert.equal(f.writes().length, writes);
+  assert.equal(f.store.readFile(created.projectId, { path: 'notes.txt' }).text, 'Unrelated saved work');
+});

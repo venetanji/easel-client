@@ -134,16 +134,7 @@ export async function generateImages(options: GenerateImageInput & ProviderOptio
   const queued = queuedImageResult(result, apiKey);
   if (queued && !Array.isArray(result?.data)) return queued;
   result = await resolveImageUrls(result, options);
-  if (!Array.isArray(result?.data) || result.data.length === 0) throw new Error('Easel returned no images.');
-  if (result.data.length > MAX_IMAGES) throw new Error('Easel returned too many images.');
-
-  return result.data.map((item: any) => {
-    if (typeof item?.b64_json !== 'string' || item.b64_json.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(item.b64_json)) {
-      throw new Error('Easel returned an invalid image payload.');
-    }
-    if (Buffer.byteLength(item.b64_json, 'base64') > MAX_IMAGE_BYTES) throw new Error('Easel image exceeds the size limit.');
-    return { data: item.b64_json, mimeType: 'image/png' as const };
-  });
+  return parseEditedImages(result);
 }
 
 function isGptImage(model?: string): boolean {
