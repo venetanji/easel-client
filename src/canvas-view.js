@@ -300,7 +300,10 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     if (!canvasStore) throw new Error('Canvas storage is unavailable.');
     if (typeof canvasStore.migrateAssetReferences === 'function') await canvasStore.migrateAssetReferences(id);
     let saved = canvasStore.get(id, { documentPath: documentPath || (id === currentCanvasId ? currentDocumentPath || undefined : undefined) });
-    if (currentUrl && currentCanvasId === id && currentDocumentPath === saved.documentPath && !sourcePendingReload) {
+    // A failed host load can select the document before injecting its source.
+    // Reuse only a valid runtime owned by this document; Retry Open must load
+    // its durable source again without resetting another healthy preview.
+    if (currentUrl && currentCanvasId === id && currentDocumentPath === saved.documentPath && loadedSourceValid && !sourcePendingReload) {
       previewHidden = false;
       view.setVisible(hasVisibleBounds);
       return documentIdentity(saved);

@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { generateImages, listModels, normalizeEaselBaseUrl } from '../src/easel.js';
+import { images as imageFixtures } from './fixtures/images.js';
 
 test('normalizes Easel URL and defaults to the hosted service', () => {
   assert.equal(normalizeEaselBaseUrl(' https://easel.ait4x.org/v1/ '), 'https://easel.ait4x.org');
@@ -37,6 +38,7 @@ test('rejects malformed model lists and sanitizes API errors', async () => {
 });
 
 test('generates validated base64 images and rejects empty prompts', async () => {
+  const png = imageFixtures[0].data;
   let request: { url: string; init?: RequestInit } | undefined;
   const images = await generateImages({
     baseUrl: 'https://easel.ait4x.org/',
@@ -45,12 +47,12 @@ test('generates validated base64 images and rejects empty prompts', async () => 
     n: 2,
     fetchImpl: async (url, init) => {
       request = { url: String(url), init };
-      return new Response(JSON.stringify({ data: [{ b64_json: 'YWJj' }, { b64_json: 'ZGVm' }] }), { status: 200 });
+      return new Response(JSON.stringify({ data: [{ b64_json: png }, { b64_json: png }] }), { status: 200 });
     },
   });
   assert.deepEqual(images, [
-    { data: 'YWJj', mimeType: 'image/png' },
-    { data: 'ZGVm', mimeType: 'image/png' },
+    { data: png, mimeType: 'image/png' },
+    { data: png, mimeType: 'image/png' },
   ]);
   assert.equal(request?.url, 'https://easel.ait4x.org/v1/images/generations');
   assert.deepEqual(JSON.parse(String(request?.init?.body)), {
@@ -61,4 +63,28 @@ test('generates validated base64 images and rejects empty prompts', async () => 
   });
   await assert.rejects(generateImages({ baseUrl: 'https://easel.ait4x.org', prompt: ' ' }), /prompt is required/i);
   await assert.rejects(generateImages({ baseUrl: 'https://easel.ait4x.org', prompt: 'x', n: 5 }), /between 1 and 4/i);
+});
+
+for (const fixture of imageFixtures) {
+  test(`image generation preserves ${fixture.mimeType} from a same-origin download`, async () => {
+    const result = await generateImages({ prompt: 'a dot', baseUrl: 'https://easel.test', responseFormat: 'url',
+      fetchImpl: async (url, init) => {
+        if (init?.method === 'POST') return Response.json({ data: [{ url: '/generated/image' }] });
+        assert.equal(String(url), 'https://easel.test/generated/image');
+        return new Response(Buffer.from(fixture.data, 'base64'), { headers: { 'Content-Type': fixture.mimeType } });
+      },
+    });
+    assert.deepEqual(result, [{ data: fixture.data, mimeType: fixture.mimeType }]);
+  });
+
+  test(`image generation detects ${fixture.mimeType} from base64 bytes`, async () => {
+    const result = await generateImages({ prompt: 'a dot', fetchImpl: async () => Response.json({ data: [{ b64_json: fixture.data }] }) });
+    assert.deepEqual(result, [{ data: fixture.data, mimeType: fixture.mimeType }]);
+  });
+}
+
+test('image generation rejects unsupported bytes and noncanonical base64', async () => {
+  for (const b64_json of ['YWJj', '', '!!!!', 'Zh==']) {
+    await assert.rejects(generateImages({ prompt: 'a dot', fetchImpl: async () => Response.json({ data: [{ b64_json }] }) }), /image bytes/);
+  }
 });
