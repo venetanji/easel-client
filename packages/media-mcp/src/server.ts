@@ -10,7 +10,7 @@ import { generateVideo, getVideo, discoverVideoCapabilities, listVideoLoras, VID
 import { VideoGenerationSchema } from './video-input.js';
 import { createPrivateFetch } from './private-transport.js';
 import { normalizeEaselBaseUrl } from './media-http.js';
-import { registerAudioTools } from './audio-tools.js';
+import { registerAudioTools, type AudioModelRoutes } from './audio-tools.js';
 import { prepareOutputDirectory, saveMedia } from './output.js';
 
 interface EaselClient {
@@ -232,7 +232,16 @@ export function registerMediaTools(
     });
   }
 
-  if (!dependencies.easel && (!configured || configured.some(model => /^suno-(music|speech|sound)$/.test(model.model)))) registerAudioTools(server, providerFor);
+  if (!dependencies.easel) {
+    if (!configured) registerAudioTools(server, providerFor);
+    else {
+      const routes = Object.fromEntries((['music', 'speech', 'sound'] as const).map((kind) => [kind,
+        [...new Set(configured.filter((model) => model.model === `suno-${kind}` &&
+          (!model.mediaTypes?.length || model.mediaTypes.includes('audio'))).map((model) => model.id))],
+      ])) as AudioModelRoutes;
+      if (Object.values(routes).some((ids) => ids?.length)) registerAudioTools(server, providerFor, routes);
+    }
+  }
 
   server.registerTool('capture_canvas_screenshot', {
     description: 'Render offline HTML/JavaScript with local image assets and return a PNG screenshot.',
