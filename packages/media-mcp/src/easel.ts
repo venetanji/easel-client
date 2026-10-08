@@ -4,7 +4,7 @@ import {
   type ImageMimeType, type ImageUpload,
 } from './image-upload.js';
 
-import { headers, normalizeEaselBaseUrl, requestJson, requestSignal, type MediaOperation, type ProviderOptions } from './media-http.js';
+import { headers, normalizeEaselBaseUrl, requestBinary, requestJson, requestSignal, type MediaOperation, type ProviderOptions } from './media-http.js';
 import { parseMediaJob, MEDIA_JOB_ID_PATTERN, type MediaJob } from './media-job.js';
 export { DEFAULT_EASEL_BASE_URL, normalizeEaselBaseUrl } from './media-http.js';
 
@@ -27,6 +27,10 @@ export interface GenerateImageInput {
   model?: string;
   size?: string;
   n?: number;
+  steps?: number;
+  seed?: string | number;
+  server?: 'image' | 'video';
+  responseFormat?: 'b64_json' | 'url';
   signal?: AbortSignal;
 }
 
@@ -35,12 +39,47 @@ export interface EditImageInput extends GenerateImageInput {
   mask?: ImageUpload;
 }
 
-export interface ImageVariationInput {
+export interface ImageVariationInput extends Omit<GenerateImageInput, 'prompt'> {
   image: ImageUpload;
   model?: string;
   size?: string;
   n?: number;
   signal?: AbortSignal;
+}
+
+function imageControls(options: Partial<GenerateImageInput>): Record<string, unknown> {
+  if (options.steps !== undefined && (!Number.isSafeInteger(options.steps) || options.steps < 1)) throw new Error('steps must be a positive integer.');
+  if (options.seed !== undefined && (!/^(0|[1-9][0-9]{0,19})$/.test(String(options.seed))
+    || (typeof options.seed === 'number' && !Number.isSafeInteger(options.seed)) || BigInt(options.seed) > 18446744073709551615n)) throw new Error('seed must be an exact unsigned 64-bit integer; use a decimal string for large seeds.');
+  if (options.server !== undefined && !['image', 'video'].includes(options.server)) throw new Error('server must be image or video.');
+  if (options.responseFormat !== undefined && !['b64_json', 'url'].includes(options.responseFormat)) throw new Error('responseFormat must be b64_json or url.');
+  return Object.fromEntries(Object.entries({ steps: options.steps, seed: options.seed, server: options.server }).filter(([, value]) => value !== undefined));
+}
+
+async function resolveImageUrls(result: any, options: ProviderOptions): Promise<any> {
+  if (!Array.isArray(result?.data)) return result;
+  if (!result.data.length || result.data.length > MAX_IMAGES) throw new Error('The endpoint returned an invalid image count.');
+  const data = [];
+  let total = 0;
+  for (const item of result.data) {
+    if (!item?.b64_json && typeof item?.url === 'string') {
+      const base = new URL(normalizeEaselBaseUrl(options.baseUrl));
+      const url = new URL(item.url, base);
+      if (url.origin !== base.origin || url.username || url.password || url.hash) throw new Error('Image downloads must stay on the configured origin.');
+      const apiKey = options.apiKey || '';
+      const media = await requestBinary(url.href, { headers: headers(apiKey, 'image/*'), signal: requestSignal(options.signal, 45_000) }, apiKey,
+        options.fetchImpl || globalThis.fetch, Math.min(MAX_IMAGE_BYTES, MAX_INPUT_BYTES - total), { label: 'Image download', path: url.pathname });
+      const mimeType = imageMimeType(media.bytes);
+      if (!mimeType || (media.mimeType && media.mimeType !== mimeType)) throw new Error('The returned image bytes do not match their MIME type.');
+      total += media.bytes.length;
+      data.push({ ...item, b64_json: media.bytes.toString('base64') });
+    } else {
+      total += typeof item?.b64_json === 'string' ? Buffer.byteLength(item.b64_json, 'base64') : 0;
+      data.push(item);
+    }
+    if (total > MAX_INPUT_BYTES) throw new Error('The returned images exceed the combined 32 MiB size limit.');
+  }
+  return { ...result, data };
 }
 
 export async function listModels(options: ProviderOptions = {}): Promise<string[]> {
@@ -73,14 +112,15 @@ export async function generateImages(options: GenerateImageInput & ProviderOptio
   const payload: Record<string, unknown> = {
     prompt,
     n,
+    ...imageControls(options),
   };
-  if (!isGptImage(options.model)) payload.response_format = 'b64_json';
+  if (!isGptImage(options.model)) payload.response_format = options.responseFormat || 'b64_json';
   if (options.model?.trim()) payload.model = options.model.trim();
   if (options.size) payload.size = options.size;
 
   const apiKey = options.apiKey || '';
   const fetchImpl = options.fetchImpl || globalThis.fetch;
-  const result = await requestJson(
+  let result = await requestJson(
     `${normalizeEaselBaseUrl(options.baseUrl)}/v1/images/generations`,
     {
       method: 'POST',
@@ -93,11 +133,12 @@ export async function generateImages(options: GenerateImageInput & ProviderOptio
   );
   const queued = queuedImageResult(result, apiKey);
   if (queued && !Array.isArray(result?.data)) return queued;
+  result = await resolveImageUrls(result, options);
   if (!Array.isArray(result?.data) || result.data.length === 0) throw new Error('Easel returned no images.');
   if (result.data.length > MAX_IMAGES) throw new Error('Easel returned too many images.');
 
   return result.data.map((item: any) => {
-    if (typeof item?.b64_json !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(item.b64_json)) {
+    if (typeof item?.b64_json !== 'string' || item.b64_json.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(item.b64_json)) {
       throw new Error('Easel returned an invalid image payload.');
     }
     if (Buffer.byteLength(item.b64_json, 'base64') > MAX_IMAGE_BYTES) throw new Error('Easel image exceeds the size limit.');
@@ -146,14 +187,15 @@ function parseEditedImages(result: any): EaselImage[] {
 }
 
 async function requestImageUpload(
-  options: ProviderOptions & { model?: string; size?: string },
+  options: ProviderOptions & Partial<GenerateImageInput>,
   form: FormData,
   operation: MediaOperation,
 ): Promise<ImageResult> {
   if (options.model?.trim()) form.append('model', options.model.trim());
   if (options.size) form.append('size', options.size);
   // GPT image models always return base64 and reject the legacy response_format field.
-  if (!isGptImage(options.model)) form.append('response_format', 'b64_json');
+  if (!isGptImage(options.model)) form.append('response_format', options.responseFormat || 'b64_json');
+  for (const [field, value] of Object.entries(imageControls(options))) form.append(field, String(value));
   const apiKey = options.apiKey || '';
   const result = await requestJson(
     `${normalizeEaselBaseUrl(options.baseUrl)}${operation.path}`,
@@ -163,7 +205,7 @@ async function requestImageUpload(
     operation,
   );
   options.signal?.throwIfAborted();
-  return (!Array.isArray(result?.data) && queuedImageResult(result, apiKey)) || parseEditedImages(result);
+  return (!Array.isArray(result?.data) && queuedImageResult(result, apiKey)) || parseEditedImages(await resolveImageUrls(result, options));
 }
 
 export async function editImages(options: EditImageInput & ProviderOptions): Promise<ImageResult> {
@@ -225,5 +267,9 @@ export async function getImageJob(options: ProviderOptions & { jobId: string; mo
     { method: 'GET', headers: headers(apiKey), signal: requestSignal(options.signal, 45000) }, apiKey, options.fetchImpl || globalThis.fetch,
     { label: 'Queued image retrieval', path: endpoint, model: options.model });
   const job = parseMediaJob(payload.job || payload, apiKey, options.jobId);
-  return { job, ...(job.status === 'completed' ? { images: parseEditedImages(payload) } : {}) };
+  return { job, ...(job.status === 'completed' ? { images: parseEditedImages(await resolveImageUrls(payload, options)) } : {}) };
+}
+
+export async function getImageContent(options: ProviderOptions & { url: string }): Promise<EaselImage[]> {
+  return parseEditedImages(await resolveImageUrls({ data: [{ url: options.url }] }, options));
 }

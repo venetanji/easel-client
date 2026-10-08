@@ -1,6 +1,6 @@
 {
   "name": "@easel/media-mcp",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Easel-backed media tools over MCP stdio",
   "type": "module",
   "main": "dist/server.js",
@@ -17,6 +17,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "pretest": "npm run build",
     "test": "tsx --test test/*.test.ts",
     "start": "node dist/cli.js"
   },

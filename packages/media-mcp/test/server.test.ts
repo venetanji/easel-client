@@ -56,6 +56,7 @@ test('serves the allowlisted tools through MCP without external services', async
   assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
     'capture_canvas_screenshot', 'generate_image', 'list_models',
   ]);
+  assert.doesNotMatch(listed.tools.find((tool) => tool.name === 'list_models')!.description || '', /not yet implemented/);
   const generated = await client.callTool({ name: 'generate_image', arguments: { prompt: 'a cat' } });
   assert.equal(generated.isError, undefined);
   assert.deepEqual(generated.content.map((item) => item.type), ['text', 'image']);
@@ -117,7 +118,7 @@ test('no video tools are advertised for image-only or disabled model configurati
       process.env.EASEL_MEDIA_MODELS = JSON.stringify(models);
       const registered: string[] = [];
       registerMediaTools({ registerTool(name: string) { registered.push(name); } } as never);
-      for (const name of ['generate_video', 'get_video', 'discover_video_capabilities', 'list_video_loras']) assert.equal(registered.includes(name), false);
+      for (const name of ['generate_video', 'get_video', 'discover_video_capabilities', 'list_video_loras', 'generate_music', 'generate_speech', 'generate_sound', 'get_audio_track']) assert.equal(registered.includes(name), false);
     }
   } finally { if (previous === undefined) delete process.env.EASEL_MEDIA_MODELS; else process.env.EASEL_MEDIA_MODELS = previous; }
 });
@@ -194,4 +195,81 @@ test('both harnesses preserve typed discovery and distinguish local rejection fr
   });
   assert.equal(posts, 1);
   await host.shutdown();
+});
+
+
+test('configured audio tools route by listed IDs and only advertise available kinds', async (t) => {
+  const previousModels = process.env.EASEL_MEDIA_MODELS;
+  const previousFetch = globalThis.fetch;
+  process.env.EASEL_MEDIA_MODELS = JSON.stringify([
+    { id: 'studio:speech', model: 'suno-speech', name: 'Speech', endpointName: 'Studio', baseUrl: 'https://studio.example', apiKey: 'configured-secret', mediaTypes: ['audio'] },
+  ]);
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = (async (url: any, init?: RequestInit) => { calls.push({ url: String(url), init }); return Response.json({ status: 'submitted' }); }) as typeof fetch;
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createMediaServer();
+  const client = new Client({ name: 'configured-audio-test', version: '1' });
+  t.after(async () => {
+    globalThis.fetch = previousFetch;
+    if (previousModels === undefined) delete process.env.EASEL_MEDIA_MODELS; else process.env.EASEL_MEDIA_MODELS = previousModels;
+    await client.close(); await server.close();
+  });
+  await server.connect(serverTransport); await client.connect(clientTransport);
+
+  const listed = await client.listTools();
+  const names = listed.tools.map((tool) => tool.name);
+  assert.ok(names.includes('generate_speech'));
+  assert.equal(names.includes('generate_music'), false);
+  assert.equal(names.includes('generate_sound'), false);
+  const speechSchema: any = listed.tools.find((tool) => tool.name === 'generate_speech')!.inputSchema;
+  assert.deepEqual(speechSchema.properties.model.enum, ['studio:speech']);
+  const result = await client.callTool({ name: 'generate_speech', arguments: { prompt: 'Hello', dryRun: true } });
+  assert.equal(result.isError, undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://studio.example/v1/audio/generations');
+  assert.deepEqual(JSON.parse(String(calls[0].init?.body)), { model: 'suno-speech', prompt: 'Hello', dry_run: true });
+  const status = await client.callTool({ name: 'get_audio_generation_status', arguments: {} });
+  assert.equal(status.isError, undefined);
+  const track = await client.callTool({ name: 'get_audio_track', arguments: { trackId: '11111111-1111-4111-8111-111111111111' } });
+  assert.equal(track.isError, undefined);
+  assert.deepEqual(calls.slice(1).map((call) => call.url), [
+    'https://studio.example/v1/audio/generations/status',
+    'https://studio.example/v1/audio/tracks/11111111-1111-4111-8111-111111111111',
+  ]);
+});
+
+
+test('configured audio routes require an explicit ID for multiple backends and ignore image-only Suno models', async (t) => {
+  const previousModels = process.env.EASEL_MEDIA_MODELS;
+  const previousFetch = globalThis.fetch;
+  process.env.EASEL_MEDIA_MODELS = JSON.stringify([
+    { id: 'studio:speech', model: 'suno-speech', name: 'Studio Speech', endpointName: 'Studio', baseUrl: 'https://studio.example', apiKey: 'studio-secret', mediaTypes: ['audio'] },
+    { id: 'backup:speech', model: 'suno-speech', name: 'Backup Speech', endpointName: 'Backup', baseUrl: 'https://backup.example', apiKey: 'backup-secret', mediaTypes: ['audio'] },
+    { id: 'image-only:sound', model: 'suno-sound', name: 'Image Only', endpointName: 'Image', baseUrl: 'https://image.example', apiKey: 'image-secret', mediaTypes: ['image'] },
+  ]);
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: any) => { calls.push(String(url)); return Response.json({ status: 'submitted' }); }) as typeof fetch;
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createMediaServer();
+  const client = new Client({ name: 'configured-audio-multiple-test', version: '1' });
+  t.after(async () => {
+    globalThis.fetch = previousFetch;
+    if (previousModels === undefined) delete process.env.EASEL_MEDIA_MODELS; else process.env.EASEL_MEDIA_MODELS = previousModels;
+    await client.close(); await server.close();
+  });
+  await server.connect(serverTransport); await client.connect(clientTransport);
+
+  const listed = await client.listTools();
+  const names = listed.tools.map((tool) => tool.name);
+  assert.ok(names.includes('generate_speech'));
+  assert.equal(names.includes('generate_sound'), false);
+  const speechSchema: any = listed.tools.find((tool) => tool.name === 'generate_speech')!.inputSchema;
+  assert.deepEqual(speechSchema.properties.model.enum, ['studio:speech', 'backup:speech']);
+  assert.ok(speechSchema.required.includes('model'));
+  const missingModel = await client.callTool({ name: 'generate_speech', arguments: { prompt: 'Hello', dryRun: true } });
+  assert.equal(missingModel.isError, true);
+  assert.equal(calls.length, 0);
+  const routed = await client.callTool({ name: 'generate_speech', arguments: { model: 'backup:speech', prompt: 'Hello', dryRun: true } });
+  assert.equal(routed.isError, undefined);
+  assert.deepEqual(calls, ['https://backup.example/v1/audio/generations']);
 });
