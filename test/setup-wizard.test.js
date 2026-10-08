@@ -186,6 +186,28 @@ const dismissMedia = {
   Escape: (f) => f.node('settings-dialog').dispatchEvent({ type: 'cancel', preventDefault() {} }),
 };
 
+for (const change of ['removes', 'disables']) {
+  test(`skipping media cannot finish setup after discovery ${change} the selected chat model`, async () => {
+    const settings = readyMediaSettings();
+    const f = fixture({ stored: 'started', settings });
+    await reachMediaStep(f);
+    const changedCatalog = { ...settings, models: change === 'removes'
+      ? settings.models.filter((model) => model.roles.includes('media'))
+      : settings.models.map((model) => ({ ...model, enabled: false })) };
+    f.client.getModelCatalog = async () => ({ settings: changedCatalog, catalog: [] });
+    await f.click('setup-media-refresh');
+    assert.equal(f.node('setup-next').disabled, true);
+    await f.click('setup-media-skip');
+    assert.equal(f.ui.isActive(), true);
+    assert.equal(f.values.get(SETUP_STORAGE_KEY), 'started');
+    assert.equal(f.node('setup-media-skip').disabled, true);
+    f.apply(settings);
+    assert.equal(f.node('setup-media-skip').disabled, false);
+    await f.click('setup-media-skip');
+    assert.equal(f.values.get(SETUP_STORAGE_KEY), 'complete');
+  });
+}
+
 for (const [method, dismiss] of Object.entries(dismissMedia)) {
   test(`${method} hides media setup when ordinary Settings reopens`, async () => {
     const f = fixture({ stored: 'started', settings: readyMediaSettings() });

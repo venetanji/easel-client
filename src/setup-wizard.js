@@ -100,7 +100,7 @@ function createSetupWizard({ document, client, storage, onSettings, onAgentState
           : options.length ? 'Select a chat model before finishing setup.' : 'Add a chat endpoint in Credentials, then refresh its models.';
     node('setup-back').disabled = step === 0 || locked();
     node('setup-skip').disabled = locked();
-    node('setup-media-skip').disabled = locked();
+    node('setup-media-skip').disabled = locked() || !ready;
     node('setup-media-refresh').disabled = locked();
     next.disabled = locked() || !control || (step === 1 && backend === 'builtin' && !settings?.connections.length) || (step >= 2 && !ready);
     next.textContent = step === 3 ? 'Start creating' : step === 1 && backend !== 'builtin' && !settings?.connections.length ? 'Continue without media' : 'Continue';
@@ -216,7 +216,7 @@ function createSetupWizard({ document, client, storage, onSettings, onAgentState
       onSettings(await client.updateModel({ ...selection, enabled: checkbox.checked, roles: model.roles }));
     });
   });
-  listen(node('setup-media-skip'), 'click', () => { if (!locked()) dismiss('complete'); });
+  listen(node('setup-media-skip'), 'click', () => { if (!locked() && setupReadiness(settings, control)) dismiss('complete'); });
   listen(dialog, 'cancel', (event) => {
     if (!active) return;
     event.preventDefault();
