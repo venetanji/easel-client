@@ -39,7 +39,7 @@ test('adapter_precedes_init', () => {
     note() { return 'original-pattern'; },
     hush() { return 'original-hush'; },
   };
-  const context = { window: { strudel } };
+  const context = { window: { strudel }, document: { documentElement: { dataset: {} } } };
   const source = '/*! upstream notice */\nwindow.originalBundleLoaded = true;';
   const prepared = prepareStrudelBundle(source);
   vm.runInNewContext(prepared, context);
@@ -54,7 +54,12 @@ test('adapter_precedes_init', () => {
   assert.deepEqual(capabilities.nativeSynths, ['sine', 'triangle', 'square', 'sawtooth']);
   assert.equal(capabilities.audioExport, true, 'bounded WAV export passed the production runtime/Media gate at b3cb58a');
   assert.equal(capabilities.externalSamples, false);
-  assert.equal(capabilities.repl, false);
+  assert.equal(capabilities.repl, true);
+  const scratchCalls = [];
+  const scratchStrudel = { initAudioOnFirstClick(options) { scratchCalls.push(options.disableWorklets); } };
+  const scratchContext = { window: { strudel: scratchStrudel }, document: { documentElement: { dataset: { easelStrudelRepl: 'v1' } } } };
+  vm.runInNewContext(prepareStrudelBundle('window.scratchLoaded = true;'), scratchContext);
+  assert.deepEqual(scratchCalls, [false]);
 });
 
 test('bundle_preserves_notices', () => {
@@ -92,11 +97,11 @@ test('bundle_preserves_notices', () => {
   }
 });
 
-test('policy_still_blocks_workers_and_eval', () => {
+test('default_policy_stays_restrictive_while_strudel_advertises_live_repl', () => {
   assert.equal(CSP, baselineCsp);
   const capabilities = adapter().getStrudelCapabilities();
   assert.equal(capabilities.externalSamples, false);
-  assert.equal(capabilities.repl, false);
+  assert.equal(capabilities.repl, true);
   assert.throws(() => buildCanvasDocument({ html: '<p>test</p>', kits: ['strudel'], kitBundles: { strudel: 'a'.repeat(MAX_CANVAS_KIT_BYTES + 1) } }), /limit/);
 });
 

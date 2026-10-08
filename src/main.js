@@ -168,7 +168,7 @@ const TEMPLATES = createTemplateService({
       throw error;
     }
   },
-  // Actual editable starter lifecycle passed CI run 37299938626 at 2657bd4.
+  // Native starter lifecycle passed CI run 37299938626 at 2657bd4; the marked REPL path is separate.
   // Required kit installation is still checked by the shared template service.
   strudelReady: true,
 });

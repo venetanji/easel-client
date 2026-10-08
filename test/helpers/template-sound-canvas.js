@@ -12,7 +12,7 @@ async function soundCanvas(canvases, projectId, instanceId) {
   const repl = { scheduler: { started: false }, setCps() {}, async setPattern(_pattern, autoplay) { if (autoplay) starts++; }, async start() { starts++; this.scheduler.started = true; }, stop() { this.scheduler.started = false; } };
   const strudel = { getAudioContext: () => context, getSuperdoughAudioController: () => audioController,
     initStrudel: async () => repl, initAudio: async () => {}, hush: () => repl.stop(),
-    note: () => { const pattern = { s() { return this; }, gain() { return this; }, attack() { return this; }, release() { return this; } }; return pattern; } };
+    stack: (...patterns) => patterns[0], note: () => { const pattern = { s() { return this; }, gain() { return this; }, attack() { return this; }, release() { return this; }, lpf() { return this; }, room() { return this; } }; return pattern; } };
   async function initialize() {
     const html = canvases.getDocumentSource(projectId, 'index.html').html;
     elements.clear(); context.state = 'suspended'; gain.value = 0;
@@ -22,7 +22,7 @@ async function soundCanvas(canvases, projectId, instanceId) {
     const sandbox = { window, navigator: { userActivation: { isActive: true } }, document: { getElementById: (id) => elements.get(id),
       addEventListener(type, callback) { listeners.set(type, callback); }, removeEventListener(type) { listeners.delete(type); } }, console };
     vm.createContext(sandbox);
-    for (const [, script] of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) if (script.includes('function createPattern(')) vm.runInContext(script, sandbox);
+    for (const [, script] of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) if (script.includes('function createPattern(') || script.includes('function queryStrudelSnapshot(')) vm.runInContext(script, sandbox);
     for (let i = 0; i < 12; i++) await Promise.resolve();
   }
   const debuggerApi = { isAttached: () => attached, attach() { attached = true; }, detach() {}, async sendCommand(method, params) {

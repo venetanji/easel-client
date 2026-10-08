@@ -1,9 +1,9 @@
 # Strudel sound template
 
-Strudel sound is an editable native-synth music sketch, bundled locally through
-Easel's Strudel kit. It starts silent and offers Play, Stop, tempo, volume and
-bounded WAV loop export. It does not embed the full Strudel website or a live
-code-evaluation console.
+Strudel sound is an offline live-coding scratchpad, bundled locally through
+Easel's pinned Strudel kit. It starts silent and offers Play, Stop, tempo, volume,
+a live code editor and bounded WAV loop export. The editor uses Strudel's REPL;
+ordinary canvases retain the stricter CSP. Network access remains blocked.
 
 ## Start and listen
 
@@ -25,42 +25,38 @@ context or scheduler. Initialization or pattern errors appear in the sketch;
 Retry Play requires another genuine gesture. An initialization reload/retry
 remains silent.
 
-## Change the pattern
+## Live-code the pattern
 
-Open this sketch's `app.js` in Project files and edit `createPattern(params)`.
-The starter is ordinary source:
+Use the built-in code editor and **Push live**. The pinned Strudel REPL compiles
+and replaces the current pattern on its running scheduler; Easel adds no
+next-bar wait. If code fails, the previous valid pattern stays in place. While
+the editor differs from the active pattern, current playback continues, but Play
+and WAV export stay disabled until the draft is pushed. Pushing code does not call Play. Keep `.play()` out of submitted code; use the visible
+Play button to start sound with a real user gesture.
 
-```js
-function createPattern(params) {
-  return window.strudel.note('c4 e4 g4 b4')
-    .s('sine').gain(0.3).attack(0.01).release(0.05);
-}
-```
+The authored `app.js` contains `DEFAULT_LIVE_CODE` and the matching safe starter
+pattern factory. When changing that authored default, keep both definitions in
+sync. Runtime pushes are available to the agent through
+`window.EaselStrudel.evaluate(source)` in `execute_canvas_javascript`; use that
+only when the user asked to audition the code. A successful push is retained in
+this instance's project state. It is not an `app.js` source edit and does not
+create a source-history entry.
 
-Try changing the note sequence or synth name to `sine`, `triangle`, `square` or
-`sawtooth`. Mini-notation strings are pattern data. One cycle is four beats;
-tempo uses `cps = bpm / 240`. Keep event gain in the pattern: the Volume control
-multiplies the managed output once. Do not also multiply it into event gain.
+Custom saved code is displayed after reload but deliberately is not evaluated
+at startup. Push it again, then press Play. Playback never restores. This avoids
+a saved code buffer starting audio or running effects while the project opens.
 
-Reload after source editing, then press Play. Source editing/reload is not an
-uninterrupted live-code swap. Use source Undo to restore a previous edit; it is
-separate from the Video timeline's Undo. An explicit
-`EaselStrudel.patternChanged()` invalidates the prepared pattern and stops sound
-until Play. Untested cycle-boundary swaps are not offered.
+The REPL runs in the isolated canvas and uses dynamic JavaScript evaluation.
+Only a document marked `data-easel-strudel-repl="v1"` receives the additional
+`unsafe-eval` and `worker-src blob:` CSP sources needed by the pinned evaluator
+and local audio worklets. `connect-src` remains limited to `data:` and `blob:`;
+remote `samples('github:...')` requests are blocked. No sample bank or Suno
+sample-creation workflow is included yet.
 
-The starter prepares one pattern and reuses it for playback and snapshots until
-an explicit pattern change or reload. Export freezes that prepared pattern and
-current numeric parameters at click time; random choices already made while
-building it are not rerolled just to export.
-
-Each sketch uses an instance-specific app ID and settings key. Preserved-state
-reload can restore tempo and volume, always with `playing:false`. Ordinary live
-control changes are not automatically written to `state.json`. For durable saved
-settings, the existing host state tool can store
-`strudel[instanceId] = {bpm, volume}`. Shared root-level settings do not become
-another instance's settings. Switching, replacement or closure disposes the old
-scheduler, output graph, listeners and audio context. App updates preserve older
-authored sketches instead of replacing their source.
+The built-in example layers native synth patterns and live effects. The WAV
+export contract remains narrower than live playback: it accepts only validated
+native note/synth events and rejects samples and effect controls rather than
+silently changing their sound.
 
 ## Explore an idea
 
@@ -148,11 +144,11 @@ the new sketch.
 ## Offline use and limits
 
 The kit is pinned to `@strudel/web@1.3.0`, built from its published source entry
-and the repository lockfile. Supported sketches need no external samples, CDN,
-microphone or device permission. The existing canvas policy still blocks eval,
-external resources and workers. Full REPL/evaluate, sample packs, sync SharedWorker
-scheduling, AudioWorklet effects, MP3 export, microphone recording and audiovisual
-capture remain outside this template.
+and the repository lockfile. Supported playback needs no CDN, microphone or device permission. The ordinary
+canvas policy blocks eval and workers; only the marked Strudel scratchpad opts
+into local REPL evaluation and blob-backed audio worklets, without network access.
+Sample packs (including remote sample loading), MP3 export, microphone recording
+and audiovisual capture remain outside this template.
 
 Compiled Project ZIP HTML embeds the offline kit and can play the supported
 native pattern in a modern browser after Play. Browser audio gesture rules still

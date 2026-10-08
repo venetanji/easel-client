@@ -2,28 +2,29 @@
 
 ## Status
 
-The locally bundled kit and source package are unit/build verified. The narrow
-native-kit playback and OfflineAudioContext gate passed CI on 5 October 2026
-(see the dated evidence below). The actual editable starter passed its extended controls/lifecycle CI fixture at
-`2657bd4` on 5 October 2026. Creation is enabled when its kit is installed. The production bounded WAV/Media
-fixture passed at published `b3cb58a` (exact source snapshot `2e5db98`) on 5 October
-2026. `STRUDEL_EXPORT_READY` and `getStrudelCapabilities().audioExport` are now
-`true`; the host still checks the loaded instance, source and pinned kit at every
-export boundary. See the dated production proof below.
+The locally bundled kit, native playback and bounded WAV/Media export have the
+dated CI evidence below. This feature branch adds a separate opt-in REPL path to
+the Strudel template; that new live-evaluation/worklet combination still needs a
+real-browser audio run before release. Do not treat the historical native-only
+probe as proof of the new REPL or sample playback. `getStrudelCapabilities()`
+reports `repl: true` for the marked scratchpad; `audioExport: true` remains the
+independent native-only export contract.
 
 Pinned package: `@strudel/web@1.3.0`. Easel builds its published `web.mjs` source
 entry using esbuild and the repository lockfile, rather than copying the upstream
 all-in-one IIFE with an unknown build dependency graph. The original exported API
-is retained. The adapter appends worklet-disabled gesture initialization without
-awaiting its gesture-pending promise at startup. Vendor licenses remain intact.
+is retained. The adapter uses worklet-disabled first-gesture initialization for
+ordinary Strudel canvases; only the explicitly marked scratchpad enables local
+worklets. Vendor licenses remain intact.
 
 ## Candidate supported subset
 
-Source inspection supports `initStrudel({sync:false})`, `note(...).s("sine").play()`,
-`hush`, `getAudioContext`, `setAudioContext`, `setSuperdoughAudioController`,
-`registerSynthSounds`, and `superdough`. Native synth names are `sine`, `triangle`,
-`square`, and `sawtooth` (upstream also aliases `saw`). The native-kit checks
-below and the starter controls/lifecycle checks have passing CI evidence.
+Source inspection supports `initStrudel({sync:false})`, the Strudel scratchpad's
+`repl.evaluate(source, false)`, `note`, `stack`, `hush`, `getAudioContext`,
+`setAudioContext`, `setSuperdoughAudioController`, `registerSynthSounds`, and
+`superdough`. Native synth names are `sine`, `triangle`, `square`, and `sawtooth`
+(upstream also aliases `saw`). Existing CI evidence remains native-only; new REPL
+playback is not yet measured.
 
 - Start silent; use a real Play button gesture.
 - Call `initAudioOnFirstClick({disableWorklets:true})` before `initStrudel`.
@@ -35,10 +36,11 @@ below and the starter controls/lifecycle checks have passing CI evidence.
   on it to resume the context.
 - `hush` stops scheduling, but does not promise instant silence of existing tails.
   The probe also mutes the managed output gain, then verifies silence and restart.
-- No sample packs, remote URLs, microphone, REPL/evaluate, sync SharedWorker
-  scheduler, worklet effects, or generated-code evaluation are supported.
-  These APIs have not been removed from upstream; they are outside the supported
-  subset and remain subject to the existing sandbox/CSP.
+- A small local sample bank and Suno sample-authoring workflow are not included
+  yet. Remote `samples('github:...')` remains blocked by CSP. Live Strudel code can
+  use broader controls/effects than the WAV exporter; export rejects unsupported
+  event data. Sync SharedWorker scheduling, microphone and audiovisual capture
+  remain unsupported.
 - The isolated offline probe uses a fresh renderer, a stereo 48 kHz
   OfflineAudioContext, `setAudioContext`, a reset controller, native synth
   registration and bounded `superdough` calls. It never calls the upstream

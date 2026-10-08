@@ -1,12 +1,13 @@
-// Keep the upstream API intact. Easel supports only native synth patterns;
-// sample fetching, the REPL and worklet-dependent features remain unsupported.
+// Keep the upstream API intact. The dedicated Strudel scratchpad opts into the
+// pinned REPL; canvas CSP still blocks network and grants this only per document.
 const STRUDEL_OFFLINE_MARKER = '/* easel-strudel-offline-audio-v1 */';
 const STRUDEL_OFFLINE_SETUP = `${STRUDEL_OFFLINE_MARKER}
 ;(() => {
   const strudel = window.strudel;
   // This promise waits for a real gesture. Never await it during page startup.
-  // Calling first makes initStrudel reuse worklet-disabled initialization.
-  strudel.initAudioOnFirstClick({ disableWorklets: true });
+  // Only the Strudel scratchpad opts into dynamic evaluation and its local worklets.
+  const scratchpad = document.documentElement?.dataset?.easelStrudelRepl === 'v1';
+  strudel.initAudioOnFirstClick({ disableWorklets: !scratchpad });
 })();
 `;
 
@@ -21,7 +22,7 @@ function getStrudelCapabilities() {
     // Production gate: b3cb58a, Test run 37306231481.
     audioExport: true,
     externalSamples: false,
-    repl: false,
+    repl: true,
   };
 }
 

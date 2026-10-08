@@ -420,9 +420,10 @@ async function proveProductionWavExport({ BrowserWindow, session, open, until, r
 
 function templateFixtureHtml(bundle, { instanceId = 'c'.repeat(32), preserved, saved, edited = false, exportEnabled = false } = {}) {
   const source = createStrudelTemplate({ instanceId });
-  let html = source.files[source.entry];
-  if (exportEnabled) html = html.replace("note('c4 e4 g4 b4')", "note('~ c4 ~ g4')");
-  if (edited) html = html.replace("note('c4 e4 g4 b4')", "note('a5 c6 e6 a6')");
+  // This retained probe covers the historical native-only policy, not the REPL opt-in.
+  let html = source.files[source.entry].replace(' data-easel-strudel-repl="v1"', '');
+  if (exportEnabled) html = html.replace("note('<bb2 ~ bb2 bb2>')", "note('<~ bb2 ~ bb2>')");
+  if (edited) html = html.replace("note('<bb2 ~ bb2 bb2>')", "note('a5 c6 e6 a6')");
   html = html.replace('</body>', `<script>(${monitorTemplate.toString()})(${JSON.stringify(instanceId)});</script></body>`);
   html = buildCanvasDocument({ html, kits: ['strudel'], kitBundles: { strudel: bundle } });
   const initial = `<script>window.__easelPreservedState=${JSON.stringify(preserved || {}).replace(/</g, '\\u003c')};window.__easelProjectState=${JSON.stringify(saved || {}).replace(/</g, '\\u003c')};</script>`;
