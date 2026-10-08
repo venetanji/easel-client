@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, parse } from 'node:path';
 import { prepareOutputDirectory, saveMedia } from '../src/output.js';
 import { generateImages } from '../src/easel.js';
 import { images as imageFixtures } from './fixtures/images.js';
@@ -32,6 +32,7 @@ test('output rejects traversal, missing policy and symlinks outside the workspac
   await assert.rejects(prepareOutputDirectory(join(root, '../other'), roots), /outside/);
   await assert.rejects(prepareOutputDirectory(root, ''), /configured/);
   await assert.rejects(prepareOutputDirectory(root, '["/"]'), /configuration/);
+  await assert.rejects(prepareOutputDirectory(root, JSON.stringify([parse(root).root])), /configuration/);
   await assert.rejects(saveMedia(root, [{ data: '', mimeType: 'image/png' }], roots), /32 MiB/);
   assert.deepEqual(await readdir(outside), []);
 });

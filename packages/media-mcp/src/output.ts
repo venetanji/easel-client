@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { AUDIO_EXTENSIONS } from './audio.js';
 
 export interface SavedMedia { path: string; mimeType: string; bytes: number; sha256: string }
@@ -14,7 +14,7 @@ export async function prepareOutputDirectory(directory: string, roots = process.
   if (!isAbsolute(directory) || !roots) throw new Error('Filesystem output requires an absolute directory under configured EASEL_MEDIA_OUTPUT_ROOTS.');
   let configured: unknown;
   try { configured = JSON.parse(roots); } catch { throw new Error('Invalid output root configuration.'); }
-  if (!Array.isArray(configured) || !configured.length || configured.some(root => typeof root !== 'string' || !isAbsolute(root) || resolve(root) === sep)) throw new Error('Invalid output root configuration.');
+  if (!Array.isArray(configured) || !configured.length || configured.some(root => typeof root !== 'string' || !isAbsolute(root) || resolve(root) === parse(resolve(root)).root)) throw new Error('Invalid output root configuration.');
   const allowed = (await Promise.all(configured.map(root => realpath(root).catch(() => undefined)))).filter((root): root is string => root !== undefined);
   const requested = resolve(directory);
   let ancestor = requested;
