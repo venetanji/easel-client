@@ -336,6 +336,7 @@ async function proveProductionWavExport({ BrowserWindow, session, open, until, r
   const bridge = createStrudelExportBridge({ ...scopeOptions, controller, exportReady: true });
   const sound = await open('export.html');
   await until(sound, state => state.ready, 'wav-template-ready');
+  await pushStrudelCode(sound, "note('~ c4 ~ g4').s('sine')");
   const context = await bridge.handle({ action: 'context' });
   await sound.webContents.executeJavaScript(`probe.exportContextListener(${JSON.stringify(context)}); document.getElementById('strudel-${instanceId}-bpm').value = '120'; document.getElementById('strudel-${instanceId}-bpm').dispatchEvent(new Event('input')); void 0;`);
   await sendKeyboardActivation(sound, `strudel-${instanceId}-play`);

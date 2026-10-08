@@ -193,6 +193,7 @@ test('wav_fixture_decodes_saved_pcm_and_keeps_live_context_identity', () => {
   assert.match(source, /findExport/);
   assert.match(source, /liveContextIdentity/);
   assert.match(source, /volumeRatio/);
+  assert.ok(source.includes("pushStrudelCode(sound, \"note('~ c4 ~ g4').s('sine')\")"), 'WAV silence checks need an explicit rest pattern');
 });
 
 test('long_offline_score_gate_rejects_native_stealing_and_reports_only_reopened_bytes', () => {
