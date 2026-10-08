@@ -84,6 +84,11 @@ async function sendKeyboardActivation(win, id) {
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
 }
 
+async function pushStrudelCode(win, source) {
+  const result = await win.webContents.executeJavaScript(`EaselStrudel.evaluate(${JSON.stringify(source)})`);
+  if (!result?.ok) throw new Error(`Live Strudel evaluation failed: ${result?.error || 'no success receipt'}`);
+}
+
 function installDiagnostics() {
   window.probe = { errors: [], violations: [], plays: 0, playEvents: 0, peaks: [], ready: false, phase: 'initializing', nativeInput: [], logs: [] };
   for (const type of ['keydown', 'keypress', 'keyup', 'click']) {
@@ -510,13 +515,15 @@ async function electronMain() {
     check(starterInitial.activeAudioContexts === 1, 'Starter created duplicate audio contexts.');
     // Long first voice: eight seconds at 30 BPM. Replacing it with a zero-gain
     // pattern tests real output isolation, not just that reset() was called.
-    await starter.webContents.executeJavaScript(`createPattern = () => strudel.note('a4').s('sine').gain(0.3).release(0.5); EaselStrudel.patternChanged(); document.getElementById('${control('bpm')}').value = '30'; document.getElementById('${control('bpm')}').dispatchEvent(new Event('input')); void 0;`);
+    await pushStrudelCode(starter, "note('a4').s('sine').gain(0.3).release(0.5)");
+    await starter.webContents.executeJavaScript(`document.getElementById('${control('bpm')}').value = '30'; document.getElementById('${control('bpm')}').dispatchEvent(new Event('input')); void 0;`);
     await sendKeyboardActivation(starter, control('play'));
     const starterPlaying = await until(starter, (state) => state.plays === 1 && state.schedulerStarted && state.peaks.some((peak) => peak > 0.001), 'template-signal');
     check(starterPlaying.trustedKeyboardPlay, 'Template Play was not trusted keyboard activation.');
     await sendKeyboardActivation(starter, control('stop'));
     await until(starter, (state) => !state.schedulerStarted && state.gain === 0, 'template-stop');
-    await starter.webContents.executeJavaScript(`createPattern = () => strudel.note('a4').s('sine').gain(0).release(0.05); EaselStrudel.patternChanged(); probe.peaks = []; void 0;`);
+    await pushStrudelCode(starter, "note('a4').s('sine').gain(0).release(0.05)");
+    await starter.webContents.executeJavaScript('probe.peaks = []; void 0;');
     await sendKeyboardActivation(starter, control('play'));
     const silentRestart = await until(starter, hasSilentTemplateRestart, 'template-no-old-voice');
     await starter.webContents.executeJavaScript(`document.getElementById('${control('bpm')}').value = '120'; document.getElementById('${control('bpm')}').dispatchEvent(new Event('input')); document.getElementById('${control('volume')}').value = '0.2'; document.getElementById('${control('volume')}').dispatchEvent(new Event('input')); void 0;`);
@@ -525,7 +532,8 @@ async function electronMain() {
     // starter. The monitor reconnects to every new destinationGain graph.
     await sendKeyboardActivation(starter, control('stop'));
     await until(starter, (state) => !state.schedulerStarted && state.gain === 0, 'template-before-positive-restart');
-    await starter.webContents.executeJavaScript(`createPattern = () => strudel.note('a5').s('sine').gain(0.3).release(0.05); EaselStrudel.patternChanged(); probe.peaks = []; void 0;`);
+    await pushStrudelCode(starter, "note('a5').s('sine').gain(0.3).release(0.05)");
+    await starter.webContents.executeJavaScript('probe.peaks = []; void 0;');
     await sendKeyboardActivation(starter, control('play'));
     const positiveRestart = await until(starter, hasAudibleTemplateRestart, 'template-positive-restart');
     // Exercise the existing question overlay with native Escape, without adding

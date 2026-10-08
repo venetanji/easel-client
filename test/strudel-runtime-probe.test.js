@@ -131,6 +131,12 @@ test('template_fixture_runs_the_editable_starter_and_managed_lifecycle', () => {
   assert.ok(html.indexOf('window.probe =') < html.indexOf('data-easel-canvas-kit="strudel"'));
 });
 
+test('template_runtime_probe_uses_the_live_scratchpad_evaluator', () => {
+  const source = fs.readFileSync(require('node:path').join(__dirname, '../scripts/probe-strudel-runtime.cjs'), 'utf8');
+  assert.ok(source.includes('EaselStrudel.evaluate'));
+  assert.ok(!source.includes('createPattern = () => strudel.note'));
+});
+
 test('template_restart_gate_requires_new_scheduler_and_silence_during_old_voice_lifetime', () => {
   assert.equal(typeof runtime.hasSilentTemplateRestart, 'function');
   const state = { plays: 2, schedulerStarted: true, gain: 0.5, audioTime: 2, oldVoiceStartedAt: 1, peaks: Array(10).fill(0) };
