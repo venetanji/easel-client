@@ -128,6 +128,9 @@ test('template_fixture_runs_the_editable_starter_and_managed_lifecycle', () => {
   assert.match(html, /snapshotPattern/);
   assert.match(html, /EaselCanvas\.cleanup\(\)/);
   assert.match(html, /getIsStarted\(\)/);
+  assert.match(html, /script-src 'unsafe-inline' 'unsafe-eval' blob:/);
+  const restrictedHtml = runtime.templateFixtureHtml('window.strudel = {};', { replEnabled: false });
+  assert.doesNotMatch(restrictedHtml, /unsafe-eval|worker-src blob:/);
   assert.ok(html.indexOf('window.probe =') < html.indexOf('data-easel-canvas-kit="strudel"'));
 });
 

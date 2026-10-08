@@ -423,10 +423,11 @@ async function proveProductionWavExport({ BrowserWindow, session, open, until, r
     sustainedLiveSamples: 10, sameUrlNavigationEvent: true, savedReopenedBytes: true, nativeDefaultProofs: synthProofs, nativeSustainRatio, longScore: { events: longSnapshot.events.length, latePeaks: longResult.latePeaks, duration: longResult.duration }, durableAssets: receipts.map(receipt => receipt.assetId), idempotentRetries: true, pinnedKitDigest: store.getProjectKitSource(project.id, 'strudel').digest };
 }
 
-function templateFixtureHtml(bundle, { instanceId = 'c'.repeat(32), preserved, saved, edited = false, exportEnabled = false } = {}) {
+function templateFixtureHtml(bundle, { instanceId = 'c'.repeat(32), preserved, saved, edited = false, exportEnabled = false, replEnabled = true } = {}) {
   const source = createStrudelTemplate({ instanceId });
-  // This retained probe covers the historical native-only policy, not the REPL opt-in.
-  let html = source.files[source.entry].replace(' data-easel-strudel-repl="v1"', '');
+  // Real Strudel templates opt into the evaluator; disable only for policy controls.
+  let html = source.files[source.entry];
+  if (!replEnabled) html = html.replace(' data-easel-strudel-repl="v1"', '');
   if (exportEnabled) html = html.replace("note('<bb2 ~ bb2 bb2>')", "note('<~ bb2 ~ bb2>')");
   if (edited) html = html.replace("note('<bb2 ~ bb2 bb2>')", "note('a5 c6 e6 a6')");
   html = html.replace('</body>', `<script>(${monitorTemplate.toString()})(${JSON.stringify(instanceId)});</script></body>`);
