@@ -60,7 +60,7 @@ function createTemplatesDrawer({ document, client, onOpen, onPrompt, onStatus, i
       const supported = entry?.actions?.includes(kind === 'current' ? 'add-to-current-project' : 'create-project');
       item.disabled = busy || loading || !available(entry) || (kind !== 'prompt' && (!supported || Boolean(saved))) || (kind === 'current' && !getProjectId());
     }
-    if (contextHint) contextHint.textContent = !getProjectId() ? 'Open a project to add a new sketch to it.' : 'Each action creates a new sketch. Existing work stays in Project files.';
+    if (contextHint) contextHint.textContent = !getProjectId() ? 'Both choices create a new sketch. Open a project to add one to it.' : 'Both choices create a new sketch. Existing work stays in Project files.';
     if (retryButton) retryButton.disabled = busy;
     if (dismissButton) dismissButton.disabled = busy;
     refreshButton.disabled = loading || operating;
@@ -134,7 +134,7 @@ function createTemplatesDrawer({ document, client, onOpen, onPrompt, onStatus, i
     contextHint = node('p', 'template-context');
     contextHint.id = 'template-context';
     add.setAttribute('aria-describedby', 'template-context');
-    detail.append(actions, contextHint);
+    detail.append(contextHint, actions);
     const technical = node('details', 'template-technical');
     technical.open = false;
     technical.append(node('summary', '', 'Outputs and technical details'));
@@ -164,7 +164,8 @@ function createTemplatesDrawer({ document, client, onOpen, onPrompt, onStatus, i
     const ordered = [...entries].sort((a, b) => Number(available(b)) - Number(available(a)) || Number(a.status === 'planned') - Number(b.status === 'planned'));
     const planned = node('details', 'template-planned');
     planned.open = false;
-    planned.append(node('summary', '', 'Coming later'));
+    const plannedCount = ordered.filter((entry) => entry.status === 'planned').length;
+    planned.append(node('summary', '', `Coming later (${plannedCount})`));
     for (const entry of ordered) {
       const row = node('div', 'template-entry');
       row.dataset.templateId = entry.id;

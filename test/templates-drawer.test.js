@@ -61,6 +61,11 @@ function fixture() {
 test('ready_actions_create_or_add', async () => {
   const f = fixture(); await f.drawer.refresh(); f.drawer.setOpen(true);
   await f.choose('video-editor');
+  const detailChildren = f.nodes.get('templates-detail').children;
+  const context = detailChildren.findIndex((node) => node.className === 'template-context');
+  const actions = detailChildren.findIndex((node) => node.className === 'template-actions');
+  assert.ok(context >= 0 && context < actions);
+  assert.match(detailChildren[context].textContent, /Both choices create a new sketch/);
   assert.equal(f.button('templates-detail', 'Add to current project').disabled, true);
   assert.match(f.nodes.get('templates-detail').textContent, /Open a project/);
   await f.button('templates-detail', 'Create project').click();
@@ -391,7 +396,7 @@ test('planned templates are grouped in a collapsed non-actionable disclosure', a
   const list = f.nodes.get('templates-list');
   const planned = list.children.find(node => node.tagName === 'details');
   assert.ok(planned); assert.equal(planned.open, false);
-  assert.match(planned.children[0].textContent, /Coming later/);
+  assert.match(planned.children[0].textContent, /Coming later \(5\)/);
   assert.match(planned.textContent, /Presentations.*Games.*Image editor.*SVG editor.*Voxel soundscape/);
   assert.equal(planned.querySelectorAll('button').length, 0);
   assert.equal(list.children.filter(node => node.className === 'template-entry').length, 2);
