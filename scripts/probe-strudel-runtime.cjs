@@ -552,8 +552,13 @@ async function electronMain() {
     check(disposed.disposal.audioState === 'closed' && !disposed.disposal.schedulerStarted && disposed.disposal.activeAudioContexts === 0 && disposed.disposal.failures.length === 0, 'Starter disposal leaked audio/scheduler resources.');
     starter.destroy();
     const reloaded = await open('template-reloaded.html');
-    const afterEdit = await until(reloaded, (state) => state.ready, 'template-source-reloaded');
-    check(afterEdit.plays === 0 && afterEdit.settings.bpm === 120 && afterEdit.settings.volume === 0.2 && afterEdit.gain === 0, 'Edited source did not restore only its settings.');
+    const afterEdit = await until(reloaded, (state) => state.phase.startsWith('Restored code needs Push live'), 'template-source-reloaded');
+    const restoredCode = await reloaded.webContents.executeJavaScript(`document.getElementById('${control('code')}').value`);
+    check(restoredCode === "note('a5').s('sine').gain(0.3).release(0.05)" && afterEdit.plays === 0 &&
+      afterEdit.settings.bpm === 120 && afterEdit.settings.volume === 0.2 && afterEdit.gain === 0,
+      'Reload must restore custom code as unapplied text and restore settings without playing.');
+    await pushStrudelCode(reloaded, restoredCode);
+    await until(reloaded, (state) => state.phase.startsWith('Pattern ready'), 'template-restored-code-pushed');
     await sendKeyboardActivation(reloaded, control('play'));
     await until(reloaded, (state) => state.schedulerStarted && state.peaks.some((peak) => peak > 0.001), 'template-edited-source-signal');
     const other = await open('template-other.html');
