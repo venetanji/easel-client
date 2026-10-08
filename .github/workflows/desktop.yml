@@ -60,6 +60,9 @@ jobs:
         run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
       - name: Build MCP package
         run: npm run build:media-mcp
+      - name: Verify Windows template and timeline storage
+        if: matrix.target == 'win'
+        run: node --test test/template-instance-store.test.js test/video-timeline-store.test.js test/template-service.test.js
       - name: Verify Electron download marker
         shell: bash
         run: test -f node_modules/electron/dist/version

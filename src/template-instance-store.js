@@ -51,7 +51,8 @@ function createTemplateInstanceStore({ userDataPath, fileSystem = fs, timelineSt
     fileSystem.mkdirSync(directory, { recursive: true, mode: 0o700 });
     try {
       fileSystem.writeFileSync(temporary, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-      const descriptor = fileSystem.openSync(temporary, 'r');
+      // Windows requires a writable handle to flush the file with fsync.
+      const descriptor = fileSystem.openSync(temporary, 'r+');
       try { fileSystem.fsyncSync(descriptor); } finally { fileSystem.closeSync(descriptor); }
       fileSystem.renameSync(temporary, target);
     } catch (error) { try { fileSystem.rmSync(temporary, { force: true }); } catch {} throw error; }

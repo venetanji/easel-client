@@ -69,6 +69,43 @@ test('unique_paths_preserve_existing', async (t) => {
   const opened = await f.service.openTemplateInstance({ projectId: f.projectId, instanceId: first.instanceId });
   for (const key of ['projectId', 'instanceId', 'documentPath', 'timelineId']) assert.equal(opened[key], first[key]);
 });
+test('template_creation_and_timeline_edits_support_Windows_fsync_handles', async (t) => {
+  const fileSystem = Object.create(fs), handles = new Map();
+  let flushes = 0;
+  fileSystem.openSync = (filename, flags, ...args) => {
+    const descriptor = fs.openSync(filename, flags, ...args);
+    const writable = typeof flags === 'string' ? /[wa+]/.test(flags)
+      : Boolean(flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR));
+    handles.set(descriptor, writable);
+    return descriptor;
+  };
+  fileSystem.fsyncSync = (descriptor) => {
+    // Model Windows FlushFileBuffers on every CI platform.
+    if (!handles.get(descriptor)) throw Object.assign(new Error('EPERM: operation not permitted, fsync'), { code: 'EPERM', syscall: 'fsync' });
+    flushes++;
+    return fs.fsyncSync(descriptor);
+  };
+  fileSystem.closeSync = (descriptor) => {
+    fs.closeSync(descriptor);
+    handles.delete(descriptor);
+  };
+  const f = fixture(t, { timelineFs: fileSystem, registryFs: fileSystem });
+  const created = await f.create();
+  assert.equal(created.opened, true);
+  assert.equal(flushes, 2);
+  assert.equal(handles.size, 0);
+  assert.ok(JSON.parse(f.source()).files[created.documentPath]);
+  const restartedInstances = createTemplateInstanceStore({ userDataPath: f.userDataPath, timelineStore: f.timelines, projectStore: f.canvases });
+  assert.equal(restartedInstances.list(f.projectId)[0].instanceId, created.instanceId);
+  f.timelines.apply(f.projectId, created.timelineId, { expectedRevision: 0, operations: [{ type: 'add-track', track: { id: 'music', type: 'audio', name: 'Music' } }] });
+  const restartedTimelines = createVideoTimelineStore({ userDataPath: f.userDataPath });
+  const saved = restartedTimelines.read(f.projectId, created.timelineId);
+  assert.equal(saved.revision, 1);
+  assert.ok(saved.tracks.some((track) => track.id === 'music'));
+  assert.equal(flushes, 3);
+  assert.equal(handles.size, 0);
+});
+
 test('new_project_has_only_its_template_source_and_default_entry', async (t) => {
   const f = fixture(t); const before = f.source(f.projectId);
   const created = await f.create({ target: 'new-project', title: 'My film' });
@@ -145,11 +182,14 @@ test('four_MiB_project_limit_is_preflighted_without_partial_creation', async (t)
   await assert.rejects(f.create(), /4 MiB/);
   assert.equal(f.source(), before); assert.deepEqual(f.instances.list(f.projectId), []);
 });
-for (const failure of ['registry', 'timeline', 'source']) test(`${failure}_write_failure_leaves_existing_source_media_kits_and_host_state_untouched`, async (t) => {
+for (const [failure, operation] of [
+  ['registry', 'renameSync'], ['timeline', 'renameSync'], ['source', 'renameSync'],
+  ['registry', 'fsyncSync'], ['timeline', 'fsyncSync'],
+]) test(`${failure}_${operation}_failure_leaves_existing_source_media_kits_and_host_state_untouched`, async (t) => {
   let fail = false; const fileSystem = Object.create(fs);
-  fileSystem.renameSync = (from, to) => {
-    if (fail && (failure !== 'source' || to.endsWith('.project.json'))) throw new Error(`${failure} disk failure`);
-    return fs.renameSync(from, to);
+  fileSystem[operation] = (...args) => {
+    if (fail && (failure !== 'source' || args[1].endsWith('.project.json'))) throw new Error(`${failure} disk failure`);
+    return fs[operation](...args);
   };
   const f = fixture(t, { [`${failure}Fs`]: fileSystem });
   const existing = await f.create();
