@@ -1,5 +1,93 @@
 # Easel Media MCP
 
+## Release 0.0.3: API Parity And Thor
+
+The stdio adapter exposes 18 tools: model discovery; image generation, edits,
+variations, jobs and existing-image download; video generation, retrieval,
+capabilities and LoRAs; music, speech, sound, audio status, track inspection,
+download and explicit attempt abandonment; and the existing canvas screenshot.
+
+Image tools accept `steps`, exact `seed` (decimal string or safe integer),
+`server` and `responseFormat`. URL image output is downloaded only from the
+configured origin, without redirects, with bounded bytes and MIME validation.
+Base64/provider compatibility remains available.
+
+H3 uses `model: "minimax-h3"` and `frames` on the 17k+5 grid (124-362,
+default 124), never `seconds`. `semanticReferences` contains up to two PNG/JPEG
+upload objects. `temporalGroups` contains up to three `{frameIndex,images}`
+groups, each with 1, 5, 22 or 39 stills. H3 and LTX controls are mutually
+exclusive. Read the selected model's capabilities for current size budgets,
+runtime availability and validation evidence. Availability is not proof of
+GPU execution or visual quality.
+
+Audio tools use camelCase options corresponding to the API's snake_case fields
+(for example `dryRun`, `sunoModel`, `referenceAudioId`, `backgroundMusic`). A
+missing `sunoModel` preserves the browser selection. A dry run still interacts
+with the live browser. Preserve attempt/track UUIDs; manually resolve CAPTCHA;
+never automatically resubmit or abandon. Audio status observes a shared browser,
+not an isolated job queue. Downloads preserve the actual MIME type and extension.
+
+Set `outputDirectory` on completed image/video retrieval or audio download to
+save atomic, unique files and return paths, byte counts and SHA-256 hashes instead
+of embedding media. `EASEL_MEDIA_OUTPUT_ROOTS` must be a nonempty JSON array of
+approved absolute workspace roots. Traversal and symlinks outside those roots
+are rejected. Media remains bounded to 32 MiB. Attach the saved path through the
+requesting host's media/message interface; a successful tool call alone is not
+delivery.
+
+An explicitly approved private deployment can set `EASEL_PRIVATE_BASE_URL` and
+`EASEL_PRIVATE_ADDRESS`, along with the matching `EASEL_BASE_URL` and an empty
+`EASEL_API_KEY`. This pins HTTP to a private peer, preserves the origin Host,
+bypasses inherited proxies and rejects credentials, cookies and redirects.
+It relies on existing server-side network authentication/ACLs, not globally
+disabled authentication. Ordinary authenticated endpoint behavior is unchanged.
+
+Thor uses the pinned `mcp/easel-mcp` launcher under the shared `easel-image`
+skill. `list easel --schema` discovers tools and `call easel.list_models`
+checks live connectivity. No MCP HTTP listener, local TLS or protected-key
+binding changes are required. Accepted jobs must be retrieved by their original
+IDs unless the host explicitly implements a durable monitor.
+
+Required release gate: `scripts/check-media-mcp-contract.sh`. It builds and tests
+the client and runs real API/graph contracts with fake backends, including H3
+submission and complete audio request-field coverage. Set `EASEL_API_SOURCE` if
+the server checkout is not the sibling `easel` directory. These tests spend no
+generation credits; live generation/visual acceptance is separate.
+
+The API/graph tests live in this repository at
+`packages/media-mcp/test-api/test_easel_contract.py`; the gate imports the actual
+Easel app and fake backend fixtures from the selected server checkout. It does
+not require unpublished edits to the server's own contract-test file.
+
+## MCP Versus API And Private Routing
+
+MCP is an agent-facing adapter, not another media backend. The request path is:
+
+```text
+agent -> local mcporter/MCP stdio process -> Easel HTTP API -> media backend
+```
+
+Music, speech, sound, image and video tools all call the existing Easel API.
+The new adapters provide typed controls, receipt tracking, safe retrieval and
+host-compatible output. These additions target standalone MCP hosts such as
+OpenClaw. Electron retains its existing tool allowlist and asset bridge; adding
+audio playback/ingestion to its UI is not part of this release.
+
+A client connected to Headscale can also call an authorized private API endpoint
+directly without MCP. Private access still requires working routing, the expected
+Host header and existing server/peer authorization. Merely joining Headscale is
+not permission to access every service. The opt-in transport below is useful when
+private DNS is unavailable and this particular origin/peer is operator-approved;
+ordinary configured HTTP(S) endpoints remain supported.
+
+The HTTP API exchange remains on either route. A direct WireGuard peer connection
+avoids a DERP relay; using the private service route can also avoid a remote
+reverse-proxy detour. Neither removes the API request/response or backend
+processing time. STUN helps discover a possible direct path but is not evidence
+that a specific connection is using it. Verify the active path with
+`tailscale ping <peer>`; it can vary by runtime/network conditions. This adapter
+does not change STUN, DERP, Headscale ACLs or the API's authorization policy.
+
 Standalone TypeScript MCP server for Easel media tools. It uses the stdio transport so a local or headless agent can run the server as a child process. It does not expose an HTTP listener.
 
 ## Build and run
@@ -17,12 +105,19 @@ Set `EASEL_BASE_URL` to an alternate HTTP(S) Easel endpoint if needed. `EASEL_AP
 Tools:
 - `list_models` — list validated Easel models.
 - `generate_image` — generate an image and return image content plus non-secret metadata.
+- `get_image_job` - follow an accepted image job without resubmitting it.
+- `download_image` - retrieve an existing image from the configured API origin.
 - `edit_image` - edit one or more reference images with a prompt; optional masks depend on provider support.
 - `create_image_variation` - make variations from a reference image.
 - `discover_video_capabilities` - read the selected endpoint’s typed bounds and guide-node availability without generation.
 - `list_video_loras` - read curated LoRA support, installation, requirements and validation evidence.
 - `generate_video` - submit a typed basic or advanced video job, returning its durable job ID and status.
 - `get_video` - check that job and download completed MP4/WebM media as an embedded MCP resource.
+- `generate_music`, `generate_speech`, `generate_sound` - submit typed Easel audio requests once.
+- `get_audio_generation_status` - inspect the current shared-browser attempt.
+- `get_audio_track` - inspect a captured track UUID independently of the latest attempt.
+- `download_audio` - retrieve an existing track in its actual encoding.
+- `abandon_audio_generation` - explicitly abandon an exact unconfirmed attempt after human authorization.
 - `capture_canvas_screenshot` — render offline HTML with local image assets and return a PNG.
 
 ## Endpoints and model routing
@@ -45,7 +140,7 @@ The Easel application supplies `EASEL_MEDIA_MODELS` as a JSON array of enabled m
 ]
 ```
 
-With this configuration, media tools require the exact `id` returned by `list_models`. The server selects that entry's endpoint, key, and provider model. Optional `mediaTypes` narrows tool routing to discovered image/video/audio output types; unspecified types remain unknown. An empty array disables generation, video discovery and video retrieval tools. Without the array, standalone tools use `EASEL_BASE_URL` and `EASEL_API_KEY`. A provider model is required for video generation. Audio models can be categorized now, but audio generation tools will be added when an endpoint contract is available.
+With this configuration, media tools require the exact `id` returned by `list_models`. The server selects that entry's endpoint, key, and provider model. Optional `mediaTypes` narrows tool routing to discovered image/video/audio output types; unspecified types remain unknown. An empty array disables generation, video discovery and video retrieval tools. Without the array, standalone tools use `EASEL_BASE_URL` and `EASEL_API_KEY`. A provider model is required for video generation. Typed audio generation and lifecycle tools implement Easel's /v1/audio contract for suno-music, suno-speech and suno-sound.
 
 ## Video jobs
 
@@ -57,7 +152,7 @@ Completion queues a durable notification for the originating conversation. The i
 
 ### Queued Image Contract (Proposed)
 
-Image generation/edit/variation requests send `Prefer: respond-async`. Existing synchronous `data:[{b64_json}]` responses remain supported. A queue-capable endpoint can return HTTP 202 with `{id,status,progress}` and optional `queue_position`, `queue_ahead`, `estimated_wait_seconds`, `estimated_completion_at` (Unix seconds). The adapter preserves that receipt in the shared monitor. Proposed `GET /v1/images/jobs/{id}` returns the same job status and, when completed, `data:[{b64_json}]`. This retrieval path requires upstream support and is used only after receiving an actual image job ID. Audio jobs can reuse the shared receipt/status/storage lifecycle once their generation endpoint is implemented.
+Image generation/edit/variation requests send `Prefer: respond-async`. Existing synchronous `data:[{b64_json}]` responses remain supported. A queue-capable endpoint can return HTTP 202 with `{id,status,progress}` and optional `queue_position`, `queue_ahead`, `estimated_wait_seconds`, `estimated_completion_at` (Unix seconds). The adapter preserves that receipt in the shared monitor. Proposed `GET /v1/images/jobs/{id}` returns the same job status and, when completed, `data:[{b64_json}]` or same-origin `data:[{url}]`. This retrieval path requires upstream support and is used only after receiving an actual image job ID. Audio uses a shared-browser attempt and captured track UUIDs, not the image/video job queue.
 
 Easel's live API exposes multipart `POST /v1/videos`, JSON `GET /v1/videos/{video_id}` and binary `GET /v1/videos/{video_id}/content`. Public server source may lag the deployed API. Video requests use shared endpoint normalization, credentials, cancellation, error handling and bounded download helpers with the image transport.
 

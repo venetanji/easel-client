@@ -97,5 +97,6 @@ export async function requestBinary(url: string, init: RequestInit, apiKey: stri
   finally { reader.releaseLock(); }
   init.signal?.throwIfAborted();
   if (!total) throw new Error('The media endpoint returned empty content.');
+  if (response.headers.has('content-length') && total !== length) throw new Error('The media endpoint returned truncated content.');
   return { bytes: Buffer.concat(chunks, total), mimeType: (response.headers.get('content-type') || '').split(';')[0]!.trim().toLowerCase() };
 }

@@ -13,6 +13,9 @@ export interface GenerateVideoInput {
   seconds?: number;
   size?: string;
   inputReference?: ImageUpload;
+  frames?: number;
+  semanticReferences?: ImageUpload[];
+  temporalGroups?: Array<{ frameIndex: number; images: ImageUpload[] }>;
   cameraLora?: typeof CAMERA_LORAS[number];
   cameraLoraStrength?: number;
   loras?: Array<{ id: string; strength?: number }>;
@@ -46,7 +49,8 @@ export async function generateVideo(options: GenerateVideoInput & ProviderOption
   const form = new FormData();
   form.append('prompt', prompt);
   form.append('model', model);
-  form.append('seconds', String(input.seconds ?? 4));
+  const h3 = model === 'minimax-h3';
+  form.append(h3 ? 'frames' : 'seconds', String(h3 ? input.frames ?? 124 : input.seconds ?? 4));
   if (size !== undefined) form.append('size', size);
   for (const [key, field] of Object.entries({ cameraLora: 'camera_lora', cameraLoraStrength: 'camera_lora_strength', seed: 'seed', motionSpeed: 'motion_speed', loraReferenceStrength: 'lora_reference_strength' }) as Array<[keyof GenerateVideoInput, string]>) {
     if (input[key as keyof typeof input] !== undefined) form.append(field, String(input[key as keyof typeof input]));
@@ -56,6 +60,7 @@ export async function generateVideo(options: GenerateVideoInput & ProviderOption
   const upload = (field: string, image: ImageUpload, label: string) => {
     try {
       const decoded = decodeImageUpload(image, label, MAX_INPUT_BYTES - totalBytes);
+      if (h3 && !['image/png', 'image/jpeg'].includes(decoded.mimeType)) invalidVideoArguments('H3 accepts only PNG/JPEG still images.');
       totalBytes += decoded.bytes.length;
       appendImage(form, field, decoded);
     } catch (error) { invalidVideoArguments(error instanceof Error ? error.message : 'Invalid video image upload.'); }
@@ -65,6 +70,19 @@ export async function generateVideo(options: GenerateVideoInput & ProviderOption
   if (input.guidingFrames) {
     form.append('guiding_frames', JSON.stringify(input.guidingFrames.map((guide, index) => ({ image_index: index, frame_index: guide.frameIndex, strength: guide.strength ?? 1 }))));
     for (const [index, guide] of input.guidingFrames.entries()) upload('guiding_images', guide.image, `Guiding image ${index + 1}`);
+  }
+  let imageIndex = 0;
+  if (input.semanticReferences) {
+    form.append('semantic_references', JSON.stringify(input.semanticReferences.map(image => {
+      upload('images', image, 'H3 semantic reference');
+      return { image_index: imageIndex++ };
+    })));
+  }
+  if (input.temporalGroups) {
+    form.append('temporal_groups', JSON.stringify(input.temporalGroups.map(group => ({
+      frame_index: group.frameIndex,
+      image_indices: group.images.map(image => { upload('images', image, 'H3 temporal image'); return imageIndex++; }),
+    }))));
   }
   const apiKey = options.apiKey || '';
   const result = await requestJson(`${normalizeEaselBaseUrl(options.baseUrl)}/v1/videos`, {
