@@ -36,7 +36,7 @@
       * { scrollbar-color: #aab8ac transparent; scrollbar-width: thin; }
       *::-webkit-scrollbar { width: 9px; height: 9px; }
       *::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 8px; background: #aab8ac; background-clip: padding-box; }
-      .studio { --left-column-width: 360px; width: 100%; height: 100%; min-width: 0; min-height: 0; display: grid; grid-template-columns: 44px minmax(280px, var(--left-column-width)) 1px minmax(300px, 1fr); grid-template-rows: 48px minmax(0, 1fr); }
+      .studio { --left-column-width: 360px; width: 100%; height: 100%; min-width: 0; min-height: 0; display: grid; grid-template-columns: 68px minmax(280px, var(--left-column-width)) 1px minmax(300px, 1fr); grid-template-rows: 48px minmax(0, 1fr); }
       .topbar { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; gap: 20px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--paper); }
       .brand { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 0 0 auto; }
       .brand-mark { width: 26px; height: 26px; display: block; flex-shrink: 0; color: var(--green); }
@@ -64,17 +64,20 @@
       .activity-button[aria-pressed="true"] { color: var(--green-deep); background: var(--green-wash); }
       .activity-button[aria-pressed="true"]::after { position: absolute; left: -4px; width: 2px; height: 20px; background: var(--green); content: ""; }
       .activity-button svg { width: 19px; height: 19px; }
+      #nav-templates { width: 60px; height: 50px; align-content: center; gap: 3px; }
+      .activity-label { font-size: 10px; font-weight: 650; line-height: 1.2; }
+      #nav-templates[aria-pressed="true"] { font-weight: 700; box-shadow: inset 0 0 0 1px #aabdab; }
       .chat-unread { position: absolute; top: 0; right: -1px; min-width: 17px; height: 17px; display: grid; place-items: center; border-radius: 9px; padding: 0 4px; color: white; background: var(--coral); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; pointer-events: none; }
       .media-generating { position: absolute; bottom: 0; right: 0; width: 15px; height: 15px; display: grid; place-items: center; border-radius: 50%; color: var(--green); background: var(--paper-deep); pointer-events: none; }
       .media-generating::after { width: 9px; height: 9px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: media-job-turn 1s linear infinite; content: ""; }
-      .studio[data-sidebar="closed"] { grid-template-columns: 44px 0 0 minmax(0, 1fr); }
+      .studio[data-sidebar="closed"] { grid-template-columns: 68px 0 0 minmax(0, 1fr); }
       .studio[data-sidebar="closed"] .left-column, .studio[data-sidebar="closed"] .workbench-splitter { display: none; }
       .left-column { position: relative; grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
       .workbench-splitter { position: relative; z-index: 5; grid-column: 3; grid-row: 2; width: 9px; margin-left: -4px; cursor: col-resize; touch-action: none; }
       .workbench-splitter::before { position: absolute; inset: 0 4px; background: var(--line); content: ""; transition: background-color 120ms ease; }
       .workbench-splitter:hover::before, .workbench-splitter:focus-visible::before, .workbench-splitter.is-dragging::before { background: var(--green); }
       .panel { min-width: 0; min-height: 0; background: var(--paper); }
-      .library, .media-drawer { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; overflow: hidden; background: var(--paper); animation: drawer-reveal 180ms cubic-bezier(.16, 1, .3, 1); }
+      .library, .media-drawer, .templates-drawer { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; overflow: hidden; background: var(--paper); animation: drawer-reveal 180ms cubic-bezier(.16, 1, .3, 1); }
       .section-head { min-height: var(--panel-header-height); display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
       .section-head h2 { flex: 0 0 auto; }
       .library-panel-content { min-height: 0; display: flex; flex: 1; flex-direction: column; overflow: auto; }
@@ -107,6 +110,32 @@
       .kit-availability strong { color: #2e4438; font-size: 12px; }
       .kit-availability small { margin-top: 4px; color: #5e6c63; font-size: 12px; line-height: 1.4; }
       .kit-status { min-height: 18px; margin: 10px 19px 16px; color: var(--muted); font-size: 12px; }
+      .templates-content { min-height: 0; overflow: auto; padding: 4px 16px 20px; }
+      .templates-intro, .templates-status { margin: 12px 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .templates-status:empty { display: none; }
+      .templates-status[data-error="true"] { color: var(--coral); }
+      .template-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 3px 8px; padding: 13px 0; border-bottom: 1px solid var(--line); }
+      .template-entry h3, .template-choice { margin: 0; color: var(--ink); font-size: 13px; font-weight: 650; text-align: left; }
+      .template-choice { min-height: 30px; border: 0; border-radius: 5px; padding: 4px 6px; margin: -4px -6px; background: transparent; }
+      .template-choice:hover, .template-choice[aria-pressed="true"] { color: var(--green); background: var(--green-wash); }
+      .template-state { color: var(--muted); font-size: 11px; }
+      .template-entry p { grid-column: 1 / -1; margin: 3px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .template-detail { margin-top: 22px; color: var(--ink); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+      .template-detail-title { margin: 0 0 10px; font: 600 20px/1.2 var(--display); }
+      .template-technical, .template-planned { margin-top: 18px; }
+      .template-technical summary, .template-planned summary { min-height: 32px; padding-block: 7px; color: var(--green); cursor: pointer; font-size: 12px; font-weight: 600; }
+      .template-technical summary:focus-visible, .template-planned summary:focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
+      .template-detail h4 { margin: 16px 0 4px; font-size: 12px; }
+      .template-detail p { margin: 7px 0; }
+      .template-detail ul { margin: 4px 0; padding-left: 18px; }
+      .template-detail li + li { margin-top: 4px; }
+      .template-kits, .template-context { color: var(--muted); }
+      .template-unavailable { color: var(--coral); }
+      .template-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+      .template-actions .button { max-width: 100%; white-space: normal; text-align: left; }
+      .template-recovery { margin: 12px 0 18px; padding-bottom: 16px; border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+      .template-recovery h3 { margin: 0 0 5px; font-size: 13px; }
+      .template-recovery p { margin: 0 0 10px; }
       .conversation { width: 100%; display: flex; flex-direction: column; overflow: hidden; }
       .conversation-head { min-height: var(--panel-header-height); display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px 0 14px; border-bottom: 1px solid #e5e7df; }
       .conversation-actions { display: flex; align-items: center; gap: 4px; }
@@ -518,8 +547,10 @@
         .topbar { grid-column: 1; gap: 12px; }
         .activity-bar { grid-column: 1; grid-row: 2; flex-direction: row; padding: 2px 8px; border-right: 0; border-bottom: 1px solid var(--line); }
         .activity-spacer { flex: 1; }
+        #nav-templates { width: 90px; height: 36px; grid-auto-flow: column; gap: 5px; }
+        .activity-label { font-size: 11px; }
         .activity-button[aria-pressed="true"]::after { right: auto; top: auto; bottom: -2px; left: calc(50% - 10px); width: 20px; height: 2px; }
-        .left-column { grid-column: 1; grid-row: 3; height: 580px; }
+        .left-column { grid-column: 1; grid-row: 3; height: min(580px, 60vh); height: min(580px, 60dvh); }
         .workbench-splitter { display: none; }
         .canvas-panel { grid-column: 1; grid-row: 4; min-height: 470px; }
         .studio[data-sidebar="closed"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 42px minmax(0, 1fr); }
@@ -536,7 +567,7 @@
         .project-switcher > label { display: none; }
         .project-switcher .button { padding-inline: 5px; }
         .topbar-actions { gap: 4px; }
-        .left-column { height: 560px; }
+        .left-column { height: min(560px, 60vh); height: min(560px, 60dvh); }
         .canvas-panel { min-height: 390px; }
         .settings-shell { grid-template-columns: 1fr; }
         .settings-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid var(--line); padding: 7px; }
@@ -582,17 +613,32 @@
           <span id="media-unread" class="chat-unread" aria-hidden="true" hidden></span>
           <span id="media-generating" class="media-generating" aria-hidden="true" hidden></span>
         </button>
+        <button id="nav-templates" class="activity-button" type="button" aria-label="Show templates" title="Templates" aria-pressed="false" aria-expanded="false" aria-controls="templates-drawer">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h14v14H3V3Zm0 5h14M8 8v9"/></svg>
+          <span class="activity-label">Templates</span>
+        </button>
         <span class="activity-spacer"></span>
         <button id="settings-open" class="activity-button" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-pressed="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 3-.5 2.4-1.7 1-2.3-.8-2.5 4.3 1.8 1.6v2L2.5 15 5 19.3l2.3-.8 1.7 1 .5 2.5h5l.5-2.5 1.7-1 2.3.8 2.5-4.3-1.8-1.5v-2l1.8-1.6L19 5.6l-2.3.8-1.7-1-.5-2.4Z"/><circle cx="12" cy="12.5" r="3.2"/></svg>
         </button>
       </nav>
-      <section class="left-column" aria-label="Chat, project files, and media">
+      <section class="left-column" aria-label="Chat, project files, media, and templates">
         <section id="project-drawer" class="panel library" aria-labelledby="library-title" hidden>
-          <div class="section-head"><h2 id="library-title">Project files</h2><div class="section-head-actions"><button id="canvas-undo" class="fold-button" type="button" aria-label="Undo canvas changes" title="Undo canvas changes" disabled><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h8a5 5 0 0 1 0 10M3 8l4-4M3 8l4 4"/></svg></button><button id="export-current" class="fold-button" type="button" aria-label="Download project ZIP" title="Download project ZIP" disabled><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 2v10m-4-4 4 4 4-4M3 13v4h14v-4"/></svg></button><button id="library-collapse" class="fold-button" type="button" aria-label="Close project files" title="Close drawer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div></div>
+          <div class="section-head"><h2 id="library-title">Project files</h2><div class="section-head-actions"><button id="canvas-undo" aria-describedby="canvas-undo-status" class="fold-button" type="button" aria-label="Undo canvas changes" title="Undo canvas changes" disabled><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h8a5 5 0 0 1 0 10M3 8l4-4M3 8l4 4"/></svg></button><button id="export-current" class="fold-button" type="button" aria-label="Download project ZIP" title="Download project ZIP" disabled><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 2v10m-4-4 4 4 4-4M3 13v4h14v-4"/></svg></button><button id="library-collapse" class="fold-button" type="button" aria-label="Close project files" title="Close drawer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div></div>
+          <p id="canvas-undo-status" class="empty-library" role="status" aria-live="polite" hidden></p>
           <div id="library-panel-content" class="library-panel-content">
             <div class="library-content project-documents" id="canvases-content"><div class="drawer-section-head"><h3>Canvases</h3><button id="drawer-new-document" class="button quiet small" type="button">New HTML</button></div><div id="canvases-list" class="canvas-list" aria-label="Project HTML documents"></div><p id="canvases-empty" class="empty-library">Select a project to browse its documents.</p><details class="project-files-details"><summary>Source files</summary><div id="project-source-files"></div></details></div>
             <section class="library-content project-kits" aria-labelledby="project-kits-title"><div class="drawer-section-head"><h3 id="project-kits-title">Canvas kits</h3></div><div id="project-kit-list" aria-label="Kits shared by project canvases"></div><p id="project-kit-status" role="status" aria-live="polite">Select a project to choose its kits.</p></section>
+          </div>
+        </section>
+        <section id="templates-drawer" class="panel templates-drawer" aria-labelledby="templates-title" hidden>
+          <div class="section-head"><h2 id="templates-title">Templates</h2><div class="section-head-actions"><button id="templates-refresh" class="button quiet small" type="button">Refresh</button><button id="templates-collapse" class="fold-button" type="button" aria-label="Close templates" title="Close drawer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div></div>
+          <div class="templates-content">
+            <p class="templates-intro">Start with an editable sketch. Choose a template to see its outputs, limits and project options.</p>
+            <p id="templates-status" class="templates-status" role="status" aria-live="polite"></p>
+            <section id="templates-recovery" class="template-recovery" aria-label="Saved sketch recovery" hidden></section>
+            <div id="templates-list" aria-label="Template catalog"></div>
+            <section id="templates-detail" class="template-detail" aria-labelledby="template-detail-title" hidden></section>
           </div>
         </section>
         <section id="media-drawer" class="panel media-drawer" aria-labelledby="media-drawer-title" hidden>
@@ -659,7 +705,7 @@
         </section>
       </section>
       <div id="workbench-splitter" class="workbench-splitter" role="separator" aria-label="Resize sidebar and canvas panels" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="55" aria-valuenow="36" tabindex="0"></div>
-      <section class="panel canvas-panel" aria-label="HTML canvas workspace">
+      <section class="panel canvas-panel" aria-label="HTML canvas workspace" tabindex="-1">
         <h2 id="canvas-title" hidden>Canvas</h2>
         <div class="canvas-tabs"><div id="open-canvas-tabs" class="canvas-tab-list" role="group" aria-label="Open project files and images"></div><button id="open-video-editor" class="button quiet small" type="button" title="Open the editable video editor template">Video editor</button><button id="new-canvas-open" class="canvas-tab-add" type="button" aria-label="New HTML canvas" title="New HTML canvas"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button></div>
         <div id="canvas-host" class="canvas-host">
@@ -812,6 +858,7 @@
     <script src="./media-tool-results.js"></script>
     <script src="./connection-settings.js"></script>
     <script src="./project-workspace.js"></script>
+    <script src="./templates-drawer.js"></script>
     <script src="./themed-dropdown.js"></script>
     <script src="./agent-control-ui.js"></script>
     <script src="./setup-wizard.js"></script>

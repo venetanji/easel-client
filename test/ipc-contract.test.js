@@ -42,8 +42,9 @@ test('accepts only offline canvas kits at the IPC boundary', () => {
   assert.deepEqual(validateCanvasKits(), []);
   assert.throws(() => validateCanvasKits({ tone: true }), /kit preferences are invalid/i);
   assert.throws(() => validateCanvasKits(['https://cdn.example/tone.js']), /kit preference is invalid/i);
-  assert.throws(() => validateCanvasKits(['strudel']), /kit preference is invalid/i);
-  assert.throws(() => validateCanvasKits(Array(8).fill('tone')), /kit preferences are invalid/i);
+  assert.deepEqual(validateCanvasKits(['strudel']), ['strudel']);
+  assert.throws(() => validateCanvasKits(['unknown-kit']), /kit preference is invalid/i);
+  assert.throws(() => validateCanvasKits(Array(9).fill('tone')), /kit preferences are invalid/i);
 });
 
 test('project kit updates require an explicit selection and the inspected revision', () => {

@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const BUNDLED_CANVAS_KITS = Object.freeze(['three', 'phaser', 'matter', 'tone', 'p5']);
+const BUNDLED_CANVAS_KITS = Object.freeze(['three', 'phaser', 'matter', 'tone', 'p5', 'strudel']);
 const MAX_CANVAS_KIT_BYTES = 8 * 1024 * 1024;
 const TONE_OFFLINE_CLOCK_MARKER = '/* easel-tone-offline-clock-v1 */';
 const TONE_OFFLINE_SETUP = `${TONE_OFFLINE_CLOCK_MARKER}

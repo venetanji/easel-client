@@ -26,6 +26,29 @@ jobs:
         env:
           EASEL_RUN_BROWSER_TESTS: '1'
       - run: npm run build
+      - name: Configure Electron sandbox helper on disposable CI
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        run: |
+          set -euo pipefail
+          node scripts/ci-electron-sandbox-helper.cjs --preflight
+          node node_modules/electron/install.js
+          helper="$(node scripts/ci-electron-sandbox-helper.cjs)"
+          sudo chown root:root -- "$helper"
+          sudo chmod 4755 -- "$helper"
+          test "$(stat -c '%u:%g:%a' -- "$helper")" = "0:0:4755"
+      - name: Verify constrained offline Strudel runtime
+        timeout-minutes: 2
+        run: xvfb-run -a node scripts/probe-strudel-runtime.cjs
+      - name: Retain Strudel runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: strudel-runtime-evidence
+          path: |
+            /tmp/easel-strudel-probe-*/electron.log
+            /tmp/easel-strudel-probe-*/stages.log
+            /tmp/easel-strudel-probe-*/evidence.json
+          if-no-files-found: ignore
       - name: Verify offline video composition and export
         run: xvfb-run -a npm run test:video-export
       - name: Verify native editor preview geometry

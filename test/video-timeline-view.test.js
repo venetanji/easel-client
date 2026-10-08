@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createVideoTimelineView, frameToPixels, pixelToFrame, getPreviewLayers } = require('../src/video-timeline-view');
+const { createVideoTimelineView, frameToPixels, pixelToFrame, getPreviewLayers, confirmTimelineTrackDeletion } = require('../src/video-timeline-view');
 
 function element(tagName = 'div') {
   let text = '';
@@ -19,6 +19,8 @@ function element(tagName = 'div') {
     addEventListener(name, fn) { const all = listeners.get(name) || []; all.push(fn); listeners.set(name, all); },
     removeEventListener(name, fn) { listeners.set(name, (listeners.get(name) || []).filter((entry) => entry !== fn)); },
     async dispatchEvent(event) { event.target ||= this; event.currentTarget = this; event.preventDefault ||= () => {}; event.stopPropagation ||= () => {}; for (const fn of [...(listeners.get(event.type) || [])]) await fn(event); },
+    contains(target) { return this === target || this.children.some(child => child.contains(target)); },
+    showModal() { this.open = true; }, close() { this.open = false; },
     getBoundingClientRect() { return { left: 0, top: 0, width: 960, height: 56 }; },
     focus() { if (this.disabled) return; this.focused = true; if (this.ownerDocument) this.ownerDocument.activeElement = this; },
     setPointerCapture() {}, releasePointerCapture() {},
@@ -33,7 +35,7 @@ function timeline(id = 'timeline-a', revision = 1) {
     tracks: [{ id: 'video-1', type: 'video', name: 'Video' }, { id: 'audio-1', type: 'audio', name: 'Audio' }, { id: 'overlay-1', type: 'overlay', name: 'Overlay' }],
     items: [{ id: 'clip-1', trackId: 'video-1', startFrame: 24, endFrame: 72, assetId: 'asset-video', sourceStartSeconds: 1, sourceEndSeconds: 3, sourceDurationSeconds: 8, name: 'Coast', gain: 0.5 }], transitions: [] };
 }
-function fixture({ initial = timeline(), assets = [{ id: 'asset-video', mimeType: 'video/mp4', name: 'Coast', duration: 8 }, { id: 'asset-image', mimeType: 'image/png', name: 'Title' }], overrides = {} } = {}) {
+function fixture({ initial = timeline(), assets = [{ id: 'asset-video', mimeType: 'video/mp4', name: 'Coast', duration: 8 }, { id: 'asset-image', mimeType: 'image/png', name: 'Title' }], overrides = {}, viewOptions = {} } = {}) {
   let stored = clone(initial);
   const calls = [], selections = [], statuses = [], urls = [], revoked = [];
   const frames = new Map(); let frameId = 0;
@@ -64,7 +66,7 @@ function fixture({ initial = timeline(), assets = [{ id: 'asset-video', mimeType
     async redoTimeline(projectId, input) { calls.push(['redo', projectId, input]); stored.revision += 1; return clone(stored); },
     ...overrides,
   };
-  const view = createVideoTimelineView({ document, container, client, onSelection: (selection) => selections.push(selection), onStatus: (status) => statuses.push(status) });
+  const view = createVideoTimelineView({ document, container, client, onSelection: (selection) => selections.push(selection), onStatus: (status) => statuses.push(status), ...viewOptions });
   const all = (predicate, node = container) => [node, ...node.children.flatMap((child) => all(predicate, child))].filter(predicate);
   const role = (name) => all((node) => node.dataset.role === name)[0];
   const item = (id) => all((node) => node.dataset.itemId === id)[0];
@@ -761,6 +763,47 @@ test('Alt dragging a trim grip moves only the selection', async () => {
   assert.equal(f.view.getSelection().startFrame,36); assert.equal(f.view.getSelection().endFrame,84);
 });
 
+// Source-contract checks are deliberate: native hit testing lives in the CI
+// smoke fixture; the ordinary node suite does not render CSS.
+function timelineStyle(selector) {
+  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/video-timeline.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, selectors]) => selectors.trim().split(/,\s*/).includes(selector));
+  return Object.fromEntries(rules.flatMap(([, , declarations]) => declarations.split(';').filter(part => part.includes(':')).map(part => part.trim().split(/:\s*/, 2))));
+}
+
+test('timeline stylesheet reserves a full selection target above the clip drag band', () => {
+  const range = timelineStyle('.timeline-range-handle');
+  const clip = timelineStyle('.timeline-clip');
+  const trim = timelineStyle('.timeline-clip-trim');
+  assert.ok(parseFloat(range.width) >= 24 && parseFloat(range.height) >= 24, 'Selection handles need at least a 24 × 24 px target');
+  assert.ok(parseFloat(clip.top) >= parseFloat(range.height), 'Selection handles must not intercept the clip drag band');
+  assert.equal(trim.top, clip.top); assert.equal(trim.bottom, clip.bottom);
+  assert.equal(timelineStyle('.timeline-track-lane').height, '72px', 'Enlarging targets must retain compact track rows');
+});
+
+test('timeline stylesheet keeps readable track actions in a compact two-line header', () => {
+  const header = timelineStyle('.timeline-track-label');
+  const row = timelineStyle('.timeline-track-row > .timeline-track-label');
+  const action = timelineStyle('.timeline-track-order-button');
+  assert.ok(parseFloat(header.width) <= 160, 'Track labels should leave more of the narrow timeline available for clips');
+  assert.equal(row.display, 'grid', 'Track name and clip count share a line above the actions');
+  assert.ok(parseFloat(action['min-height']) >= 28 && parseFloat(action['min-width']) >= 28);
+  assert.ok(parseFloat(action['font-size']) >= 11, 'Actions must remain readable without hover');
+  assert.equal(timelineStyle('.timeline-track-order')['grid-column'], '1 / -1');
+});
+
+test('normal clips have 24 px trim targets without changing frame positions or body geometry', async () => {
+  const f = fixture(); await f.view.open('project-a');
+  const clip = f.item('clip-1');
+  assert.equal(clip.style.left, '72px'); assert.equal(clip.style.width, '144px');
+  assert.equal(clip.style.paddingInline, '24px', 'Clip text stays clear of the enlarged trim grips');
+  for (const edge of ['start', 'end']) {
+    const handle = f.all(node => node.dataset.role === `clip-trim-${edge}`)[0];
+    assert.equal(handle.style.width, '24px');
+    assert.equal(handle.style.left, edge === 'start' ? '72px' : '216px');
+  }
+});
+
 test('short clips keep a body hit target between proportionally sized trim grips', async () => {
   const doc=timeline(); doc.items[0].endFrame=30; doc.items[0].sourceEndSeconds=1.25;
   const f=fixture({initial:doc}); await f.view.open('project-a');
@@ -839,4 +882,227 @@ test('latest keyboard library refresh wins without silently changing the chosen 
   pending[3].resolve([{ id: 'new-image', mimeType: 'image/png', name: 'Latest' }]); await latest;
   pending[2].reject(new Error('Outdated error')); await oldError;
   assert.doesNotMatch(f.role('status').textContent, /Outdated error/);
+});
+
+const { templateFixture } = require('./helpers/template-lifecycle');
+function deletionFixture(t, { count = 2, viewOptions = {} } = {}) {
+  const real = templateFixture(t), record = real.records[0];
+  const clips = Array.from({ length: count }, (_, i) => ({ ...real.clip, id: `clip-${i}`, startFrame: i * 24, endFrame: (i + 1) * 24 }));
+  for (let i = 0; i < clips.length; i += 100) real.controller.apply(real.projectId, record.timelineId, { expectedRevision: i / 100, operations: clips.slice(i, i + 100).map(item => ({ type: 'insert', item })) });
+  const calls = [];
+  const f = fixture({ initial: real.controller.read(real.projectId, record.timelineId), assets: real.canvases.listAssets(real.projectId).assets, viewOptions,
+    overrides: {
+      readTimeline: async () => real.controller.read(real.projectId, record.timelineId),
+      getTimelineHistory: async () => real.controller.history(real.projectId, record.timelineId),
+      getProjectAsset: async (_id, assetId) => real.canvases.getAsset(real.projectId, assetId),
+      applyTimeline: async (_id, input) => { calls.push(clone(input)); return real.controller.apply(real.projectId, record.timelineId, input); },
+      undoTimeline: async (_id, input) => real.controller.undo(real.projectId, record.timelineId, input),
+      redoTimeline: async (_id, input) => real.controller.redo(real.projectId, record.timelineId, input),
+    } });
+  return { ...f, real, edits: calls, read: () => real.controller.read(real.projectId, record.timelineId), trackDelete: id => f.all(node => node.dataset.role === 'remove-track' && node.dataset.trackId === id)[0] };
+}
+async function selectAllClips(f) {
+  await f.change(f.role('range-start'), 0); await f.change(f.role('range-end'), f.read().items.length * 24);
+  await f.change(f.role('range-track'), 'video-1'); await f.click(f.role('select-range'));
+}
+async function deleteKey(f, target, options = {}) {
+  let prevented = false;
+  await f.container.children[0].dispatchEvent({ type: 'keydown', key: 'Delete', target, preventDefault: () => { prevented = true; }, ...options });
+  await settle(); return prevented;
+}
+
+test('visible clip deletion uses one real edit and Undo while source media and HTML stay unchanged', async t => {
+  const f = deletionFixture(t); await f.view.open(f.real.projectId);
+  const before = f.read(), source = f.real.canvases.getDocumentSource(f.real.projectId, 'a.html');
+  const media = f.real.canvases.getAsset(f.real.projectId, f.real.clip.assetId), project = f.real.canvases.getProject(f.real.projectId);
+  const otherTimeline = f.real.bytes(f.real.records[1]);
+  assert.equal(f.role('remove-clip').disabled, true);
+  await f.click(f.item('clip-0'));
+  assert.equal(f.role('remove-clip').textContent, 'Delete clip');
+  assert.notEqual(f.role('remove-clip').parentNode, f.role('inspector'));
+  assert.equal(f.role('inspector').open, false);
+  await selectAllClips(f);
+  assert.match(f.role('remove-clip').textContent, /Delete selected clips.*2/);
+  await f.click(f.role('remove-clip'));
+  assert.equal(f.edits.length, 1); assert.equal(f.edits[0].operations.length, 2);
+  assert.equal(f.read().items.length, 0); assert.equal(f.view.getSelection(), null);
+  assert.match(f.role('status').textContent, /Deleted 2 clips.*Undo.*Media/i);
+  await f.click(f.role('undo')); assert.deepEqual(f.read().items, before.items);
+  assert.deepEqual(f.read().tracks, before.tracks);
+  assert.deepEqual(f.real.canvases.getAsset(f.real.projectId, f.real.clip.assetId), media);
+  assert.deepEqual(f.real.canvases.getProject(f.real.projectId), project);
+  assert.deepEqual(f.real.canvases.getDocumentSource(f.real.projectId, 'a.html'), source);
+  assert.equal(f.real.bytes(f.real.records[1]), otherTimeline);
+  f.view.destroy();
+});
+
+test('track deletion displays clip count, cancels safely, then cascades above 99 clips in one real edit', async t => {
+  let finish; const requests = [];
+  const f = deletionFixture(t, { count: 101, viewOptions: { confirmDeleteTrack: input => { requests.push(input); return new Promise(resolve => { finish = resolve; }); } } });
+  await f.view.open(f.real.projectId); const before = f.read();
+  const control = f.trackDelete('video-1');
+  assert.match(control.textContent, /Delete track/); assert.match(control.getAttribute('aria-label'), /Video.*101 clips/i);
+  const pending = f.click(control); assert.equal(requests.length, 1); assert.equal(requests[0].clipCount, 101);
+  assert.equal(f.role('add-video-track').disabled, true); assert.equal(control.disabled, true);
+  await f.click(control); assert.equal(requests.length, 1);
+  finish(false); await pending; assert.deepEqual(f.read(), before); assert.equal(f.edits.length, 0);
+  const approved = f.click(control); finish(true); await approved;
+  assert.deepEqual(f.edits[0].operations, [{ type: 'remove-track', trackId: 'video-1', removeItems: true }]);
+  assert.equal(f.read().items.length, 0); assert.equal(f.read().tracks.length, 2);
+  await f.click(f.role('undo')); assert.deepEqual(f.read().items, before.items); assert.deepEqual(f.read().tracks, before.tracks);
+  f.view.destroy();
+});
+
+test('empty track deletes directly, and unavailable confirmation fails closed for populated tracks', async t => {
+  const f = deletionFixture(t); await f.view.open(f.real.projectId);
+  await f.click(f.trackDelete('audio-1'));
+  assert.deepEqual(f.edits[0].operations, [{ type: 'remove-track', trackId: 'audio-1' }]);
+  await f.click(f.trackDelete('video-1'));
+  assert.equal(f.edits.length, 1); assert.match(f.role('status').textContent, /confirmation.*unavailable/i);
+  f.view.destroy();
+});
+
+test('clip batch limits reject more than 100 clips without partial deletion and accept exactly 100', async t => {
+  const f = deletionFixture(t, { count: 101 }); await f.view.open(f.real.projectId); await selectAllClips(f);
+  assert.equal(f.role('remove-clip').disabled, true); assert.match(f.role('selection-summary').textContent, /101 clips.*100.*Delete track/i);
+  await f.click(f.role('remove-clip')); assert.equal(f.edits.length, 0); assert.equal(f.read().items.length, 101);
+  await f.change(f.role('range-end'), 2400); await f.click(f.role('select-range'));
+  await f.click(f.role('remove-clip')); assert.equal(f.edits[0].operations.length, 100); assert.equal(f.read().items.length, 1);
+  await f.click(f.role('undo')); assert.equal(f.read().items.length, 101);
+  f.view.destroy();
+});
+
+test('Delete and Backspace act only on a current selection owning timeline focus', async t => {
+  for (const key of ['Delete', 'Backspace']) {
+    const f = deletionFixture(t); await f.view.open(f.real.projectId); await f.click(f.item('clip-0'));
+    const clip = f.item('clip-0'); clip.focus();
+    assert.equal(await deleteKey(f, clip, { key, repeat: true }), false);
+    assert.equal(await deleteKey(f, clip, { key, ctrlKey: true }), false);
+    f.role('clip-start').focus(); assert.equal(await deleteKey(f, f.role('clip-start'), { key }), false);
+    const editable = f.document.createElement('div'); editable.setAttribute('contenteditable', 'true');
+    const text = f.document.createElement('span'); editable.append(text); f.container.children[0].append(editable); text.focus();
+    assert.equal(await deleteKey(f, text, { key }), false);
+    f.role('play').focus(); assert.equal(await deleteKey(f, f.role('play'), { key }), false);
+    f.item('clip-1').focus(); assert.equal(await deleteKey(f, f.item('clip-1'), { key }), false);
+    clip.focus(); const modal = f.document.createElement('dialog'); modal.open = true; f.container.append(modal);
+    f.document.querySelector = () => modal; assert.equal(await deleteKey(f, clip, { key }), false); f.document.querySelector = () => null; modal.remove();
+    const unrelated = f.document.createElement('button'); unrelated.dataset = { ...clip.dataset }; unrelated.focus(); assert.equal(await deleteKey(f, unrelated, { key }), false);
+    clip.focus(); f.view.setBusy(true); assert.equal(await deleteKey(f, clip, { key }), false); f.view.setBusy(false);
+    assert.equal(f.edits.length, 0); assert.equal(await deleteKey(f, clip, { key }), true);
+    assert.equal(f.edits.length, 1); assert.equal(f.read().items.length, 1); assert.equal(f.view.getSelection(), null);
+    assert.equal(await deleteKey(f, clip, { key }), false);
+    await f.click(f.role('undo')); assert.equal(f.read().items.length, 2); f.view.destroy();
+  }
+});
+
+test('stale selections and old rendered track buttons cannot delete a refreshed or reopened timeline', async t => {
+  const f = deletionFixture(t, { viewOptions: { confirmDeleteTrack: async () => true } });
+  await f.view.open(f.real.projectId); await f.click(f.item('clip-0'));
+  const clip = f.item('clip-0'), trackButton = f.trackDelete('video-1');
+  f.real.controller.apply(f.real.projectId, f.real.records[0].timelineId, { expectedRevision: 1, operations: [{ type: 'move', itemId: 'clip-0', startFrame: 48 }] });
+  await f.view.refresh(); assert.equal(f.role('remove-clip').disabled, true);
+  await f.click(f.role('remove-clip')); clip.focus(); assert.equal(await deleteKey(f, clip), false);
+  await f.click(trackButton); assert.equal(f.edits.length, 0);
+  await f.view.open('another-project'); await f.click(trackButton); assert.equal(f.edits.length, 0); f.view.destroy();
+});
+
+test('pending track confirmation rechecks revisions, busy state and view lifetime before mutating', async t => {
+  for (const interruption of ['refresh', 'busy', 'reopen', 'destroy']) {
+    let finish, request;
+    const f = deletionFixture(t, { viewOptions: { confirmDeleteTrack: input => { request = input; return new Promise(resolve => { finish = resolve; }); } } });
+    await f.view.open(f.real.projectId); const pending = f.click(f.trackDelete('video-1'));
+    if (interruption === 'refresh') {
+      f.real.controller.apply(f.real.projectId, f.real.records[0].timelineId, { expectedRevision: 1, operations: [{ type: 'move', itemId: 'clip-0', startFrame: 48 }] });
+      await f.view.refresh();
+    } else if (interruption === 'busy') f.view.setBusy(true);
+    else if (interruption === 'reopen') await f.view.open('another-project');
+    else f.view.destroy();
+    finish(true); await pending; assert.equal(f.edits.length, 0, interruption);
+    if (['reopen', 'destroy'].includes(interruption)) assert.equal(request.signal.aborted, true);
+    if (interruption !== 'destroy') f.view.destroy();
+  }
+});
+
+test('deletion remains single-flight through an in-progress mutation', async t => {
+  const f = deletionFixture(t); await f.view.open(f.real.projectId); await f.click(f.item('clip-0'));
+  const apply = f.client.applyTimeline; let finish;
+  f.client.applyTimeline = async (...args) => { await new Promise(resolve => { finish = resolve; }); return apply(...args); };
+  const pending = f.click(f.role('remove-clip')); await f.click(f.role('remove-clip')); await f.click(f.trackDelete('audio-1'));
+  assert.equal(f.edits.length, 0); finish(); await pending; assert.equal(f.edits.length, 1); f.view.destroy();
+});
+
+test('safe delete dialog uses text, defaults to Cancel and disposes on cancel, approval or abort', async () => {
+  const f = fixture(); const signal = new AbortController();
+  const confirm = () => confirmTimelineTrackDeletion({ document: f.document, container: f.container, trackName: '<img src=x onerror=alert(1)>', clipCount: 101, signal: signal.signal });
+  const pending = confirm(); const dialog = f.all(node => node.tagName === 'DIALOG')[0];
+  assert.ok(dialog.open); assert.match(dialog.textContent, /101 clips.*Undo.*Media/);
+  assert.equal(f.all(node => node.tagName === 'IMG').length, 0);
+  const cancel = f.all(node => node.textContent === 'Cancel')[0]; assert.equal(f.document.activeElement, cancel);
+  await f.click(cancel); assert.equal(await pending, false); assert.equal(f.all(node => node.tagName === 'DIALOG').length, 0);
+  const approved = confirm(); await f.click(f.all(node => node.tagName === 'BUTTON' && node.textContent === 'Delete track and 101 clips')[0]); assert.equal(await approved, true);
+  const aborted = confirm(); signal.abort(); assert.equal(await aborted, false); assert.equal(f.all(node => node.tagName === 'DIALOG').length, 0);
+  f.view.destroy();
+});
+
+test('confirmation errors and non-boolean approval cannot delete a populated track', async t => {
+  for (const result of ['yes', 1, {}, new Error('Dialog unavailable')]) {
+    const f = deletionFixture(t, { viewOptions: { confirmDeleteTrack: async () => { if (result instanceof Error) throw result; return result; } } });
+    await f.view.open(f.real.projectId); const before = f.read(); await f.click(f.trackDelete('video-1'));
+    assert.deepEqual(f.read(), before); assert.equal(f.edits.length, 0); assert.equal(f.trackDelete('video-1').disabled, false);
+    if (result instanceof Error) assert.match(f.role('status').textContent, /Could not confirm.*Dialog unavailable/);
+    f.view.destroy();
+  }
+});
+
+test('native dialog Escape/close cancel and dialog failure leaves no detached prompt', async () => {
+  const f = fixture();
+  const confirm = () => confirmTimelineTrackDeletion({ document: f.document, container: f.container, trackName: 'Audio', clipCount: 1 });
+  for (const type of ['cancel', 'close']) {
+    const pending = confirm(); const dialog = f.all(node => node.tagName === 'DIALOG')[0];
+    await dialog.dispatchEvent({ type }); assert.equal(await pending, false); assert.equal(f.all(node => node.tagName === 'DIALOG').length, 0);
+  }
+  const create = f.document.createElement;
+  f.document.createElement = tag => { const node = create(tag); if (tag === 'dialog') node.showModal = () => { throw new Error('Unsupported dialog'); }; return node; };
+  assert.equal(await confirm(), false); assert.equal(f.all(node => node.tagName === 'DIALOG').length, 0); f.view.destroy();
+});
+
+for (const origin of ['remove-clip', 'range-start-handle', 'range-end-handle', 'track-lane']) {
+  test(`successful deletion from ${origin} restores timeline focus after native blur and supports keyboard Undo`, async t => {
+    const f = deletionFixture(t); await f.view.open(f.real.projectId); await selectAllClips(f);
+    const target = origin === 'remove-clip' ? f.role(origin) : f.all(node => node.dataset.role === origin && node.dataset.trackId === 'video-1')[0];
+    target.focus(); const apply = f.client.applyTimeline; let finish;
+    f.client.applyTimeline = async (...args) => { await new Promise(resolve => { finish = resolve; }); return apply(...args); };
+    const pending = origin === 'remove-clip' ? f.click(target) : deleteKey(f, target);
+    f.document.body = element('body'); f.document.activeElement = f.document.body; // Native disabled/removed-node blur.
+    finish(); await pending; await settle();
+    assert.equal(f.read().items.length, 0); assert.equal(f.view.getSelection(), null);
+    assert.ok(f.document.activeElement === f.role('ruler'), 'Deletion must leave an enabled timeline focus target');
+    await f.container.children[0].dispatchEvent({ type: 'keydown', target: f.document.activeElement, key: 'z', ctrlKey: true }); await settle();
+    assert.equal(f.read().items.length, 2, 'Immediate keyboard Undo restores the deleted clips'); f.view.destroy();
+  });
+}
+
+test('deletion focus recovery does not run on failure or steal focus during async changes', async t => {
+  for (const interruption of ['failure', 'external-focus', 'modal', 'reopen', 'history-external-focus', 'history-modal']) {
+    const f = deletionFixture(t); await f.view.open(f.real.projectId); await selectAllClips(f);
+    const target = f.role('remove-clip'); target.focus(); const apply = f.client.applyTimeline; let finish;
+    f.document.body = element('body');
+    if (interruption.startsWith('history-')) {
+      const history = f.client.getTimelineHistory;
+      f.client.getTimelineHistory = async (...args) => { await new Promise(resolve => { finish = resolve; }); return history(...args); };
+    } else f.client.applyTimeline = async (...args) => { await new Promise(resolve => { finish = resolve; }); if (interruption === 'failure') throw new Error('Save failed'); return apply(...args); };
+    const pending = f.click(target); f.document.activeElement = f.document.body; await settle();
+    let expectedFocus = f.document.body;
+    if (interruption.endsWith('external-focus')) {
+      expectedFocus = f.document.createElement('button'); expectedFocus.dataset.role = 'track-lane'; expectedFocus.focus();
+    } else if (interruption.endsWith('modal')) {
+      const dialog = f.document.createElement('dialog'); dialog.open = true; f.document.querySelector = () => dialog;
+    } else if (interruption === 'reopen') {
+      await f.view.open('another-project'); expectedFocus = f.role('play'); expectedFocus.focus();
+    }
+    finish(); await pending; await settle();
+    assert.ok(f.document.activeElement === expectedFocus, interruption);
+    if (interruption === 'failure') assert.equal(f.read().items.length, 2);
+    f.view.destroy();
+  }
 });

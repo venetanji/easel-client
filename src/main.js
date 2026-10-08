@@ -1,5 +1,6 @@
 const path = require('node:path');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const {
   app,
@@ -39,12 +40,17 @@ const { getMainWindowGeometry } = require('./main-window-geometry');
 const { createAssetStore } = require('./asset-store');
 const { createCanvasStore } = require('./canvas-store');
 const { createCanvasView } = require('./canvas-view');
-const { createCanvasHistory } = require('./canvas-history');
+const { createCanvasHistory, restoreCanvasHistory } = require('./canvas-history');
+const { createTemplateInstanceStore } = require('./template-instance-store');
 const { createVideoTimelineStore } = require('./video-timeline-store');
 const { createVideoTimelineController } = require('./video-timeline-controller');
 const { timelineContextText } = require('./video-timeline-tools');
 const { createVideoTimelineBridge } = require('./video-timeline-bridge');
-const { createVideoTimelineTemplate } = require('./video-timeline-template');
+const { createStrudelExportRenderer } = require('./strudel-export-renderer');
+const { createStrudelExportController } = require('./strudel-export-controller');
+const { createStrudelExportBridge, assertStrudelScope } = require('./strudel-export-bridge');
+const { createTemplateService } = require('./template-service');
+const { registerTemplateIpc, chooseTemplateInstance } = require('./template-ipc');
 const { importMediaFiles } = require('./media-import');
 const { producedMediaAssets } = require('./media-tool-results');
 const { createChatService, defaultMcpLaunchOptions } = require('./chat-service');
@@ -60,6 +66,7 @@ const { decodeCodexImage } = require('./codex-image-output');
 const { handleMcpResult, formatRuntimeKitInstructions } = require('./agent');
 const { createChatStore } = require('./chat-store');
 const { createCanvasInputStore } = require('./canvas-input-store');
+const { canvasInputMatchesScope } = require('./canvas-input');
 const { renderCanvasInputScript, dismissCanvasInputScript } = require('./canvas-input-runtime');
 const { createCanvasMediaStore } = require('./canvas-media-store');
 const { createMediaJobStore, mediaJobSummary } = require('./media-job-store');
@@ -70,6 +77,7 @@ const { validateFilePath } = require('./canvas-project');
 const { createLiteLLMModelService } = require('./litellm-models');
 const { readInstalledSkills, assertHarnessSkills } = require('./skill-catalog');
 const { loadCanvasKitBundles } = require('./canvas-kits');
+const { createInstalledKitSourceReader } = require('./canvas-kit-source');
 const { availableCanvasKits, assertInstalledKits } = require('./canvas-kit-catalog');
 
 const SETTINGS = createSettingsStore({
@@ -130,16 +138,40 @@ const MEDIA_ASSETS = {
     return result;
   },
 };
-const CANVASES = createCanvasStore({ userDataPath: app.getPath('userData'), kitBundles: CANVAS_KIT_BUNDLES, assetStore: MEDIA_ASSETS, thumbnailFactory: projectThumbnail, readTimeline: (id) => TIMELINES.read(id) });
+const CANVASES = createCanvasStore({ userDataPath: app.getPath('userData'), kitBundles: CANVAS_KIT_BUNDLES, readKitSourceArchive: createInstalledKitSourceReader(path.join(app.getAppPath(), 'canvas-kits')), assetStore: MEDIA_ASSETS, thumbnailFactory: projectThumbnail, listTimelines: (id) => TIMELINES.list(id), listInstances: (id) => TEMPLATE_INSTANCES.list(id) });
 const CANVAS_HISTORY = createCanvasHistory();
 const TIMELINES = createVideoTimelineStore({ userDataPath: app.getPath('userData') });
-const TIMELINE_CONTROLLER = createVideoTimelineController({ store: TIMELINES, projectStore: CANVASES,
+const TEMPLATE_INSTANCES = createTemplateInstanceStore({ userDataPath: app.getPath('userData'), timelineStore: TIMELINES, projectStore: CANVASES });
+const TIMELINE_CONTROLLER = createVideoTimelineController({ store: TIMELINES, projectStore: CANVASES, instances: TEMPLATE_INSTANCES,
+  getActiveScope: () => currentTimelineScope(canvasView, { required: false }),
   getActiveProjectId: () => canvasView?.getCurrentCanvasId() || '',
   onChanged: (event) => emitAgentEvent(event),
 });
 let mainWindow;
 let canvasView;
 let canvasOperations = Promise.resolve();
+const TEMPLATES = createTemplateService({
+  projectStore: CANVASES, instanceStore: TEMPLATE_INSTANCES, timelineStore: TIMELINES, kitBundles: CANVAS_KIT_BUNDLES, history: CANVAS_HISTORY,
+  getCurrentProjectId: () => canvasView?.getCurrentCanvasId() || '',
+  saveBeforeSwitch: () => saveCanvasBeforeSwitch(requireCanvasView()),
+  // Agent tool dispatch already owns its authorized turn; drawer requests must wait.
+  isBusy: (context) => !context?.fromAgent && (CHAT.isBusy() || AGENT_CONTROL.isToolBusy()),
+  openDocument: async (projectId, documentPath) => {
+    try {
+      const opened = await requireCanvasView().openSaved(projectId, documentPath);
+      emitCanvasSaved(opened);
+      return { ...opened, ...CANVAS_HISTORY.getUndoState(projectId) };
+    } catch (error) {
+      // Add can commit while its preview fails. Refresh the still-open project's
+      // Undo boundary without claiming that a different project opened.
+      if (canvasView?.getCurrentCanvasId() === projectId) emitCanvasSaved({ id: projectId });
+      throw error;
+    }
+  },
+  // Actual editable starter lifecycle passed CI run 37299938626 at 2657bd4.
+  // Required kit installation is still checked by the shared template service.
+  strudelReady: true,
+});
 
 function withCanvas(action) {
   const result = canvasOperations.then(() => action(requireCanvasView()));
@@ -180,24 +212,32 @@ async function importLocalMedia(input = {}) {
   return result;
 }
 
-function openVideoEditorProject(input = {}) {
-  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['projectId', 'title', 'kits'].includes(key))) throw new Error('Video project options are invalid.');
-  if (input.projectId) validateOpaqueId(input.projectId, 'Project ID');
-  const title = validateCanvasTitle(input.title || 'Video project');
-  const kits = input.kits === undefined ? ['canvas-2d'] : validateCanvasKits(input.kits);
-  assertInstalledKits(kits, CANVAS_KIT_BUNDLES);
-  return withCanvas(async (controller) => {
-    await saveCanvasBeforeSwitch(controller);
-    const projectId = input.projectId || CANVASES.createProject({ title, kits }).id;
-    const documentPath = 'video-editor/index.html';
-    const docs = CANVASES.listDocuments(projectId).documents;
-    if (!docs.some((document) => document.path === documentPath)) CANVASES.createDocument(projectId, { path: documentPath, title: 'Video editor', html: createVideoTimelineTemplate() });
-    if (!input.projectId) CANVASES.updateManifest(projectId, { entry: documentPath });
-    if (!TIMELINES.read(projectId)) TIMELINES.create(projectId, {});
-    const opened = await controller.openSaved(projectId, documentPath);
-    emitCanvasSaved(opened);
-    return { ...opened, document: TIMELINES.read(projectId), undoAvailable: CANVAS_HISTORY.canUndo(projectId) };
-  });
+function currentTimelineScope(controller, { required = true } = {}) {
+  const projectId = controller?.getCurrentCanvasId();
+  const documentPath = controller?.getCurrentDocumentPath();
+  let binding = null;
+  if (projectId && documentPath) {
+    // The old renderer may still exist during failed/repeated cleanup after deletion.
+    try {
+      if (CANVASES.listDocuments(projectId).documents.some((entry) => entry.path === documentPath)) binding = TEMPLATE_INSTANCES.resolveDocument(projectId, documentPath);
+    } catch (error) { if (required) throw error; }
+  }
+  if (!binding?.timelineId) {
+    if (required) throw new Error('This document is not bound to a video template instance. Open its Video sketch.');
+    return null;
+  }
+  return { projectId, documentPath, instanceId: binding.instanceId, timelineId: binding.timelineId, runtimeGeneration: controller.getContract().runtimeGeneration };
+}
+
+async function openVideoEditorProject(input = {}, { fromAgent = false, choose = false } = {}) {
+  let result = await withCanvas(() => TEMPLATES.openVideoEditor(input, { fromAgent }));
+  while (choose && result.status === 'choice-required') {
+    const selection = await chooseTemplateInstance(result, (options) => dialog.showMessageBox(mainWindow, options));
+    if (!selection) return { canceled: true };
+    // Revalidate the selected host binding/candidate after the asynchronous dialog.
+    result = await withCanvas(() => TEMPLATES.openVideoEditor(selection, { fromAgent }));
+  }
+  return result;
 }
 
 function requireCanvasView() {
@@ -220,17 +260,17 @@ function emitCanvasSaved(canvas) {
       documentTitle: document.documentTitle,
       starterDocument: document.starterDocument === true,
       previewHidden: Boolean(current?.previewHidden),
-      undoAvailable: Boolean(canvasId && CANVAS_HISTORY.canUndo(canvasId)),
+      ...CANVAS_HISTORY.getUndoState(canvasId),
     });
   }
   recordControlChange({ type: 'canvas', canvasId, projectId: canvasId, title: document.projectTitle || document.title, documentPath: document.documentPath, documentTitle: document.documentTitle });
 }
 
-async function attachProjectAssets(controller, projectId, assetIds, { kits } = {}) {
+async function attachProjectAssets(controller, projectId, assetIds, { kits, beforeCommit } = {}) {
   const selected = projectId ? { id: projectId } : await controller.ensureProject({ kits });
   const id = validateOpaqueId(selected.id, 'Project ID');
   const before = CANVASES.get(id).html;
-  const result = await CANVASES.attachAssets(id, { assetIds });
+  const result = await CANVASES.attachAssets(id, { assetIds }, { beforeCommit });
   if (result.changed) CANVAS_HISTORY.record(id, before);
   let runtimeAssetsUpdated = false;
   let runtimeWarning = '';
@@ -239,7 +279,7 @@ async function attachProjectAssets(controller, projectId, assetIds, { kits } = {
     catch (error) { controller.markSourcePendingReload(); runtimeWarning = error.message; }
   }
   const project = CANVASES.getProject(id);
-  const metadata = { id, title: project.title, projectId: id, projectTitle: project.title, canvasId: id, documentPath: controller.getCurrentCanvasId() === id ? controller.getCurrentDocumentPath() : '', createdProject: Boolean(selected.createdProject), assetIds, attachedToProject: true, runtimeAssetsUpdated, changed: Boolean(result.changed), attachedCount: result.attachedCount, projectRevision: result.projectRevision, undoAvailable: CANVAS_HISTORY.canUndo(id), ...(runtimeWarning ? { runtimeWarning } : {}) };
+  const metadata = { id, title: project.title, projectId: id, projectTitle: project.title, canvasId: id, documentPath: controller.getCurrentCanvasId() === id ? controller.getCurrentDocumentPath() : '', createdProject: Boolean(selected.createdProject), assetIds, attachedToProject: true, runtimeAssetsUpdated, changed: Boolean(result.changed), attachedCount: result.attachedCount, projectRevision: result.projectRevision, ...CANVAS_HISTORY.getUndoState(id), ...(runtimeWarning ? { runtimeWarning } : {}) };
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, { type: 'project-assets', ...metadata });
   recordControlChange({ type: 'project-assets', ...metadata });
   return metadata;
@@ -258,11 +298,12 @@ function validateFileDeletion(input) {
 const DELETIONS = createDeletionService({
   canvasStore: CANVASES,
   mediaStore: MEDIA_ASSETS,
-  recordUndo: (id, snapshot) => CANVAS_HISTORY.record(id, snapshot),
+  instances: TEMPLATE_INSTANCES,
+  recordUndo: (id, snapshot, recovery) => CANVAS_HISTORY.record(id, snapshot, recovery),
+  canRecordUndo: (id, snapshot, recovery) => CANVAS_HISTORY.canRecord(id, snapshot, recovery),
   onChanged: emitCanvasSaved,
   onProjectDeleted: async (controller, id) => {
     CANVAS_HISTORY.clear(id);
-    TIMELINES.remove(id);
     for (const job of MEDIA_JOBS.list({ projectId: id, raw: true })) {
       MEDIA_JOBS.update(job.id, { projectId: '', notification: 'interrupted' });
     }
@@ -398,12 +439,32 @@ const presentToolCanvas = (artifact) => withCanvas(async (controller) => {
     }
     finally { if (id && CANVASES.get(id).html !== before) CANVAS_HISTORY.record(id, before); }
   });
+function currentCanvasInputScope(controller = requireCanvasView()) {
+  const canvasId = controller.getCurrentCanvasId(), documentPath = controller.getCurrentDocumentPath();
+  if (!canvasId || !documentPath) return null;
+  try {
+    if (!CANVASES.listDocuments(canvasId).documents.some((document) => document.path === documentPath)) return null;
+    const instance = TEMPLATE_INSTANCES.resolveDocument(canvasId, documentPath);
+    return { canvasId, documentPath, ...(instance ? { instanceId: instance.instanceId } : {}) };
+  } catch { return null; }
+}
+
+function canvasInputContextNote(request) {
+  const instance = request.instanceId && TEMPLATE_INSTANCES.resolveDocument(request.canvasId, request.documentPath);
+  return instance && instance.instanceId === request.instanceId && instance.templateId === 'strudel-sound'
+    ? 'Your choice is saved before continuing. Changes need a model round trip; source patches may reload. Escape stops sound; Dismiss question then Stop also works.' : '';
+}
+
 const CANVAS_CONTROLLER = {
+    assertTimelineSelectionOrigin: (selection) => TIMELINE_CONTROLLER.assertSelectionOrigin(selection),
     inspectTimeline: (args) => TIMELINE_CONTROLLER.inspect(args),
-    createTimeline: ({ projectId }) => TIMELINE_CONTROLLER.openEditor(projectId, () => openVideoEditorProject({ projectId })),
-    applyTimelineEdit: ({ projectId, ...input }) => TIMELINE_CONTROLLER.apply(projectId, input),
-    undoTimeline: ({ projectId, ...input }) => TIMELINE_CONTROLLER.undo(projectId, input),
-    redoTimeline: ({ projectId, ...input }) => TIMELINE_CONTROLLER.redo(projectId, input),
+    listTemplates: (input) => TEMPLATES.listTemplates(input),
+    createTemplateInstance: (input) => withCanvas(() => TEMPLATES.createTemplateInstance(input, { fromAgent: true })),
+    openTemplateInstance: (input) => withCanvas(() => TEMPLATES.openTemplateInstance(input, { fromAgent: true })),
+    createTimeline: (input) => TIMELINE_CONTROLLER.openEditor(input.projectId, () => openVideoEditorProject(input, { fromAgent: true })),
+    applyTimelineEdit: ({ projectId, timelineId, instanceId, ...input }) => TIMELINE_CONTROLLER.apply(projectId, TIMELINE_CONTROLLER.resolveTarget(projectId, timelineId, instanceId), input),
+    undoTimeline: ({ projectId, timelineId, instanceId, ...input }) => TIMELINE_CONTROLLER.undo(projectId, TIMELINE_CONTROLLER.resolveTarget(projectId, timelineId, instanceId), input),
+    redoTimeline: ({ projectId, timelineId, instanceId, ...input }) => TIMELINE_CONTROLLER.redo(projectId, TIMELINE_CONTROLLER.resolveTarget(projectId, timelineId, instanceId), input),
     createEmpty: (title, kits) => withCanvas(async (controller) => {
       await saveCanvasBeforeSwitch(controller);
       const id = controller.getCurrentCanvasId();
@@ -411,7 +472,7 @@ const CANVAS_CONTROLLER = {
       const before = CANVASES.get(id).html;
       const result = await controller.createDocument({ title, kits });
       CANVAS_HISTORY.record(id, before);
-      return { ...result, undoAvailable: CANVAS_HISTORY.canUndo(id) };
+      return { ...result, ...CANVAS_HISTORY.getUndoState(id) };
     }),
     inspect: () => withCanvas((controller) => controller.inspect()),
     getCurrentCanvasId: () => requireCanvasView().getCurrentCanvasId(),
@@ -420,6 +481,7 @@ const CANVAS_CONTROLLER = {
       return id ? CANVASES.getProjectKits(id).kits : undefined;
     },
     getCurrentDocumentPath: () => requireCanvasView().getCurrentDocumentPath(),
+    getCanvasInputScope: () => currentCanvasInputScope(),
     getDefaultDocumentPath: () => CANVASES.getProject(requireCanvasView().getCurrentCanvasId()).manifest.entry,
     listMediaJobs: () => ({ jobs: MEDIA_JOBS.list(), polling: 'The host polls and downloads pending jobs across restarts. Do not resubmit.' }),
     forgetMediaJob: ({ jobId }, context) => forgetMediaJob(jobId, context),
@@ -442,10 +504,10 @@ const CANVAS_CONTROLLER = {
       return attachProjectAssets(controller, projectId, assetIds, { kits });
     }),
     requestCanvasInput: (args, context) => withCanvas(async (controller) => {
-      const canvasId = controller.getCurrentCanvasId();
-      if (!canvasId || !controller.getCurrentDocumentPath()) throw new Error('Open a project document before requesting input.');
-      const request = CANVAS_INPUTS.create({ ...args, ...context, canvasId, documentPath: controller.getCurrentDocumentPath() });
-      try { await controller.evaluate(renderCanvasInputScript(request)); }
+      const scope = currentCanvasInputScope(controller);
+      if (!scope) throw new Error('Open an existing project document before requesting input.');
+      const request = CANVAS_INPUTS.create({ ...args, ...context, ...scope, instanceId: scope.instanceId });
+      try { await controller.evaluate(renderCanvasInputScript({ ...request, contextNote: canvasInputContextNote(request) })); }
       catch (error) { CANVAS_INPUTS.cancel(request.id, 'The input view could not be rendered.'); throw error; }
       mainWindow?.webContents.send(IPC_CHANNELS.AGENT_EVENT, { type: 'canvas-input', request, status: 'pending' });
       return request;
@@ -465,12 +527,15 @@ const CANVAS_CONTROLLER = {
       return { inputs, truncated: inputs.length < entries.length };
     },
     completeCanvasInput: (request) => withCanvas(async (controller) => {
-      if (controller.getCurrentCanvasId() !== request.canvasId || (request.documentPath && controller.getCurrentDocumentPath() !== request.documentPath)) throw new Error('Open the original project document to complete this input.');
+      if (!canvasInputMatchesScope(request, currentCanvasInputScope(controller))) throw new Error('Open the original project document and template instance to complete this input.');
       await controller.evaluate(dismissCanvasInputScript(request.id));
-      if (request.afterSubmit === 'resetState') await controller.reloadCanvas({ preserveState: false });
+      if (request.afterSubmit === 'resetState') {
+        if (!canvasInputMatchesScope(request, currentCanvasInputScope(controller))) throw new Error('The original canvas changed before its state could be reset.');
+        await controller.reloadCanvas({ preserveState: false });
+      }
     }),
     dismissCanvasInput: (request) => withCanvas(async (controller) => {
-      if (controller.getCurrentCanvasId() !== request.canvasId || (request.documentPath && controller.getCurrentDocumentPath() !== request.documentPath)) return;
+      if (!canvasInputMatchesScope(request, currentCanvasInputScope(controller))) return;
       await controller.evaluate(dismissCanvasInputScript(request.id));
     }),
     isEmpty: () => withCanvas((controller) => controller.isEmpty()),
@@ -518,7 +583,10 @@ const CANVAS_CONTROLLER = {
     addImage: (options) => projectMutation('addImage', options),
   };
 const emitAgentEvent = (event) => {
-    if (event.type === 'timeline-changed' && canvasView?.getCurrentCanvasId() === event.projectId) canvasView.view.webContents.send('canvas:timeline-changed', event);
+    if (event.type === 'timeline-changed') {
+      const scope = currentTimelineScope(canvasView, { required: false });
+      if (scope?.projectId === event.projectId && scope.timelineId === event.timelineId && scope.instanceId === event.instanceId) canvasView.view.webContents.send('canvas:timeline-changed', event);
+    }
     if (event.type === 'control-settled') { emitControlState(); return; }
     if (['canvas', 'project-assets', 'project-deleted'].includes(event.type)) recordControlChange(event);
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, event);
@@ -766,19 +834,43 @@ const JOB_MONITOR = createMediaJobMonitor({
   onReady: (job) => CHAT.notifyMediaJob(job),
 });
 
+// Production WAV/Media fixture passed at b3cb58a, Test run 37306231481.
+const STRUDEL_EXPORT_READY = true;
+const STRUDEL_EXPORT_OPTIONS = { getView: () => requireCanvasView(), projectStore: CANVASES, instances: TEMPLATE_INSTANCES };
+const STRUDEL_EXPORT_RENDERER = createStrudelExportRenderer({
+  BrowserWindow,
+  sessionFactory: async (partition) => ({ partition, session: session.fromPartition(partition, { cache: false }) }),
+});
+const STRUDEL_EXPORT_CONTROLLER = createStrudelExportController({
+  render: STRUDEL_EXPORT_RENDERER.renderStrudelSnapshot,
+  saveMedia: (media) => CAPTURE_MEDIA.save(media),
+  findExport: (identity) => CAPTURE_MEDIA.findExport(identity),
+  isAttached: async (projectId, assetId) => CANVASES.getProject(projectId).manifest.assets.some((asset) => asset.id === assetId),
+  attach: (projectId, assetIds, beforeCommit) => attachProjectAssets(requireCanvasView(), projectId, assetIds, { beforeCommit }),
+  assertScope: (scope) => assertStrudelScope(scope, STRUDEL_EXPORT_OPTIONS),
+  captureDependency: (scope) => CANVASES.getProjectKitSource(scope.projectId, 'strudel'),
+  onExport: (receipt) => emitAgentEvent({ type: 'strudel-exported', ...receipt }),
+});
+const STRUDEL_EXPORT_BRIDGE = createStrudelExportBridge({
+  ...STRUDEL_EXPORT_OPTIONS, controller: STRUDEL_EXPORT_CONTROLLER, exportReady: STRUDEL_EXPORT_READY,
+  isBusy: () => CHAT.isBusy() || AGENT_CONTROL.isToolBusy(),
+});
+
 function registerIpcHandlers() {
+  registerTemplateIpc({ ipcMain, assertSender: (event) => assertTrustedSender(event, mainWindow), withCanvas, service: TEMPLATES });
   const canvasHandle = (channel, handler) => ipcMain.handle(channel, (...args) => withCanvas(() => handler(...args)));
   function requireCanvasSender(event) {
     const controller = requireCanvasView();
     const contract = controller.getContract();
-    if (event.sender !== controller.view.webContents || event.senderFrame !== controller.view.webContents.mainFrame || !controller.getCurrentCanvasId() || contract.loading || contract.previewHidden || event.senderFrame.url !== contract.url) throw new Error('Canvas bridge request was rejected.');
+    if (event.sender !== controller.view.webContents || event.senderFrame !== controller.view.webContents.mainFrame || !controller.getCurrentCanvasId() || contract.loading || contract.previewHidden || event.senderFrame.url.split('#', 1)[0] !== contract.url.split('#', 1)[0]) throw new Error('Canvas bridge request was rejected.');
     return controller;
   }
   const timelineBridge = createVideoTimelineBridge({
     controller: TIMELINE_CONTROLLER,
     assertOrigin: (scope) => {
       const current = requireCanvasView();
-      if (current.getCurrentCanvasId() !== scope.projectId || current.getCurrentDocumentPath() !== scope.documentPath || current.getContract().runtimeGeneration !== scope.runtimeGeneration) throw new Error('The editor project changed. Open the original editor and try again.');
+      const active = currentTimelineScope(current, { required: false });
+      if (!active || ['projectId', 'documentPath', 'instanceId', 'timelineId', 'runtimeGeneration'].some((key) => active[key] !== scope[key])) throw new Error('The editor instance or runtime changed. Open the original editor and try again.');
     },
     getAssets: (id, options) => CANVASES.listAssets(id, options),
     getAsset: (id, assetId) => projectMedia(id, assetId),
@@ -790,9 +882,13 @@ function registerIpcHandlers() {
     onExport: (receipt) => emitAgentEvent({ type: 'timeline-exported', ...receipt }),
     isBusy: () => CHAT.isBusy() || AGENT_CONTROL.isToolBusy(),
   });
+  ipcMain.handle('canvas:strudel-export', (event, request) => {
+    requireCanvasSender(event);
+    return STRUDEL_EXPORT_BRIDGE.handle(request);
+  });
   ipcMain.handle('canvas:timeline', (event, request) => {
     const canvas = requireCanvasSender(event);
-    const scope = { projectId: canvas.getCurrentCanvasId(), documentPath: canvas.getCurrentDocumentPath(), runtimeGeneration: canvas.getContract().runtimeGeneration };
+    const scope = currentTimelineScope(canvas);
     return timelineBridge.handle(request, scope);
   });
   ipcMain.handle(IPC_CHANNELS.IMPORT_MEDIA, (event, input = {}) => {
@@ -803,7 +899,7 @@ function registerIpcHandlers() {
   ipcMain.handle(IPC_CHANNELS.OPEN_VIDEO_EDITOR, async (event, input = {}) => {
     assertTrustedSender(event, mainWindow);
     if (CHAT.isBusy() || AGENT_CONTROL.isToolBusy()) throw new Error('Wait for the current agent operation before opening the video editor.');
-    return openVideoEditorProject(input);
+    return openVideoEditorProject(input, { choose: true });
   });
   ipcMain.handle(IPC_CHANNELS.GET_AGENT_CONTROL, async (event) => {
     assertTrustedSender(event, mainWindow);
@@ -860,7 +956,9 @@ function registerIpcHandlers() {
   ipcMain.handle('canvas:submit-input', (event, input) => {
     const controller = requireCanvasSender(event);
     if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['requestId', 'value'].includes(key))) throw new Error('Canvas input is invalid.');
-    return CHAT.submitCanvasInput({ ...input, canvasId: controller.getCurrentCanvasId(), documentPath: controller.getCurrentDocumentPath() });
+    const scope = currentCanvasInputScope(controller);
+    if (!scope) throw new Error('Open the original project document before answering this question.');
+    return CHAT.submitCanvasInput({ ...input, ...scope });
   });
   ipcMain.handle('canvas:cancel-input', (event, input) => {
     const controller = requireCanvasSender(event);
@@ -972,14 +1070,14 @@ function registerIpcHandlers() {
     CANVAS_HISTORY.record(projectId, before);
     const opened = await requireCanvasView().openSaved(projectId, saved.documentPath);
     emitCanvasSaved(opened);
-    return { ...saved, ...opened, undoAvailable: CANVAS_HISTORY.canUndo(projectId) };
+    return { ...saved, ...opened, ...CANVAS_HISTORY.getUndoState(projectId) };
   });
   canvasHandle(IPC_CHANNELS.OPEN_PROJECT_DOCUMENT, async (event, id, documentPath) => {
     assertTrustedSender(event, mainWindow);
     if (CHAT.isBusy()) throw new Error('Wait for the current reply before switching documents.');
     const projectId = validateOpaqueId(id, 'Project ID');
     const opened = await requireCanvasView().openSaved(projectId, validateDocumentPath(documentPath));
-    return { ...opened, undoAvailable: CANVAS_HISTORY.canUndo(projectId) };
+    return { ...opened, ...CANVAS_HISTORY.getUndoState(projectId) };
   });
   ipcMain.handle(IPC_CHANNELS.GET_PROJECT_ASSETS, async (event, id, options = {}) => {
     assertTrustedSender(event, mainWindow);
@@ -1146,10 +1244,10 @@ function registerIpcHandlers() {
     [IPC_CHANNELS.CREATE_TIMELINE, 'create', true], [IPC_CHANNELS.APPLY_TIMELINE, 'apply', true],
     [IPC_CHANNELS.UNDO_TIMELINE, 'undo', true], [IPC_CHANNELS.REDO_TIMELINE, 'redo', true],
   ]) {
-    ipcMain.handle(channel, (event, projectId, input) => {
+    ipcMain.handle(channel, (event, projectId, timelineId, input) => {
       assertTrustedSender(event, mainWindow);
       if (mutation && (CHAT.isBusy() || AGENT_CONTROL.isToolBusy())) throw new Error('Wait for the current agent operation before editing the timeline.');
-      return TIMELINE_CONTROLLER[method](projectId, input);
+      return TIMELINE_CONTROLLER[method](projectId, timelineId, input);
     });
   }
   ipcMain.handle(IPC_CHANNELS.SEND_MESSAGE, async (event, input, options) => {
@@ -1160,7 +1258,10 @@ function registerIpcHandlers() {
     if (!message && !chatOptions.attachments?.length) throw new Error('Message or attachment is required.');
     if (chatOptions.timelineSelection) chatOptions.timelineContext = TIMELINE_CONTROLLER.resolveSelection(chatOptions.timelineSelection);
     const result = await CHAT.sendMessage(message, chatOptions);
-    if (chatOptions.timelineSelection && canvasView?.getCurrentCanvasId() === chatOptions.timelineSelection.projectId) canvasView.view.webContents.send('canvas:timeline-changed', { projectId: chatOptions.timelineSelection.projectId, selectionConsumed: true });
+    if (chatOptions.timelineSelection) {
+      const scope = currentTimelineScope(canvasView, { required: false });
+      if (scope && ['projectId', 'instanceId', 'timelineId', 'runtimeGeneration'].every((key) => scope[key] === chatOptions.timelineSelection[key])) canvasView.view.webContents.send('canvas:timeline-changed', { ...scope, selectionConsumed: true });
+    }
     return result;
   });
   ipcMain.handle(IPC_CHANNELS.STOP_AGENT, (event) => {
@@ -1210,7 +1311,7 @@ function registerIpcHandlers() {
     const controller = requireCanvasView();
     await saveCanvasBeforeSwitch(controller);
     const canvas = await controller.createEmpty(canvasTitle, selectedKits);
-    return { ...canvas, undoAvailable: CANVAS_HISTORY.canUndo(canvas.id) };
+    return { ...canvas, ...CANVAS_HISTORY.getUndoState(canvas.id) };
   });
   canvasHandle(IPC_CHANNELS.OPEN_CANVAS, async (event, id) => {
     assertTrustedSender(event, mainWindow);
@@ -1219,7 +1320,7 @@ function registerIpcHandlers() {
     const controller = requireCanvasView();
     if (controller.getCurrentCanvasId() !== canvasId) await saveCanvasBeforeSwitch(controller);
     const canvas = await controller.openSaved(canvasId);
-    return { ...canvas, undoAvailable: CANVAS_HISTORY.canUndo(canvasId) };
+    return { ...canvas, ...CANVAS_HISTORY.getUndoState(canvasId) };
   });
   canvasHandle(IPC_CHANNELS.SAVE_CANVAS, async (event, id) => {
     assertTrustedSender(event, mainWindow);
@@ -1234,7 +1335,7 @@ function registerIpcHandlers() {
     const canvasId = validateOpaqueId(id, 'Canvas ID');
     const controller = requireCanvasView();
     if (controller.getCurrentCanvasId() === canvasId) emitCanvasSaved(await controller.saveCurrent());
-    const canvas = CANVASES.get(canvasId);
+    const canvas = CANVASES.exportDocument(canvasId);
     const safeTitle = canvas.title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').trim().slice(0, 80) || 'Easel Canvas';
     const result = await dialog.showSaveDialog(mainWindow, {
       defaultPath: `${safeTitle}.html`,
@@ -1260,29 +1361,22 @@ function registerIpcHandlers() {
     const canvasId = validateOpaqueId(id, 'Canvas ID');
     const controller = requireCanvasView();
     if (controller.getCurrentCanvasId() !== canvasId) throw new Error('Open this canvas before undoing changes.');
-    const snapshot = CANVAS_HISTORY.undo(canvasId);
-    if (snapshot === null) {
+    const documentPath = controller.getCurrentDocumentPath();
+    const restored = await restoreCanvasHistory({ history: CANVAS_HISTORY, canvasStore: CANVASES, instances: TEMPLATE_INSTANCES,
+      afterRestore: async (saved) => {
+        controller.markSourcePendingReload();
+        const remaining = CANVASES.listDocuments(canvasId).documents;
+        const opened = await controller.openSaved(canvasId, remaining.some((document) => document.path === documentPath) ? documentPath : CANVASES.getProject(canvasId).manifest.entry);
+        return { ...opened, updatedAt: saved.updatedAt, undone: true };
+      },
+    }, canvasId);
+    if (restored === null) {
       const canvas = CANVASES.get(canvasId);
       return { id: canvasId, title: canvas.title, undone: false, undoAvailable: false };
     }
-    try {
-      const documentPath = controller.getCurrentDocumentPath();
-      const saved = CANVASES.update(canvasId, snapshot, { restoreMetadata: true });
-      controller.markSourcePendingReload();
-      const remaining = CANVASES.listDocuments(canvasId).documents;
-      const opened = await controller.openSaved(canvasId, remaining.some((document) => document.path === documentPath) ? documentPath : CANVASES.getProject(canvasId).manifest.entry);
-      const result = {
-        ...opened,
-        updatedAt: saved.updatedAt,
-        undone: true,
-        undoAvailable: CANVAS_HISTORY.canUndo(canvasId),
-      };
-      emitCanvasSaved(result);
-      return result;
-    } catch (error) {
-      CANVAS_HISTORY.record(canvasId, snapshot);
-      throw error;
-    }
+    const result = { ...restored, ...CANVAS_HISTORY.getUndoState(canvasId) };
+    emitCanvasSaved(result);
+    return result;
   });
   ipcMain.on(IPC_CHANNELS.SET_CANVAS_BOUNDS, (event, input) => {
     assertTrustedSender(event, mainWindow);
@@ -1323,6 +1417,7 @@ async function createWindow() {
     sessionFactory: async (partition) => ({ partition, session: session.fromPartition(partition, { cache: false }) }),
     assetStore: ASSETS,
     mediaAssetStore: CAPTURE_MEDIA,
+    onRuntimeInvalidated: (reason) => STRUDEL_EXPORT_CONTROLLER.invalidate(reason),
     onMediaSaved: (capture) => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, { type: 'media', ...capture });
@@ -1336,10 +1431,22 @@ async function createWindow() {
       return result.response === 0;
     },
     onCanvasReady: async (canvasId, documentPath) => {
-      canvasView.view.webContents.send('canvas:timeline-changed', { projectId: canvasId, ready: true });
+      try {
+        TEMPLATE_INSTANCES.migrateLegacy(canvasId);
+        const scope = currentTimelineScope(canvasView, { required: false });
+        if (scope) canvasView.view.webContents.send('canvas:timeline-changed', { ...scope, ready: true });
+      } catch (error) {
+        canvasView.view.webContents.send('canvas:timeline-changed', { projectId: canvasId, documentPath, ready: true, error: error.message });
+      }
+      const soundInstance = TEMPLATE_INSTANCES.resolveDocument(canvasId, documentPath);
+      if (soundInstance?.templateId === 'strudel-sound') {
+        try { canvasView.view.webContents.send('canvas:strudel-export-context', await STRUDEL_EXPORT_BRIDGE.handle({ action: 'context' })); }
+        catch (error) { canvasView.view.webContents.send('canvas:strudel-export-context', { exportReady: false, reason: error.message }); }
+      }
       const defaultPath = CANVASES.getProject(canvasId).manifest.entry;
-      const pending = CANVAS_INPUTS.list({ canvasId, status: 'pending', limit: 200, raw: true }).find((request) => request.documentPath ? request.documentPath === documentPath : documentPath === defaultPath);
-      if (pending) await canvasView.evaluate(renderCanvasInputScript({ ...pending, contextNote: pending.chatId === CHAT.getActiveChatId() ? '' : 'This question belongs to another conversation. Answer here, then open that conversation in History to continue. You can also dismiss it.' }));
+      const scope = currentCanvasInputScope(canvasView);
+      const pending = CANVAS_INPUTS.list({ canvasId, status: 'pending', limit: 200, raw: true }).find((request) => canvasInputMatchesScope(request, scope) && (request.documentPath || documentPath === defaultPath));
+      if (pending) await canvasView.evaluate(renderCanvasInputScript({ ...pending, contextNote: [canvasInputContextNote(pending), pending.chatId === CHAT.getActiveChatId() ? '' : 'This question belongs to another conversation. Answer here, then open that conversation in History to continue. You can also dismiss it.'].filter(Boolean).join(' ') }));
       CHAT.recoverCanvasInputs();
     },
   });
@@ -1364,6 +1471,7 @@ async function createWindow() {
       // Keep the native view alive until the stopped turn finishes its host edits.
       await CHAT.shutdown();
       await JOB_MONITOR.stop();
+      STRUDEL_EXPORT_CONTROLLER.invalidate('The application window is closing.');
       await VIDEO_METADATA.close();
       await withCanvas(async (controller) => {
         if (controller.getCurrentCanvasId()) await controller.saveCurrent();

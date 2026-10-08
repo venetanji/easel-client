@@ -61,3 +61,23 @@ test('canvas origins and approved destinations reject secrets, extras and invali
   assert.throws(() => validateApprovedMediaModel({ backend: 'external', model: 'unknown' }));
   assert.throws(() => store.create({ ...choice, origin, chatId: '' }), /Chat ID/);
 });
+
+test('instance-bound choices validate identity, restore and reject stale answers', (t) => {
+  const { root, store } = fixture(t), instanceId = 'e'.repeat(32), documentPath = 'sketches/music/index.html';
+  const saved = store.create({ ...choice, documentPath, instanceId });
+  const restarted = createCanvasInputStore({ userDataPath: root });
+  assert.equal(restarted.get(saved.id).instanceId, instanceId);
+  assert.equal(restarted.list()[0].instanceId, instanceId);
+  for (const wrong of [undefined, 'f'.repeat(32)]) assert.throws(() => restarted.submit({ requestId: saved.id, canvasId, documentPath, value: 'red', ...(wrong ? { instanceId: wrong } : {}) }), /instance|another canvas/i);
+  assert.equal(restarted.submit({ requestId: saved.id, canvasId, documentPath, instanceId, value: 'blue' }).status, 'answered');
+  assert.throws(() => store.create({ ...choice, documentPath: 'other.html', instanceId: 'bad' }), /Instance ID/i);
+});
+
+test('a rebound document can receive a fresh question without reusing the stale one', (t) => {
+  const { store } = fixture(t), documentPath = 'music.html';
+  const old = store.create({ ...choice, documentPath, instanceId: 'e'.repeat(32) });
+  const fresh = store.create({ ...choice, documentPath, instanceId: 'f'.repeat(32) });
+  assert.notEqual(fresh.id, old.id);
+  assert.equal(store.get(old.id).status, 'pending');
+  assert.throws(() => store.create({ ...choice, documentPath, instanceId: fresh.instanceId }), /unanswered/i);
+});

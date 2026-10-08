@@ -37,7 +37,7 @@ function fixture() {
   const projectId = 'c'.repeat(32);
   const assetId = 'a'.repeat(32);
   const ids = [
-    'project-select', 'nav-explorer', 'nav-media', 'project-drawer', 'media-drawer', 'media-collapse', 'media-list', 'all-media-list', 'all-media-empty', 'all-media-count', 'canvases-list', 'open-canvas-tabs', 'image-viewer',
+    'nav-templates', 'templates-drawer', 'templates-collapse', 'project-select', 'nav-explorer', 'nav-media', 'project-drawer', 'media-drawer', 'media-collapse', 'media-list', 'all-media-list', 'all-media-empty', 'all-media-count', 'canvases-list', 'open-canvas-tabs', 'image-viewer',
     'image-viewer-image', 'media-viewer-video', 'media-viewer-audio', 'image-viewer-info', 'image-size-toggle', 'media-empty',
     'project-image-count', 'canvases-empty', 'project-rename', 'project-delete', 'project-source-files', 'image-use-chat', 'image-download', 'library-collapse',
     'project-new', 'drawer-new-document', 'export-current',
@@ -54,13 +54,14 @@ function fixture() {
   const conversation = element();
   const root = element();
   root.append(drawer, mediaDrawer, conversation, ...[...nodes.values()].filter((node) => node !== drawer && node !== mediaDrawer && !drawer.children.includes(node) && !mediaDrawer.children.includes(node)));
+  const documentListeners = {};
   const document = {
     getElementById: (id) => nodes.get(id),
     createElement: (tag) => element(tag),
     createElementNS: (_namespace, tag) => element(tag),
     querySelector: (selector) => selector === '.library' ? drawer : selector === '.conversation' ? conversation : null,
     querySelectorAll: (selector) => root.querySelectorAll(selector),
-    addEventListener() {},
+    addEventListener(name, callback) { documentListeners[name] = callback; },
   };
   const stored = new Map();
   const documents = [{ path: 'index.html', title: 'First' }, { path: 'extra.html', title: 'Extra' }];
@@ -138,7 +139,7 @@ function fixture() {
     onDrawerChange: (...args) => drawerChanges.push(args),
     isBusy: () => busy,
   });
-  return { workspace, nodes, projectId, assetId, asset, client, calls, selections, statuses, stored, projectAssets, libraryAssets, projects, drawerChanges, kitRequests,
+  return { workspace, nodes, document, documentListeners, projectId, assetId, asset, client, calls, selections, statuses, stored, projectAssets, libraryAssets, projects, drawerChanges, kitRequests,
     confirm: (value) => { confirm = value; }, busy: (value) => { busy = value; } };
 }
 
@@ -899,4 +900,34 @@ test('media drawer drag sources accept both managed ID lengths used by the host 
   assert.equal(card.draggable, true);
   const event = mediaDragEvent(); card.listeners.dragstart(event);
   assert.deepEqual(JSON.parse(event.data.get('application/x-easel-media-asset')), { assetId });
+});
+
+
+test('drawer_exclusive_focus_escape covers Files, Media and Templates', () => {
+  const f = fixture();
+  const collapse = f.nodes.get('templates-collapse');
+  const loadingRefresh = element('button', 'templates-refresh');
+  loadingRefresh.disabled = true;
+  loadingRefresh.focus = () => {}; // Native disabled controls cannot receive focus.
+  f.nodes.get('templates-drawer').append(loadingRefresh, collapse);
+  collapse.tagName = 'button';
+  for (const node of f.nodes.values()) node.focus = () => { f.document.activeElement = node; };
+  f.workspace.setMediaDrawer(true, false);
+  f.nodes.get('nav-templates').listeners.click();
+  assert.equal(f.nodes.get('templates-drawer').hidden, false);
+  assert.equal(f.document.activeElement, collapse);
+  for (const kind of ['project', 'media']) {
+    assert.equal(f.nodes.get(`${kind}-drawer`).hidden, true);
+    assert.equal(f.nodes.get(`${kind}-drawer`).inert, true);
+  }
+  assert.equal(f.nodes.get('nav-templates').attributes['aria-expanded'], 'true');
+  assert.equal(f.nodes.get('nav-media').attributes['aria-expanded'], 'false');
+  assert.deepEqual(f.drawerChanges.at(-1), [true, 'templates']);
+  f.documentListeners.keydown({ key: 'Escape' });
+  assert.equal(f.document.activeElement, f.nodes.get('nav-templates'));
+  for (const kind of ['project', 'media', 'templates']) assert.equal(f.nodes.get(`${kind}-drawer`).hidden, true);
+  assert.equal(f.nodes.get('nav-templates').attributes['aria-pressed'], 'false');
+  f.workspace.setDrawer(true, false, 'templates');
+  f.workspace.setDrawer(true, false);
+  assert.equal(f.nodes.get('templates-drawer').hidden, true);
 });

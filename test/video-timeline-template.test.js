@@ -23,3 +23,9 @@ test('timeline CSS gives preview full width and wraps compact editing disclosure
   assert.match(css, /\.timeline-context\s*\{[^}]*flex-wrap:\s*wrap/);
   assert.match(css, /\.timeline-context summary:focus-visible/);
 });
+
+test('new video starters inject the bounded text-only track deletion dialog', () => {
+  const html = createVideoTimelineTemplate({ readSource: () => '' });
+  assert.match(html, /confirmDeleteTrack: \(input\) => confirmTimelineTrackDeletion\(\{ document, container, \.\.\.input \}\)/);
+  assert.doesNotMatch(html, /window\.confirm\(/);
+});

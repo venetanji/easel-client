@@ -80,6 +80,13 @@
     },
     {
       "workspace": ".",
+      "name": "@strudel/web",
+      "version": "1.3.0",
+      "declared_license": "AGPL-3.0-or-later",
+      "group": "devDependencies"
+    },
+    {
+      "workspace": ".",
       "name": "electron",
       "version": "44.4.5",
       "declared_license": "MIT",
@@ -456,13 +463,14 @@
     "easel-canvas",
     "easel-media",
     "easel-p5",
-    "easel-three"
+    "easel-three",
+    "qwen-transparent-images"
   ],
   "distribution_gates": [
     "Validate license/source materials for the exact transitive dependency tree and Electron/Chromium build in each final artifact.",
     "Provide matching preferred Corresponding Source, revision, lockfiles, modifications and build/install materials via an applicable GPL section 6 route.",
     "Re-run full cross-platform packaged runtime checks; source alignment and archive inspection do not establish release clearance.",
-    "If the independent Strudel feature is integrated, retain AGPL-3.0-or-later and its dependency/source obligations."
+    "Strudel is integrated in the unreleased template foundation. Retain AGPL-3.0-or-later and all transitive dependency/source obligations; the missing chord-voicings notice, final corresponding-source review and sandboxed renderer runtime proof remain open."
   ],
   "prior_grants": "Root package metadata previously declared ISC. No existing grant is revoked by the GPL declaration; third-party terms remain intact.",
   "provenance_evidence": [

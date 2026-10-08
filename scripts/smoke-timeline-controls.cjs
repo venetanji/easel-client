@@ -88,6 +88,53 @@ const timeout = setTimeout(() => { console.error(`Timeout during ${phase}`); app
     {type:'insert',item:item('red-back',red,'video-1',0,24,'Red background')},
     {type:'insert',item:item('blue-move',blue,'video-1',24,48,'Blue movable clip')},
   ]);
+  // Measure real rendered targets and hit-test their centers before gestures.
+  // Enlarged grips must not consume short clip bodies or overflow sticky labels.
+  async function measureControlTargets(clipId) {
+    return edit(`(() => {
+      const clip = document.querySelector('[data-role="clip-body"][data-item-id="${clipId}"]');
+      const lane = clip.closest('[data-role="track-lane"]');
+      const measure = node => {
+        const box = node.getBoundingClientRect(), style = getComputedStyle(node);
+        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        return { width: box.width, height: box.height, left: box.left, right: box.right, top: box.top, bottom: box.bottom,
+          fontSize: parseFloat(style.fontSize), textFits: node.scrollWidth <= node.clientWidth, hit: Boolean(hit && node.contains(hit)) };
+      };
+      return {
+        clip: measure(clip), lane: measure(lane),
+        trim: ['start', 'end'].map(edge => measure(lane.querySelector('[data-role="clip-trim-' + edge + '"][data-clip-id="${clipId}"]'))),
+        selection: ['start', 'end'].map(edge => measure(lane.querySelector('[data-role="range-' + edge + '-handle"]'))),
+        headers: Array.from(document.querySelectorAll('.timeline-track-row > .timeline-track-label')).map(header => ({
+          bounds: measure(header), actions: Array.from(header.querySelectorAll('.timeline-track-order-button')).map(measure)
+        }))
+      };
+    })()`);
+  }
+  function checkControlTargets(geometry, label) {
+    assert.equal(geometry.lane.height, 72, `${label}: track lanes stay compact`);
+    assert.ok(geometry.clip.hit, `${label}: the clip body must remain directly draggable`);
+    for (const handle of geometry.selection) {
+      assert.ok(handle.width >= 24 && handle.height >= 24 && handle.hit, `${label}: selection target must be reachable at 24 × 24 px`);
+      assert.ok(handle.bottom <= geometry.clip.top, `${label}: selection handles must not intercept clip dragging`);
+    }
+    for (const handle of geometry.trim) {
+      assert.ok(Math.abs(handle.width - Math.min(24, geometry.clip.width / 4)) < 0.1, `${label}: trim targets grow only within safe clip bounds`);
+      assert.ok(handle.height >= 24 && handle.hit, `${label}: trim target must be reachable`);
+    }
+    for (const header of geometry.headers) {
+      assert.ok(header.bounds.width <= 160, `${label}: sticky headers remain compact`);
+      for (const action of header.actions) {
+        assert.ok(action.width >= 28 && action.height >= 28 && action.fontSize >= 11, `${label}: readable track actions need usable targets`);
+        assert.ok(action.textFits && action.left >= header.bounds.left && action.right <= header.bounds.right, `${label}: action labels must fit inside the sticky header`);
+        assert.ok(action.hit, `${label}: sticky header actions must not be covered`);
+      }
+    }
+  }
+  phase = 'rendered control targets';
+  await click(role('clip-body', 'item-id', 'blue-move'));
+  await edit('document.querySelector("[data-role=zoom]").value="144"; document.querySelector("[data-role=zoom]").dispatchEvent(new Event("input"))'); await paint();
+  const controlTargets = await measureControlTargets('blue-move'); checkControlTargets(controlTargets, 'desktop');
+  await edit('document.querySelector("[data-role=zoom]").value="72"; document.querySelector("[data-role=zoom]").dispatchEvent(new Event("input"))'); await paint();
   phase = 'move clip across tracks';
   const body = await point(role('clip-body','item-id','blue-move'));
   const destination = await point(role('track-lane','track-id',addedTrack));
@@ -122,6 +169,7 @@ const timeout = setTimeout(() => { console.error(`Timeout during ${phase}`); app
   const short=await point(role('clip-body','item-id','blue-move'));
   const shortHit=await edit(`(()=>{const node=document.elementFromPoint(${short.x},${short.y});const body=document.querySelector('[data-role="clip-body"][data-item-id="blue-move"]');const box=body.getBoundingClientRect();return {itemId:node?.closest('[data-role="clip-body"]')?.dataset.itemId,hitRole:node?.dataset.role,bodyWidth:box.width,styleWidth:body.style.width,padding:getComputedStyle(body).paddingInline}})()`);
   assert.equal(shortHit.itemId,'blue-move',`short clip center must remain draggable: ${JSON.stringify(shortHit)}`);
+  assert.equal(shortHit.bodyWidth,18,'A six-frame clip must retain its exact rendered width');
   await drag(short,{x:short.x+9,y:short.y},{modifiers:['shift']}); snapshot=await changed(snapshot.revision);
   assert.deepEqual([snapshot.items.find(i=>i.id==='blue-move').startFrame,snapshot.items.find(i=>i.id==='blue-move').endFrame],[54,60]);
   phase = 'ruler seek and Space';
@@ -182,7 +230,9 @@ const timeout = setTimeout(() => { console.error(`Timeout during ${phase}`); app
   fs.writeFileSync(path.join(artifacts,'timeline-controls-narrow.png'),(await canvas.capturePage()).toPNG());
   const narrowGeometry=await edit('({width:innerWidth,height:innerHeight,overflow:document.documentElement.scrollWidth>innerWidth})');
   assert.equal(desktopGeometry.overflow,false); assert.equal(narrowGeometry.overflow,false);
+  await edit('document.querySelector("[data-role=clip-body][data-item-id=blue-move]").click()'); await paint();
+  const narrowControlTargets=await measureControlTargets('blue-move'); checkControlTargets(narrowControlTargets,'narrow');
   fs.writeFileSync(path.join(artifacts,'reordered.webm'),Buffer.from(media.data,'base64'));
-  const evidence={moveAcrossTracks:true,trimBothEdges:true,shortClipBody:true,escapeCancels:true,undoRedo:true,rulerSeek:true,spacePlayback:true,crossTrackSelection:true,altRangeShiftNoWrites:true,nativeTrackReorder:true,highestPreviewMatchesDecodedExport:true,previewBefore:bluePixel,previewAfter:redPixel,decoded,desktopGeometry,narrowGeometry,sourceHashes,revision:(await read()).revision,artifacts};
+  const evidence={controlTargets,narrowControlTargets,moveAcrossTracks:true,trimBothEdges:true,shortClipBody:true,escapeCancels:true,undoRedo:true,rulerSeek:true,spacePlayback:true,crossTrackSelection:true,altRangeShiftNoWrites:true,nativeTrackReorder:true,highestPreviewMatchesDecodedExport:true,previewBefore:bluePixel,previewAfter:redPixel,decoded,desktopGeometry,narrowGeometry,sourceHashes,revision:(await read()).revision,artifacts};
   fs.writeFileSync(path.join(artifacts,'timeline-controls.json'),JSON.stringify(evidence,null,2));console.log(JSON.stringify(evidence));clearTimeout(timeout);app.exit(0);
 })().catch(async error=>{console.error(error);if(canvas){try{console.error(await canvas.executeJavaScript('JSON.stringify({selection:window.EaselVideoEditor?.getSelection(),status:document.querySelector("[data-role=status]")?.textContent,events:window.controlEvents?.slice(-12),focused:document.hasFocus()})'));fs.writeFileSync(path.join(artifacts,'failure.png'),(await canvas.capturePage()).toPNG());}catch{}}clearTimeout(timeout);app.exit(1);});

@@ -47,6 +47,7 @@ function createCanvasInputStore({ userDataPath, fileSystem = fs, idFactory = () 
     if (entry.id !== id || !['choice', 'media'].includes(entry.kind)) throw new Error('Saved canvas input is invalid.');
     inputId(entry.canvasId, 'Canvas ID');
     inputId(entry.chatId, 'Chat ID');
+    if (entry.instanceId !== undefined) inputId(entry.instanceId, 'Instance ID');
     if (entry.origin !== undefined) entry.origin = validateInteractionOrigin(entry.origin);
     return entry;
   }
@@ -65,13 +66,14 @@ function createCanvasInputStore({ userDataPath, fileSystem = fs, idFactory = () 
     const { mode, size, skills, kits } = validateChatOptions(options || {});
     return { mode, size, skills, kits };
   }
-  function create({ canvasId, documentPath, chatId, question, options, afterSubmit, turnOptions: optionsForTurn, origin }) {
+  function create({ canvasId, documentPath, instanceId, chatId, question, options, afterSubmit, turnOptions: optionsForTurn, origin }) {
     inputId(canvasId, 'Canvas ID');
     inputId(chatId, 'Chat ID');
     if (documentPath !== undefined) validateDocumentPath(documentPath);
-    if (list({ canvasId, status: 'pending', limit: 200, raw: true }).some((entry) => (entry.documentPath || '') === (documentPath || ''))) throw new Error('This document already has an unanswered request.');
+    if (instanceId !== undefined) { inputId(instanceId, 'Instance ID'); if (!documentPath) throw new Error('An instance-bound question requires its document path.'); }
+    if (list({ canvasId, status: 'pending', limit: 200, raw: true }).some((entry) => (entry.documentPath || '') === (documentPath || '') && (entry.instanceId === undefined || instanceId === undefined || entry.instanceId === instanceId))) throw new Error('This document already has an unanswered request.');
     const request = validateCanvasInputRequest({ question, options, afterSubmit });
-    return write({ id: inputId(idFactory(), 'Input request ID'), kind: 'choice', canvasId, ...(documentPath ? { documentPath } : {}), chatId, ...request, ...(origin === undefined ? {} : { origin: validateInteractionOrigin(origin) }), turnOptions: turnOptions(optionsForTurn), status: 'pending', createdAt: Date.now() }, { create: true });
+    return write({ id: inputId(idFactory(), 'Input request ID'), kind: 'choice', canvasId, ...(documentPath ? { documentPath } : {}), ...(instanceId ? { instanceId } : {}), chatId, ...request, ...(origin === undefined ? {} : { origin: validateInteractionOrigin(origin) }), turnOptions: turnOptions(optionsForTurn), status: 'pending', createdAt: Date.now() }, { create: true });
   }
   function createMedia({ canvasId, documentPath, chatId, prompt = '', attachments, approvedModel, turnOptions: optionsForTurn, origin }) {
     inputId(canvasId, 'Canvas ID');
@@ -89,9 +91,10 @@ function createCanvasInputStore({ userDataPath, fileSystem = fs, idFactory = () 
     return write({ id: inputId(idFactory(), 'Input request ID'), kind: 'media', canvasId, ...(documentPath ? { documentPath } : {}), chatId, prompt: prompt.trim(), attachments: assets, approvedModel: validateApprovedMediaModel(approvedModel), ...(origin === undefined ? {} : { origin: validateInteractionOrigin(origin) }), turnOptions: turnOptions(optionsForTurn), status: 'queued', createdAt: Date.now(), answeredAt: Date.now() }, { create: true });
   }
   function submit(input) {
-    const { requestId, canvasId, documentPath, value } = validateCanvasInputSubmission(input);
+    const { requestId, canvasId, documentPath, instanceId, value } = validateCanvasInputSubmission(input);
     const entry = get(requestId);
     if (entry.kind !== 'choice' || entry.canvasId !== canvasId || (entry.documentPath && entry.documentPath !== documentPath)) throw new Error('This input request belongs to another canvas.');
+    if (entry.instanceId !== undefined && entry.instanceId !== instanceId) throw new Error('This input request belongs to another template instance.');
     if (entry.status !== 'pending') throw new Error('This input request was already answered or is no longer active.');
     if (!entry.options.some((option) => option.value === value)) throw new Error('Choose one of the declared canvas options.');
     // Persist before the host clears UI or resets app state.

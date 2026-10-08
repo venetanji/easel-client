@@ -96,27 +96,38 @@ button.timeline-track-label:hover { background: var(--green-wash, #e7eee7); colo
 .timeline-exact-range .timeline-rangebar .timeline-field { flex: 1 1 80px; }
 .timeline-ruler { cursor: crosshair; touch-action: none; }
 .timeline-ruler:focus-visible { outline: 2px solid var(--green, #174d3a); outline-offset: -2px; }
-.timeline-track-label { flex-basis: 112px; width: 112px; padding: 5px 8px; }
-.timeline-track-row > .timeline-track-label { flex-direction: column; align-items: stretch; justify-content: center; gap: 3px; }
-.timeline-track-name { padding: 5px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: transparent; color: var(--ink, #202d27); font: inherit; text-align: left; cursor: grab; touch-action: none; }
+.timeline-track-label { flex-basis: 160px; width: 160px; padding: 5px 8px; }
+.timeline-track-row > .timeline-track-label { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: center; align-items: center; gap: 4px; }
+.timeline-track-name { min-width: 0; min-height: 24px; padding: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: transparent; color: var(--ink, #202d27); font: inherit; text-align: left; cursor: grab; touch-action: none; }
 .timeline-track-name:active { cursor: grabbing; }
-.timeline-track-order { display: flex; gap: 4px; }
-.timeline-track-order-button { min-width: 34px; min-height: 24px; padding: 2px 4px; border: 0; border-radius: 3px; color: var(--muted, #58675f); background: transparent; font-size: 10px; cursor: pointer; }
+.timeline-track-order { display: grid; grid-column: 1 / -1; grid-template-columns: auto auto minmax(0, 1fr); gap: 4px; }
+.timeline-track-order-button { min-width: 28px; min-height: 28px; padding: 2px 4px; border: 0; border-radius: 3px; color: var(--muted, #58675f); background: transparent; font-size: 11px; line-height: 16px; white-space: nowrap; cursor: pointer; }
 .timeline-track-order-button:hover:not(:disabled), .timeline-track-name:hover { color: var(--green, #174d3a); background: var(--green-wash, #e7eee7); }
 .timeline-track-order-button:disabled { opacity: .45; cursor: default; }
 .timeline-track-lane { height: 72px; }
-.timeline-clip { min-width: 0; top: 15px; bottom: 15px; padding-inline: 12px; cursor: grab; touch-action: none; }
+/* The top band belongs to selection; clip dragging and trimming stay below it. */
+.timeline-clip { min-width: 0; top: 26px; bottom: 6px; padding-inline: 24px; cursor: grab; touch-action: none; }
 .timeline-clip:active { cursor: grabbing; }
-.timeline-clip-ghost { position: absolute; top: 15px; bottom: 15px; z-index: 7; padding: 12px; overflow: hidden; pointer-events: none; border: 2px solid var(--green, #174d3a); border-radius: 4px; color: var(--green, #174d3a); background: var(--green-wash, #e7eee7); font-size: 11px; font-variant-numeric: tabular-nums; opacity: .9; }
+.timeline-clip-ghost { position: absolute; top: 26px; bottom: 6px; z-index: 7; padding: 12px; overflow: hidden; pointer-events: none; border: 2px solid var(--green, #174d3a); border-radius: 4px; color: var(--green, #174d3a); background: var(--green-wash, #e7eee7); font-size: 11px; font-variant-numeric: tabular-nums; opacity: .9; }
 .timeline-clip-ghost[data-invalid="true"] { border-color: #923c2d; color: #923c2d; background: #f0ddd3; }
-.timeline-clip-trim { position: absolute; z-index: 3; top: 15px; bottom: 15px; width: 12px; padding: 0; border: 0; background: transparent; cursor: ew-resize; touch-action: none; }
+.timeline-clip-trim { position: absolute; z-index: 3; top: 26px; bottom: 6px; width: 24px; padding: 0; border: 0; background: transparent; cursor: ew-resize; touch-action: none; }
 .timeline-clip-trim-start { transform: translateX(0); }
 .timeline-clip-trim-end { transform: translateX(-100%); }
 .timeline-clip-trim::before { pointer-events: none; content: ''; position: absolute; top: 10px; bottom: 10px; left: 50%; width: 2px; transform: translateX(-50%); border-radius: 1px; background: #446b50; }
 .timeline-clip-trim:hover { background: #174d3a25; }
-.timeline-range-handle { top: 0; height: 14px; }
-.timeline-range-handle::before { height: 10px; width: 8px; border-radius: 2px; }
+.timeline-range-handle { top: 0; height: 24px; }
+.timeline-range-handle::before { height: 14px; width: 8px; border-radius: 2px; }
 .timeline-range-handle-start::before { margin-left: 12px; }
 .timeline-range-handle-end::before { margin-left: 4px; }
 .timeline-track-lane[data-reorder-target="true"] { outline: 2px solid var(--green, #174d3a); outline-offset: -2px; background-color: var(--green-wash, #e7eee7); }
 .timeline-track-name:focus-visible, .timeline-track-order-button:focus-visible, .timeline-clip:focus-visible, .timeline-clip-trim:focus-visible { outline: 2px solid var(--green, #174d3a); outline-offset: -2px; }
+
+/* Destructive timeline edits preserve Media and are restored with timeline Undo. */
+.timeline-track-count { color: var(--muted, #58675f); font-size: 11px; white-space: nowrap; font-weight: 400; font-variant-numeric: tabular-nums; }
+.timeline-delete { color: var(--coral, #b84e38); }
+.timeline-delete:hover:not(:disabled) { color: var(--ink, #202d27); background: var(--paper-deep, #f3f2eb); }
+.timeline-delete-dialog { max-width: min(420px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--line, #d4d9d0); border-radius: 8px; background: var(--paper, #fbfaf6); color: var(--ink, #202d27); overflow-wrap: anywhere; }
+.timeline-delete-dialog::backdrop { background: #14211b66; }
+.timeline-delete-dialog h2 { margin: 0 0 12px; font-size: 18px; }
+.timeline-delete-dialog p { margin: 0 0 20px; line-height: 1.5; }
+.timeline-delete-dialog .timeline-actions { justify-content: flex-end; }

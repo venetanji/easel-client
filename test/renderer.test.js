@@ -491,3 +491,41 @@ test('removed skill copies stay disabled without an installed catalog and preser
   assert.equal(skillCompatibility({ id: 'pack-installed-hyperframes', name: 'Renamed copy' }, []).supported, false);
   assert.equal(skillCompatibility({ id: 'custom', name: 'My visual style' }, []).supported, true);
 });
+
+for (const narrow of [true, false]) {
+  test(`adopting a template reveals its canvas with narrow=${narrow}`, async () => {
+    const { adoptCreatedTemplate } = require('../src/renderer');
+    const events = [];
+    const studio = { dataset: { sidebar: 'open' } };
+    const canvas = { focus: () => events.push('focus'), scrollIntoView: options => events.push(['scroll', options]) };
+    const document = { defaultView: { matchMedia: query => { assert.equal(query, '(max-width: 850px)'); return { matches: narrow }; } }, querySelector: selector => selector === '.studio' ? studio : canvas };
+    const workspace = { changed: async result => events.push(['adopt', result]), setDrawer: (...args) => events.push(['drawer', ...args, studio.dataset.sidebar]) };
+    await adoptCreatedTemplate({ document, workspace, result: { instanceId: 'saved' }, isCurrentView: () => true, isDisposed: () => false, updateCanvasBounds: () => events.push('bounds') });
+    assert.deepEqual(events[0], ['adopt', { instanceId: 'saved' }]);
+    assert.deepEqual(events[1], ['drawer', false, !narrow, 'templates', narrow ? 'closed' : 'open']);
+    assert.equal(studio.dataset.sidebar, narrow ? 'closed' : 'open');
+    assert.equal(events.includes('focus'), narrow);
+    assert.equal(events.filter(event => Array.isArray(event) && event[0] === 'scroll').length, narrow ? 1 : 0);
+  });
+}
+for (const reason of ['navigated', 'disposed']) {
+  test(`template adoption does not steal focus after ${reason}`, async () => {
+    const { adoptCreatedTemplate } = require('../src/renderer');
+    let changed = false, bounds = 0;
+    await adoptCreatedTemplate({ document: { querySelector() { assert.fail('No UI access after the user leaves'); } }, workspace: { changed: async () => { changed = true; }, setDrawer() { assert.fail('No drawer change'); } }, result: {}, isCurrentView: () => reason !== 'navigated', isDisposed: () => reason === 'disposed', updateCanvasBounds: () => { bounds++; } });
+    assert.ok(changed); assert.equal(bounds, reason === 'disposed' ? 0 : 1);
+  });
+}
+
+test('workbench width limits reserve the actual rail width and 300px canvas', () => {
+  const { getWorkbenchWidthLimits } = require('../src/renderer');
+  assert.deepEqual(getWorkbenchWidthLimits(900, 68), { min: 280, max: 531 });
+  assert.deepEqual(getWorkbenchWidthLimits(900, 44), { min: 280, max: 555 });
+  assert.deepEqual(getWorkbenchWidthLimits(1600, 68), { min: 280, max: 580 });
+});
+
+test('narrow horizontal activity bars do not overwrite the saved desktop split width', () => {
+  const { getWorkbenchWidthLimits } = require('../src/renderer');
+  assert.deepEqual(getWorkbenchWidthLimits(800, 800), { min: 280, max: 580 });
+  assert.deepEqual(getWorkbenchWidthLimits(600, 600), { min: 280, max: 580 });
+});

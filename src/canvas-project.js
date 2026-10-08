@@ -284,7 +284,7 @@ function validateJavaScriptFiles(project, names) {
   return { checkedFiles: names.filter((name) => /\.m?js$/i.test(name)), moduleFiles: [...moduleFiles] };
 }
 
-function assembleProject(project, { readKit, readAsset, documentPath, includeSnapshot = true, maxOutputBytes = Infinity, validateOnly = false } = {}) {
+function assembleProject(project, { readKit, readAsset, documentPath, includeSnapshot = true, maxOutputBytes = Infinity, validateOnly = false, includeModuleSources = false } = {}) {
   validateProject(project);
   const { files, manifest } = project;
   const entry = resolveDocumentPath(project, documentPath);
@@ -394,7 +394,7 @@ function assembleProject(project, { readKit, readAsset, documentPath, includeSna
   html = resolveAssets(html, entry);
   const modules = hasModules ? moduleBootstrap(Object.fromEntries(Object.entries(files).filter(([name]) => /\.m?js$/i.test(name)).map(([name, source]) => [name, resolveAssets(source, name)])), moduleRoots) : '';
   // Check every document's source graph without repeatedly embedding shared media or kits.
-  if (validateOnly) return html;
+  if (validateOnly) return includeModuleSources ? `${html}${modules}` : html;
   let kits = '';
   for (const kit of manifest.kits) {
     if (!kit.digest) continue;

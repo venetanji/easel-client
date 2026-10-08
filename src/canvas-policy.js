@@ -7,8 +7,8 @@ const MAX_ASSET_BYTES = 32 * 1024 * 1024;
 const MAX_BASE64_LENGTH = Math.ceil(MAX_ASSET_BYTES / 3) * 4;
 // Export/runtime may carry one asset URL in authored markup and one in the resolver.
 const MAX_SNAPSHOT_BYTES = MAX_CANVAS_DOCUMENT_BYTES + 2 * MAX_BASE64_LENGTH + 4 * 1_048_576 + 65_536;
-const ALLOWED_CANVAS_KITS = new Set(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone', 'p5']);
-const BUNDLED_CANVAS_KITS = new Set(['three', 'phaser', 'matter', 'tone', 'p5']);
+const ALLOWED_CANVAS_KITS = new Set(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone', 'p5', 'strudel']);
+const BUNDLED_CANVAS_KITS = new Set(['three', 'phaser', 'matter', 'tone', 'p5', 'strudel']);
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const CSP = [
   "default-src 'none'",

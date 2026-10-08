@@ -148,3 +148,41 @@ installation was still running; that environment failure disappeared after
 - [Retained creative-skills MIT license](https://github.com/venetanji/creative-skills/blob/67f185c8f95182690e1ac56e734aa649f71b4df6/LICENSE)
 - [p5 2.3.4 source](https://github.com/processing/p5.js/tree/v2.3.4)
 - [Mediabunny 1.61.0 source](https://github.com/Vanilagy/mediabunny/tree/v1.61.0)
+
+## Unreleased Strudel integration addendum (5 October 2026)
+
+The template foundation from `8de2e635a8a501e2806d9b182e6ec41f58055398`
+has been integrated with GPL/HyperFrames-removal main
+`9931a8045d13a00fe872972f141bb5e997839c1e`. The original audit and verification
+above describe the earlier base; they are retained as historical evidence and
+do not certify this combined tree or any release artifact.
+
+The direct dependency inventory now includes pinned `@strudel/web` 1.3.0 as
+AGPL-3.0-or-later. Its vendor license, dependency notices and source terms remain
+separate from the Easel-owned GPL declaration. The runtime and opaque
+`canvas-kits/strudel-source.zip` both remain in the desktop packaging manifest.
+The archive's `easel/` source inputs now preserve the root and MCP workspace
+LICENSE/NOTICE files and the retained creative-skills MIT grant byte-for-byte;
+existing upstream source packages, notice supplements and input hashes remain.
+The archive's license-preservation and real Electron filter/rebuild regressions
+cover this integration boundary.
+
+This is an unreleased, incomplete template foundation. The missing
+`chord-voicings` notice, final corresponding-source review, sandboxed Strudel
+renderer proof and final artifact-level distribution checks remain open. No
+upstream license is replaced, no release clearance is claimed, and no binary
+release is authorized by this integration. See
+[strudel-compatibility.md](strudel-compatibility.md) for source provenance,
+packaging contracts and the remaining runtime/source gates.
+
+## Latest-main Qwen guidance addendum (5 October 2026)
+
+The subsequent main revision `6044a6b861f8f10d439fa47abdac8d872d8067d6`
+merged the Qwen transparency guidance originally introduced by
+`c31fa867de5c13b05b6934c82a063b8ccf13f5c2`. The retained-skill inventory now also
+lists `.agents/skills/qwen-transparent-images/SKILL.md`; that source and the
+matching alpha-verification recipe in `.agents/skills/easel-media/SKILL.md`
+are preserved byte-for-byte from the merged main. This records source provenance,
+not an independent ownership or licensing determination. The original five-skill
+audit above remains historical evidence. Existing license/notice files and their
+hashes are unchanged; no new grant or vendor relabeling is asserted.

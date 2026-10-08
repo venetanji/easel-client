@@ -6,7 +6,7 @@ function bootVideoEditor() {
   const status = document.getElementById('editor-status');
   const projectId = document.querySelector('meta[name="easel-canvas-id"]')?.content;
   function report(message, error = false) { status.textContent = message || ''; status.setAttribute('role', error ? 'alert' : 'status'); }
-  if (!window.EaselHost?.timeline || !projectId) { report('Open this editable project in Easel Studio to load its timeline and managed media. The project ZIP also preserves .easel/timeline.json.', true); return; }
+  if (!window.EaselHost?.timeline || !projectId) { report('Open this editable project in Easel Studio to load its timeline and managed media. The project ZIP preserves every sketch in .easel/timelines/.', true); return; }
   const call = (action, input) => window.EaselHost.timeline({ action, ...(input !== undefined ? { input } : {}) });
   const client = {
     readTimeline: () => call('read'), createTimeline: (_id, input = {}) => call('create', input),
@@ -16,12 +16,16 @@ function bootVideoEditor() {
     listAssets: () => call('library'), attachProjectAsset: (_id, assetId) => call('attach', { assetId }),
     saveTimelineExport: (_id, input) => call('save-export', { ...input, exportId: input.exportId || crypto.randomUUID() }),
   };
-  const editor = createVideoTimelineView({ document, container, client, onSelection: (selection) => { call('select', selection).catch((error) => report(error.message, true)); }, onStatus: () => report('') });
-  let opened = false;
+  const editor = createVideoTimelineView({ document, container, client, confirmDeleteTrack: (input) => confirmTimelineTrackDeletion({ document, container, ...input }), onSelection: (selection) => { call('select', selection).catch((error) => report(error.message, true)); }, onStatus: () => report('') });
+  let opened = false, binding = null;
   const open = async () => { if (opened) return; opened = true; try { await editor.open(projectId); } catch (error) { opened = false; report(error.message, true); } };
   const unsubscribe = window.EaselHost.onTimelineChanged?.((event) => {
     if (event.projectId !== projectId) return;
-    if (event.ready) open();
+    if (event.ready) {
+      if (event.error) { report(event.error, true); return; }
+      binding = event; open();
+    }
+    else if (!binding || event.timelineId !== binding.timelineId || event.instanceId !== binding.instanceId) return;
     else if (event.selectionConsumed) editor.clearSelection();
     else if (opened) editor.refresh().catch((error) => report(error.message, true));
   });

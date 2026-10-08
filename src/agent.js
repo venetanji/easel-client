@@ -1,7 +1,8 @@
-const { TIMELINE_TOOLS, TIMELINE_METHODS } = require('./video-timeline-tools');
+const { bindTimelineToolTarget, TIMELINE_TOOLS, TIMELINE_METHODS } = require('./video-timeline-tools');
 const { ALLOWED_MEDIA_TOOLS } = require('./media-mcp-client');
 const { PROJECT_CANVAS_TOOLS, SOURCE_CANVAS_TOOLS } = require('./canvas-tools');
 const { CANVAS_INPUT_TOOLS } = require('./canvas-input-tools');
+const { TEMPLATE_METHODS, TEMPLATE_TOOLS, templateCatalogResult } = require('./template-tools');
 const { canvasInputSummary, validateCanvasInputRequest } = require('./canvas-input');
 const crypto = require('node:crypto');
 const { awaitAbortable, isTurnAbort, throwIfAborted } = require('./turn-abort');
@@ -12,7 +13,7 @@ const MAX_CANVAS_HTML_BYTES = 1_048_576;
 const MAX_CANVAS_ASSETS = 8;
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const SAVED_MEDIA_TYPES = new Set([...IMAGE_TYPES, 'video/mp4', 'video/webm', 'audio/wav', 'audio/mpeg']);
-const ALLOWED_RUNTIME_KITS = new Set(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone', 'p5']);
+const ALLOWED_RUNTIME_KITS = new Set(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone', 'p5', 'strudel']);
 const PROJECT_CANVAS_METHODS = Object.freeze({
   list_canvas_documents: 'listCanvasDocuments',
   open_canvas_document: 'openCanvasDocument',
@@ -286,7 +287,7 @@ function toOpenAITools(mcpTools) {
         parameters: mediaToolSchema(tool),
       },
     }));
-  return [...tools, PRESENT_CANVAS_TOOL, ...CANVAS_TOOLS, ...MEDIA_REFERENCE_TOOLS, ...TIMELINE_TOOLS];
+  return [...tools, PRESENT_CANVAS_TOOL, ...CANVAS_TOOLS, ...MEDIA_REFERENCE_TOOLS, ...TIMELINE_TOOLS, ...TEMPLATE_TOOLS];
 }
 
 function formatSkillInstructions(skills) {
@@ -436,8 +437,13 @@ async function executeEaselTool(name, args, {
   if (Object.hasOwn(TIMELINE_METHODS, name)) {
     const method = TIMELINE_METHODS[name];
     if (typeof canvasController?.[method] !== 'function') throw new Error('Timeline editing is unavailable in this app version.');
-    if (context.turnOptions?.timelineSelection && args.projectId !== context.turnOptions.timelineSelection.projectId) throw new Error('The timeline edit must target the project selected for this turn.');
+    args = bindTimelineToolTarget(args, context.turnOptions?.timelineSelection, canvasController.assertTimelineSelectionOrigin);
     content = JSON.stringify(await canvasController[method](args, context));
+  } else if (Object.hasOwn(TEMPLATE_METHODS, name)) {
+    const method = TEMPLATE_METHODS[name];
+    if (typeof canvasController?.[method] !== 'function') throw new Error('Template discovery or creation is unavailable in this app version.');
+    const result = await canvasController[method](args, context);
+    content = JSON.stringify(name === 'list_templates' ? templateCatalogResult(result) : result);
   } else if (name === 'request_canvas_input' || name === 'get_canvas_inputs') {
     try {
       if (!canvasController) throw new Error('Canvas input is unavailable.');

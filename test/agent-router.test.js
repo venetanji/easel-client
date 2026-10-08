@@ -111,9 +111,11 @@ function fixture(t, { backend = 'builtin', freshCodex = false, userDataPath, see
   const calls = { llm: [], actions: [], disconnected: [], journal: [], events: [] };
   let canvasId = CANVAS;
   let documentPath = DOCUMENT;
+  let instanceId;
   const canvasController = {
     getCurrentCanvasId: () => canvasId,
     getCurrentDocumentPath: () => documentPath,
+    getCanvasInputScope: () => ({ canvasId, documentPath, instanceId }),
     getCurrentKits: () => ['tone'],
     async completeCanvasInput(entry) {
       calls.actions.push(entry.id);
@@ -161,7 +163,7 @@ function fixture(t, { backend = 'builtin', freshCodex = false, userDataPath, see
   }
   function answer(entry) {
     return router.submitCanvasInput({ requestId: entry.id, canvasId: entry.canvasId,
-      documentPath: entry.documentPath, value: 'warm' });
+      documentPath: entry.documentPath, ...(instanceId ? { instanceId } : {}), value: 'warm' });
   }
   function capture(overrides = {}) {
     return router.submitCanvasMedia({ canvasId: CANVAS, documentPath: DOCUMENT, chatId: router.getActiveChatId(),
@@ -180,6 +182,7 @@ function fixture(t, { backend = 'builtin', freshCodex = false, userDataPath, see
   }
   return { directory, router, control, builtin, codex, server, calls, chatStore, inputStore,
     mediaJobStore, codexTurns, choice, answer, capture, job,
+    setInstance(id) { instanceId = id; },
     setCanvas(id, document = DOCUMENT) { canvasId = id; documentPath = document; } };
 }
 
@@ -593,4 +596,44 @@ test('external Stop disconnects its controller while retaining accepted media jo
   assert.notEqual(f.mediaJobStore.get(job.id).notification, 'responded');
   assert.equal(f.codexTurns().length, 0);
   assert.equal(f.calls.llm.length, 0);
+});
+
+for (const backend of ['builtin', 'codex', 'external']) test(`${backend}_rejects_a_rebound_instance_answer_before_resume`, async (t) => {
+  const f = fixture(t, { backend }), instanceId = '1'.repeat(32);
+  f.setInstance(instanceId);
+  const origin = backend === 'codex' ? codexOrigin() : backend === 'external' ? { backend, chatId: f.router.getActiveChatId() } : undefined;
+  const entry = f.choice(origin, { instanceId, afterSubmit: 'restorePreviousView' });
+  f.setInstance('2'.repeat(32));
+  await assert.rejects(f.answer(entry), /original|instance|canvas/i);
+  await flush();
+  assert.equal(f.inputStore.get(entry.id).status, 'pending');
+  assert.equal(f.calls.actions.length + f.calls.llm.length + f.codexTurns().length, 0);
+});
+
+for (const backend of ['builtin', 'codex']) test(`${backend}_instance_answer_resumes_once_with_document_and_instance_context`, async (t) => {
+  const f = fixture(t, { backend }), instanceId = '1'.repeat(32);
+  f.setInstance(instanceId);
+  const entry = f.choice(backend === 'codex' ? codexOrigin() : undefined, { instanceId, afterSubmit: 'restorePreviousView' });
+  f.router.acknowledgeChat(f.router.getActiveChatId());
+  await f.answer(entry);
+  await waitFor(() => f.inputStore.get(entry.id).status === 'completed', 'one instance-scoped continuation');
+  await assert.rejects(f.answer(entry), /already answered|no longer active/);
+  f.router.recoverCanvasInputs(); await flush();
+  const requests = backend === 'builtin' ? f.calls.llm : f.codexTurns();
+  assert.equal(requests.length, 1);
+  const text = backend === 'builtin' ? JSON.stringify(requests[0].messages) : JSON.stringify(requests[0][1].input);
+  assert.match(text, new RegExp(instanceId));
+  assert.match(text, /index.html/);
+  assert.deepEqual(f.calls.actions, [entry.id]);
+});
+
+for (const backend of ['builtin', 'codex']) test(`${backend}_rechecks_instance_after_deferred_completion`, async (t) => {
+  const gate = deferred(), f = fixture(t, { backend, completeCanvasInput: () => gate.promise }), instanceId = '1'.repeat(32);
+  f.setInstance(instanceId);
+  const entry = f.choice(backend === 'codex' ? codexOrigin() : undefined, { instanceId, afterSubmit: 'restorePreviousView' });
+  f.router.acknowledgeChat(f.router.getActiveChatId()); await f.answer(entry);
+  await waitFor(() => f.calls.actions.length === 1, 'completion admission');
+  f.setInstance('2'.repeat(32)); gate.resolve();
+  await waitFor(() => f.inputStore.get(entry.id).status === 'failed', 'rejected stale continuation');
+  assert.equal(f.calls.llm.length + f.codexTurns().length, 0);
 });

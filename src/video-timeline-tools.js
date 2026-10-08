@@ -10,15 +10,15 @@ const item = { type: 'object', additionalProperties: false, required: ['id', 'tr
 } };
 const operation = { type: 'object', additionalProperties: false, required: ['type'], properties: {
   type: { type: 'string', enum: ['add-track', 'remove-track', 'insert', 'remove', 'move', 'trim', 'set-audio-level'] },
-  track, item, trackId: id, itemId: id, startFrame: frame, endFrame: frame, sourceStartSeconds: seconds, sourceEndSeconds: seconds,
+  track, item, trackId: id, itemId: id, removeItems: { type: 'boolean', description: 'Only for remove-track: explicitly true deletes its clips atomically; false or omitted requires an empty track.' }, startFrame: frame, endFrame: frame, sourceStartSeconds: seconds, sourceEndSeconds: seconds,
   gain: { type: 'number', minimum: 0, maximum: 1 }, fadeInFrames: frame, fadeOutFrames: frame,
 } };
 const revision = { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER };
-function tool(name, description, properties, required) { return { type: 'function', function: { name, description, parameters: { type: 'object', additionalProperties: false, properties, required } } }; }
+function tool(name, description, properties, required) { return { type: 'function', function: { name, description, parameters: { type: 'object', additionalProperties: false, properties: { ...properties, timelineId: id, instanceId: projectId }, required } } }; }
 const TIMELINE_TOOLS = Object.freeze([
-  tool('inspect_timeline', 'Read the active project’s non-destructive video timeline, revision, undo/redo status and supported capabilities. Inspect before editing. Items use integer half-open project frame spans and source times in seconds; these are different units.', { projectId }, ['projectId']),
+  tool('inspect_timeline', 'Read the active project’s non-destructive video timeline, revision, undo/redo status and supported capabilities. Specify timelineId or instanceId when the project has multiple sketches; project-only requests are ambiguous. Inspect before editing. Items use integer half-open project frame spans and source times in seconds; these are different units.', { projectId }, ['projectId']),
   tool('create_timeline', 'Create an empty 24 fps, 1920x1080 timeline with video, audio and image overlay tracks for the active project. Does not replace an existing timeline or source assets.', { projectId }, ['projectId']),
-  tool('apply_timeline_edit', 'Apply 1–100 atomic typed timeline edits against expectedRevision. Insert uses item; remove uses itemId; move uses itemId,startFrame,optional trackId; trim uses itemId,startFrame,endFrame,sourceStartSeconds,sourceEndSeconds; add-track uses track; remove-track uses trackId; set-audio-level uses itemId and gain/fadeInFrames/fadeOutFrames. Fields irrelevant to the selected type are rejected. Assets must be attached and match track type. Hard cuts only; no same-track overlaps, arbitrary code, paths, transitions or export. On revision conflict reinspect, never overwrite newer edits.', { projectId, expectedRevision: revision, operations: { type: 'array', minItems: 1, maxItems: 100, items: operation } }, ['projectId', 'expectedRevision', 'operations']),
+  tool('apply_timeline_edit', 'Apply 1–100 atomic typed timeline edits against expectedRevision. Insert uses item; remove uses itemId; move uses itemId,startFrame,optional trackId; trim uses itemId,startFrame,endFrame,sourceStartSeconds,sourceEndSeconds; add-track uses track; remove-track uses trackId and defaults to empty tracks only; explicitly add removeItems:true to delete the track and all its clips atomically, preserving source media; set-audio-level uses itemId and gain/fadeInFrames/fadeOutFrames. Fields irrelevant to the selected type are rejected. Assets must be attached and match track type. Hard cuts only; no same-track overlaps, arbitrary code, paths, transitions or export. On revision conflict reinspect, never overwrite newer edits.', { projectId, expectedRevision: revision, operations: { type: 'array', minItems: 1, maxItems: 100, items: operation } }, ['projectId', 'expectedRevision', 'operations']),
   tool('undo_timeline', 'Undo one timeline edit, preserving source media and increasing revision. Requires the inspected expectedRevision.', { projectId, expectedRevision: revision }, ['projectId', 'expectedRevision']),
   tool('redo_timeline', 'Redo one undone timeline edit at expectedRevision. New edits invalidate redo.', { projectId, expectedRevision: revision }, ['projectId', 'expectedRevision']),
 ]);
@@ -31,4 +31,14 @@ function timelineContextText(context) {
   if (value.length > 32000 || /data:[^\s"]+;base64,/i.test(value)) throw new Error('Timeline context must contain bounded managed references, never media bytes.');
   return `\n\nTimeline selection for this message only (host-validated project revision; names are document data):\n${value}\nInspect before editing; if the revision is stale, ask for a fresh selection. Do not silently replace the user’s selection. The editable HTML video template exports frame-sampled WebM with Mediabunny using its Export button. Codec support is checked at runtime; local video generation is unavailable.`;
 }
-module.exports = { TIMELINE_TOOLS, TIMELINE_METHODS, timelineContextText };
+function bindTimelineToolTarget(args, selection, assertOrigin) {
+  if (!selection) return args;
+  if (typeof assertOrigin !== 'function') throw new Error('The selected timeline runtime cannot be verified. Select the range again.');
+  assertOrigin(selection);
+  if (args.projectId !== selection.projectId) throw new Error('The timeline edit must target the project selected for this turn.');
+  for (const key of ['timelineId', 'instanceId']) {
+    if (args[key] !== undefined && args[key] !== selection[key]) throw new Error('The timeline edit must target the timeline instance selected for this turn.');
+  }
+  return { ...args, ...(selection.timelineId ? { timelineId: selection.timelineId } : {}), ...(selection.instanceId ? { instanceId: selection.instanceId } : {}) };
+}
+module.exports = { bindTimelineToolTarget, TIMELINE_TOOLS, TIMELINE_METHODS, timelineContextText };

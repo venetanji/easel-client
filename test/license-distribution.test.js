@@ -38,6 +38,17 @@ test('GPL-3.0-or-later is declared for both owned packages and their lock entrie
   assert.equal(lock.packages['node_modules/mediabunny'].license, 'MPL-2.0');
 });
 
+test('the integrated Strudel dependency remains explicitly inventoried under its upstream AGPL terms', () => {
+  const entry = json('docs/license-inventory.json').direct_npm_dependencies.find((item) => item.workspace === '.' && item.name === '@strudel/web');
+  const dependency = json('package-lock.json').packages['node_modules/@strudel/web'];
+  assert.deepEqual(entry, {
+    workspace: '.', name: '@strudel/web', version: dependency.version,
+    declared_license: 'AGPL-3.0-or-later', group: 'devDependencies',
+  });
+  assert.equal(json('package.json').devDependencies['@strudel/web'], entry.version);
+  assert.equal(dependency.license, entry.declared_license);
+});
+
 test('full GPL text and scoped notices accompany desktop and standalone sources', () => {
   for (const dir of ['', 'packages/media-mcp/']) {
     assert.ok(fs.existsSync(path.join(root, `${dir}LICENSE`)), `${dir}LICENSE exists`);
@@ -74,6 +85,12 @@ test('current inventory has no imported skills or obsolete preserved notice path
   for (const entry of inventory.preserved_notice_files) {
     assert.equal(crypto.createHash('sha256').update(fs.readFileSync(path.join(root, entry.path))).digest('hex'), entry.sha256, entry.path);
   }
+});
+
+test('current retained-skill inventory includes the latest main skill tree', () => {
+  const directory = path.join(root, '.agents/skills');
+  const retained = fs.readdirSync(directory).filter((name) => fs.existsSync(path.join(directory, name, 'SKILL.md'))).sort();
+  assert.deepEqual(json('docs/license-inventory.json').remaining_native_skills, retained);
 });
 
 test('retained creative-skills adaptations carry the original MIT grant and attribution', () => {
