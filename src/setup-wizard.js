@@ -54,6 +54,25 @@ function createSetupWizard({ document, client, storage, onSettings, onAgentState
         value: JSON.stringify({ connectionId: model.connectionId, model: model.model }),
         label: `${settings.connections.find((connection) => connection.id === model.connectionId).name} / ${model.name || model.model}`,
       }));
+    const mediaModels = (settings?.models || []).filter((model) => model.roles.includes('media')
+      && settings.connections.some((connection) => connection.id === model.connectionId));
+    node('setup-media-models').replaceChildren(...mediaModels.map((model) => {
+      const row = document.createElement('label');
+      row.className = 'setup-media-model';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = Boolean(model.enabled);
+      checkbox.disabled = locked() || (model.enabled && model.roles.includes('agent')
+        && settings.activeConnectionId === model.connectionId && settings.litellmModel === model.model);
+      checkbox.dataset.selection = JSON.stringify({ connectionId: model.connectionId, model: model.model });
+      const name = document.createElement('span');
+      const connection = settings.connections.find((item) => item.id === model.connectionId);
+      const mediaTypes = (model.mediaTypes || []).map((type) => type[0].toUpperCase() + type.slice(1)).join(', ');
+      name.textContent = `${connection.name} / ${model.name || model.model}${mediaTypes ? ` (${mediaTypes})` : ''}`;
+      row.append(checkbox, name);
+      return row;
+    }));
+    node('setup-media-empty').hidden = mediaModels.length > 0;
     const placeholder = document.createElement('option');
     placeholder.value = '';
     placeholder.disabled = true;
@@ -72,7 +91,7 @@ function createSetupWizard({ document, client, storage, onSettings, onAgentState
     node('setup-refresh').disabled = locked();
     node('setup-model-title').textContent = backend === 'external' ? 'Connect your external agent' : 'Choose a chat model';
     node('setup-model-hint').textContent = backend === 'builtin'
-      ? 'Choose one model to enable for chat and tools. Image and video models are optional; an Easel media endpoint alone does not provide a chat agent.'
+      ? 'Choose one model to enable for chat and tools. Image, video and audio models are optional; an Easel media endpoint alone does not provide a chat agent.'
       : backend === 'codex' ? 'Use a model from your signed-in Codex account. API endpoints are optional for media generation.'
         : 'Your external controller supplies its own chat model. Go back to Agent to copy the connection details, then connect your controller.';
     node('setup-ready').textContent = ready ? 'Your agent is ready.'
@@ -81,10 +100,12 @@ function createSetupWizard({ document, client, storage, onSettings, onAgentState
           : options.length ? 'Select a chat model before finishing setup.' : 'Add a chat endpoint in Credentials, then refresh its models.';
     node('setup-back').disabled = step === 0 || locked();
     node('setup-skip').disabled = locked();
-    next.disabled = locked() || !control || (step === 1 && backend === 'builtin' && !settings?.connections.length) || (step === 2 && !ready);
-    next.textContent = step === 2 ? 'Start creating' : step === 1 && backend !== 'builtin' && !settings?.connections.length ? 'Continue without media' : 'Continue';
-    node('setup-progress').textContent = `Step ${step + 1} of 3`;
-    ['agent', 'credentials', 'model'].forEach((name, index) => {
+    node('setup-media-skip').disabled = locked();
+    node('setup-media-refresh').disabled = locked() || backend !== 'builtin';
+    next.disabled = locked() || !control || (step === 1 && backend === 'builtin' && !settings?.connections.length) || (step >= 2 && !ready);
+    next.textContent = step === 3 ? 'Start creating' : step === 1 && backend !== 'builtin' && !settings?.connections.length ? 'Continue without media' : 'Continue';
+    node('setup-progress').textContent = `Step ${step + 1} of 4`;
+    ['agent', 'credentials', 'model', 'media'].forEach((name, index) => {
       const item = node(`setup-step-${name}`);
       if (index === step) item.setAttribute('aria-current', 'step');
       else item.removeAttribute('aria-current');
@@ -92,13 +113,15 @@ function createSetupWizard({ document, client, storage, onSettings, onAgentState
   }
 
   function showStep(value) {
-    step = Math.max(0, Math.min(2, value));
+    step = Math.max(0, Math.min(3, value));
     message('');
     onSection(step === 0 ? 'agent' : step === 1 ? 'credentials' : null);
     node('setup-model-panel').hidden = step !== 2;
+    node('setup-media-panel').hidden = step !== 3;
     render();
     if (step === 1 && !settings?.connections.length && control?.backend === 'builtin') onAddEndpoint?.();
     else if (step === 2) (node('setup-model-trigger') || select).focus();
+    else if (step === 3) node('setup-media-title').focus();
     else node(`agent-backend-${control?.backend || 'builtin'}`).focus();
   }
 
@@ -156,7 +179,7 @@ function createSetupWizard({ document, client, storage, onSettings, onAgentState
   listen(node('setup-skip'), 'click', () => dismiss());
   listen(next, 'click', () => {
     if (next.disabled || locked()) return;
-    if (step === 2) { if (setupReadiness(settings, control)) dismiss('complete'); }
+    if (step === 3) { if (setupReadiness(settings, control)) dismiss('complete'); }
     else showStep(step + 1);
   });
   listen(select, 'change', () => {
@@ -174,12 +197,25 @@ function createSetupWizard({ document, client, storage, onSettings, onAgentState
       }
     });
   });
-  listen(node('setup-refresh'), 'click', () => run(async () => {
+  async function refreshModels() {
     const result = await client.getModelCatalog();
     onSettings(result.settings);
     const errors = result.catalog.filter((entry) => entry.error);
     if (errors.length) throw new Error('Some endpoints could not be reached. Check their credentials and try again.');
-  }));
+  }
+  listen(node('setup-refresh'), 'click', () => run(refreshModels));
+  listen(node('setup-media-refresh'), 'click', () => run(refreshModels));
+  listen(node('setup-media-models'), 'change', (event) => {
+    const checkbox = event.target;
+    if (checkbox?.type !== 'checkbox' || !checkbox.dataset.selection) return;
+    const selection = JSON.parse(checkbox.dataset.selection);
+    run(async () => {
+      const model = settings.models.find((entry) => entry.connectionId === selection.connectionId && entry.model === selection.model);
+      if (!model || !model.roles.includes('media')) throw new Error('This model is no longer available for media. Refresh the model list.');
+      onSettings(await client.updateModel({ ...selection, enabled: checkbox.checked, roles: model.roles }));
+    });
+  });
+  listen(node('setup-media-skip'), 'click', () => { if (!locked()) dismiss('complete'); });
   listen(dialog, 'cancel', (event) => {
     if (!active) return;
     event.preventDefault();

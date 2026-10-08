@@ -428,6 +428,8 @@ function renderInstalledKitCatalog(document, listElement, catalog) {
   listElement.replaceChildren(...catalog.map((kit) => {
     const row = document.createElement('div');
     row.className = 'kit-availability';
+    row.dataset.kitId = kit.id;
+    row.tabIndex = -1;
     const copy = document.createElement('span');
     const name = document.createElement('strong');
     name.textContent = kit.name;
@@ -756,6 +758,14 @@ async function undoCanvas({ client, canvasId, statusElement, onCanvasChange }) {
     setStatus(statusElement, error instanceof Error ? error.message : 'Could not undo canvas change.', true);
     throw error;
   }
+}
+
+
+function updateMediaCapabilityNotice(tools, statusElement, settingsButton) {
+  const missingMediaModel = !tools.includes('generate_image') && !tools.includes('generate_video');
+  if (settingsButton) settingsButton.hidden = !missingMediaModel;
+  if (missingMediaModel) setStatus(statusElement, 'Enable an image or video Media model in Settings > Models to generate media.');
+  return missingMediaModel;
 }
 
 function renderAgentEvent({ document, messagesElement, imagesElement, event, statusElement, activityElement, activityLabel, copyText, assetPreviews, pendingAssetCaptions, onLibraryRefresh, onCanvasChange, onCapabilities, onAddToCanvas, onImageReady, mediaPreviewOptions }) {
@@ -1098,6 +1108,20 @@ function wireRenderer({ document, client }) {
   const messagesElement = document.getElementById('messages');
   const activitySettings = document.getElementById('settings-open');
   const installedKitList = document.getElementById('installed-kit-list');
+  const modelsSettingsShortcut = document.getElementById('open-models-settings');
+  let pendingKitFocusId = '';
+  modelsSettingsShortcut?.addEventListener('click', () => openSettings('models'));
+  function focusMissingKit(id) {
+    const rows = [...installedKitList.querySelectorAll('.kit-availability')];
+    for (const item of rows) item.removeAttribute('aria-current');
+    const row = rows.find((item) => item.dataset.kitId === id);
+    if (!row) return false;
+    row.setAttribute('aria-current', 'true');
+    row.focus({ preventScroll: true });
+    row.scrollIntoView?.({ block: 'center' });
+    pendingKitFocusId = '';
+    return true;
+  }
   const leftColumn = document.querySelector('.left-column');
   const studio = document.querySelector('.studio');
   const workbenchSplitter = document.getElementById('workbench-splitter');
@@ -1230,6 +1254,10 @@ function wireRenderer({ document, client }) {
       updateSendState();
     },
     onStatus: (text, error) => setStatus(statusElement, text, error),
+    onOpenSettings: (section, missingKits = []) => {
+      if (section !== 'kits') return openSettings(section);
+      openSettingsForKit(missingKits[0]);
+    },
   });
   async function loadChatMedia(asset) {
     try { return await client.getLibraryAsset(asset.assetId); }
@@ -1404,6 +1432,12 @@ function wireRenderer({ document, client }) {
       item.tab.tabIndex = active ? 0 : -1;
       item.section.hidden = !active;
     }
+  }
+
+  function openSettingsForKit(id) {
+    pendingKitFocusId = id;
+    openSettings('kits');
+    focusMissingKit(id);
   }
 
   function openSettings(id = 'credentials', focusTarget = null) {
@@ -2795,9 +2829,7 @@ function wireRenderer({ document, client }) {
       mediaPreviewOptions,
       onLibraryRefresh: refreshAssets,
       onCanvasChange: (canvas) => workspace.changed(canvas).catch((error) => setStatus(statusElement, error.message, true)),
-      onCapabilities: (tools) => {
-        if (!tools.includes('generate_image') && !tools.includes('generate_video')) setStatus(statusElement, 'Enable an image or video Media model in Settings > Models to generate media.');
-      },
+      onCapabilities: (tools) => updateMediaCapabilityNotice(tools, statusElement, modelsSettingsShortcut),
     });
     if (canvasResumeBusy) updateSendState();
   });
@@ -2806,7 +2838,10 @@ function wireRenderer({ document, client }) {
     return refreshModelCatalog();
   }).catch((error) => setStatus(document.getElementById('connection-status'), error?.message || 'Could not load settings.', true));
   client.getAgentControl().then((state) => agentControlUi.applyState(state)).catch((error) => agentControlUi.loadError(error));
-  client.getAvailableKits().then((catalog) => renderInstalledKitCatalog(document, installedKitList, catalog))
+  client.getAvailableKits().then((catalog) => {
+    renderInstalledKitCatalog(document, installedKitList, catalog);
+    if (pendingKitFocusId) focusMissingKit(pendingKitFocusId);
+  })
     .catch((error) => setStatus(document.getElementById('kit-status'), error?.message || 'Could not read installed kits.', true));
   const initialChatEpoch = chatSnapshotEpoch;
   client.getCurrentChat({ deferResume: true }).then((chat) => { if (initialChatEpoch === chatSnapshotEpoch) restoreChat(chat); })
@@ -2895,6 +2930,7 @@ if (typeof module !== 'undefined') {
     refreshLiteLLMModels,
     testLiteLLMConnection,
     renderAgentEvent,
+    updateMediaCapabilityNotice,
     renderStreamingAgentEvent,
     renderAssetLibrary,
     renderCanvasLibrary,

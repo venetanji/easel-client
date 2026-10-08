@@ -22,7 +22,17 @@ function fixture({ stored, settings, control } = {}) {
       }
       return nodes.get(id);
     },
-    createElement: () => ({ value: '', textContent: '' }),
+    createElement(tagName = 'div') {
+      const listeners = new Map();
+      let text = '';
+      const item = { tagName, value: '', get textContent() { return text + this.children.map((child) => child.textContent || '').join(''); }, set textContent(value) { text = String(value); this.children = []; }, children: [], dataset: {}, checked: false, disabled: false,
+        append(...children) { this.children.push(...children); },
+        addEventListener(type, action) { listeners.set(type, action); },
+        async dispatchEvent(event) { return listeners.get(event.type)?.(event); },
+        setAttribute(name, value) { this[name] = value; },
+      };
+      return item;
+    },
   };
   const values = new Map(stored ? [[SETUP_STORAGE_KEY, stored]] : []);
   const storage = { getItem: (key) => values.get(key) || null, setItem: (key, value) => values.set(key, value) };
@@ -111,6 +121,45 @@ test('selecting a discovered chat model enables it and saves the active selectio
   assert.deepEqual(f.calls.filter(([call]) => ['enable', 'select'].includes(call)).map(([call]) => call), ['enable', 'select']);
   assert.equal(f.node('setup-next').disabled, false);
   await f.click('setup-next');
+  assert.equal(f.node('setup-progress').textContent, 'Step 4 of 4');
+  await f.click('setup-next');
+  assert.equal(f.values.get(SETUP_STORAGE_KEY), 'complete');
+});
+
+test('chat setup continues to a skippable media step that enables discovered media models', async () => {
+  const f = fixture(); f.update();
+  await f.click('setup-next');
+  f.apply({ connections: [{ id: 'chat', name: 'Studio endpoint' }], models: [
+    { connectionId: 'chat', model: 'chat-model', name: 'Chat model', enabled: false, roles: ['agent'] },
+    { connectionId: 'chat', model: 'minimax/H3', name: 'MiniMax H3', enabled: false, roles: ['media'], mediaTypes: ['video'] },
+  ] });
+  await f.click('setup-next');
+  f.node('setup-model').value = JSON.stringify({ connectionId: 'chat', model: 'chat-model' });
+  await f.node('setup-model').dispatchEvent({ type: 'change' }); await new Promise(setImmediate);
+  await f.click('setup-next');
+  assert.equal(f.node('setup-progress').textContent, 'Step 4 of 4');
+  assert.equal(f.node('setup-media-panel').hidden, false);
+  assert.match(f.node('setup-media-models').children[0].children[1].textContent, /MiniMax H3.*Video/);
+  const toggle = f.node('setup-media-models').children[0].children[0];
+  toggle.checked = true;
+  await f.node('setup-media-models').dispatchEvent({ type: 'change', target: toggle });
+  await new Promise(setImmediate);
+  assert.ok(f.calls.some(([kind, input]) => kind === 'enable' && input.model === 'minimax/H3' && input.enabled === true));
+  assert.equal(f.node('setup-next').disabled, false);
+  await f.click('setup-next');
+  assert.equal(f.values.get(SETUP_STORAGE_KEY), 'complete');
+});
+
+test('media setup can be skipped when discovery found no media models', async () => {
+  const f = fixture({ stored: 'started', settings: {
+    connections: [{ id: 'chat', name: 'Chat endpoint' }], activeConnectionId: 'chat', litellmModel: 'chat-model',
+    models: [{ connectionId: 'chat', model: 'chat-model', enabled: true, roles: ['agent'] }],
+  } });
+  f.update();
+  await f.click('setup-next'); await f.click('setup-next'); await f.click('setup-next');
+  assert.equal(f.node('setup-progress').textContent, 'Step 4 of 4');
+  assert.equal(f.node('setup-media-empty').hidden, false);
+  await f.click('setup-media-skip');
   assert.equal(f.values.get(SETUP_STORAGE_KEY), 'complete');
 });
 
@@ -131,6 +180,6 @@ test('pending account or endpoint work blocks setup navigation and dismissal', a
   f.ui.update(f.settings, { backend: 'builtin', busy: true });
   await f.click('setup-next'); await f.click('setup-skip');
   assert.equal(f.ui.isActive(), true);
-  assert.equal(f.node('setup-progress').textContent, 'Step 1 of 3');
+  assert.equal(f.node('setup-progress').textContent, 'Step 1 of 4');
   assert.equal(f.node('setup-next').disabled, true);
 });

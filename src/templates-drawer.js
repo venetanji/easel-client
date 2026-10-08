@@ -1,5 +1,5 @@
 // Catalog content only. ProjectWorkspace owns the mutually exclusive rail drawers.
-function createTemplatesDrawer({ document, client, onOpen, onPrompt, onStatus, isBusy, getProjectId = () => '', onBusy }) {
+function createTemplatesDrawer({ document, client, onOpen, onPrompt, onStatus, isBusy, getProjectId = () => '', onBusy, onOpenSettings }) {
   const panel = document.getElementById('templates-drawer');
   const list = document.getElementById('templates-list');
   const detail = document.getElementById('templates-detail');
@@ -124,7 +124,13 @@ function createTemplatesDrawer({ document, client, onOpen, onPrompt, onStatus, i
     heading.id = 'template-detail-title';
     heading.setAttribute('tabindex', '-1');
     detail.append(back, heading, node('p', '', entry.purpose));
-    if (!available(entry)) detail.append(node('p', 'template-unavailable', entry.availability?.reason || 'This template is unavailable in this build.'));
+    if (!available(entry)) {
+      detail.append(node('p', 'template-unavailable', entry.availability?.reason || 'This template is unavailable in this build.'));
+      const missingKits = entry.availability?.missingKits;
+      if (Array.isArray(missingKits) && missingKits.length) {
+        detail.append(button('Open Kits settings', () => onOpenSettings?.('kits', [...missingKits]), 'detail', 'button outline small'));
+      }
+    }
     const actions = node('div', 'template-actions');
     const createButton = button('Create project', () => create('new-project'), 'detail', 'button primary');
     const add = button('Add to current project', () => create('current-project'), 'detail');

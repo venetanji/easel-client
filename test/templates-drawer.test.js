@@ -37,7 +37,7 @@ function fixture() {
   document.createElement = element;
   let projectId = '';
   let busy = false;
-  const calls = { create: [], open: [], onOpen: [], prompt: [], status: [], busy: [], send: [], generate: [], audio: [] };
+  const calls = { create: [], open: [], onOpen: [], prompt: [], status: [], busy: [], send: [], generate: [], audio: [], settings: [] };
   const saved = { projectId: 'a'.repeat(32), instanceId: 'b'.repeat(32), documentPath: `sketches/${'b'.repeat(32)}/index.html`, templateId: 'video-editor', opened: true };
   const client = {
     async listTemplates() { return listTemplates(); },
@@ -49,7 +49,8 @@ function fixture() {
   let promptFailure = '';
   const options = { document, client, getProjectId: () => projectId, isBusy: () => busy,
     onOpen: async (result) => { if (openFailure) throw Error(openFailure); calls.onOpen.push(result); }, onPrompt: (prompt) => { if (promptFailure) throw Error(promptFailure); calls.prompt.push(prompt); },
-    onStatus: (...args) => calls.status.push(args), onBusy: (value) => calls.busy.push(value) };
+    onStatus: (...args) => calls.status.push(args), onBusy: (value) => calls.busy.push(value),
+    onOpenSettings: (...args) => calls.settings.push(args) };
   const drawer = createTemplatesDrawer(options);
   const buttons = (id) => nodes.get(id).querySelectorAll('button');
   const button = (id, label) => buttons(id).find((item) => item.textContent === label);
@@ -150,6 +151,10 @@ test('missing kit reason stays visible and blocks creation', async () => {
   f.client.listTemplates = async () => [video]; await f.drawer.refresh(); await f.choose('video-editor');
   assert.match(f.nodes.get('templates-detail').textContent, /Check Kits in Settings/);
   assert.equal(f.button('templates-detail', 'Create project').disabled, true);
+  const settings = f.button('templates-detail', 'Open Kits settings');
+  assert.ok(settings);
+  await settings.click();
+  assert.deepEqual(f.calls.settings, [['kits', ['canvas-2d']]]);
 });
 
 test('Explore prepares a creative prompt without dispatching model, media or audio calls', async () => {

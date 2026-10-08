@@ -106,6 +106,7 @@
       .runtime-footnote { margin: 10px 2px 2px; color: #65736b; font-size: 12px; line-height: 1.45; }
       .kit-list { display: grid; gap: 0; padding: 14px 19px 4px; }
       .kit-availability { min-height: 62px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 11px; border-bottom: 1px solid #e3e7df; padding: 9px 2px; }
+      .kit-availability[aria-current="true"] { outline: 2px solid var(--coral); outline-offset: -2px; background: #fff5f0; }
       .kit-availability strong, .kit-availability small { display: block; }
       .kit-availability strong { color: #2e4438; font-size: 12px; }
       .kit-availability small { margin-top: 4px; color: #5e6c63; font-size: 12px; line-height: 1.4; }
@@ -324,7 +325,7 @@
       .settings-dialog[data-setup="true"] .settings-nav { display: none; }
       .setup-header { flex: 0 0 auto; padding: 16px 24px 0; }
       .setup-header p { max-width: 62ch; color: var(--muted); }
-      .setup-steps { display: flex; gap: 22px; list-style: none; padding: 0; margin: 18px 0 0; border-bottom: 1px solid var(--line); }
+      .setup-steps { display: flex; flex-wrap: wrap; gap: clamp(8px, 2vw, 22px); list-style: none; padding: 0; margin: 18px 0 0; border-bottom: 1px solid var(--line); }
       .setup-steps li { padding: 0 0 10px; color: var(--muted); }
       .setup-steps li[aria-current="step"] { color: var(--green-deep); border-bottom: 2px solid var(--green); font-weight: 600; }
       .setup-footer { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 24px; border-top: 1px solid var(--line); }
@@ -332,6 +333,9 @@
       .setup-footer #setup-progress { color: var(--muted); font-size: 12px; }
       .setup-model-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 18px; }
       .setup-model-body { padding: 16px 19px; }
+      .setup-media-models { display: grid; gap: 8px; padding: 16px 19px; }
+      .setup-media-model { display: flex; align-items: center; gap: 10px; min-height: 42px; border-bottom: 1px solid var(--line); color: var(--ink); font-size: 13px; }
+      .setup-media-empty { margin: 8px 19px; color: var(--muted); font-size: 12px; line-height: 1.5; }
       .settings-nav { display: grid; align-content: start; gap: 4px; border-right: 1px solid #e0e5dd; padding: 12px 8px; background: #f3f3ed; }
       .settings-tab { min-height: 36px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 7px; padding: 6px 9px; color: #526258; background: transparent; text-align: left; font-size: 12px; font-weight: 650; }
       .settings-tab:hover { color: var(--green-deep); background: #e8eee6; }
@@ -678,7 +682,7 @@
             </article>
           </div>
           <div id="agent-activity" class="agent-activity" role="status" aria-live="polite" hidden><span class="activity-pulse" aria-hidden="true"></span><span id="agent-activity-label">Preparing your image…</span></div>
-          <p id="status" role="status" aria-live="polite"></p>
+          <p id="status" role="status" aria-live="polite"></p><button id="open-models-settings" class="button outline small" type="button" hidden>Open Models settings</button>
           <form id="chat-form">
             <div id="composer-external" class="composer-external" hidden><strong>Chat in your connected agent</strong><p>Your external MCP client controls Easel. Keep this window open; your draft and chat history stay here.</p><button id="composer-external-settings" class="button quiet small" type="button">Connection details</button></div>
             <div class="composer">
@@ -725,8 +729,8 @@
     <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
       <div class="dialog-head"><div><h2 id="settings-title">Settings</h2><p id="settings-description" class="dialog-description">Manage your agent, credentials, models, creative skills, and canvas kits.</p></div><div class="button-row"><button id="setup-open" class="button quiet small" type="button">Setup wizard</button><button id="settings-close" class="button outline small" type="button">Done</button></div></div>
       <div id="setup-header" class="setup-header" hidden>
-        <p id="setup-description">Choose an agent, connect your account or endpoints, and get a chat model ready for your first canvas.</p>
-        <ol class="setup-steps" aria-label="Setup steps"><li id="setup-step-agent">Agent</li><li id="setup-step-credentials">Credentials</li><li id="setup-step-model">Chat model</li></ol>
+        <p id="setup-description">Choose an agent, connect your account or endpoints, and enable chat plus optional media models for your first canvas.</p>
+        <ol class="setup-steps" aria-label="Setup steps"><li id="setup-step-agent">Agent</li><li id="setup-step-credentials">Credentials</li><li id="setup-step-model">Chat model</li><li id="setup-step-media">Media models</li></ol>
       </div>
       <div class="settings-shell">
         <nav class="settings-nav" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
@@ -742,6 +746,12 @@
             <label id="setup-model-field" class="field" for="setup-model">Chat model<select id="setup-model" aria-describedby="setup-model-hint setup-ready"></select></label>
             <div class="setup-model-actions"><button id="setup-refresh" class="button outline small" type="button">Refresh models</button><p id="setup-ready" role="status" aria-live="polite"></p></div>
           </div>
+        </section>
+        <section id="setup-media-panel" class="settings-section" aria-labelledby="setup-media-title" hidden>
+          <div class="settings-section-head"><h3 id="setup-media-title" tabindex="-1">Enable media models</h3><p>Turn on discovered image, video, or audio models you want Easel to use. This step is optional; you can change these choices later in Settings &gt; Models.</p></div>
+          <div id="setup-media-models" class="setup-media-models" aria-label="Discovered media models"></div>
+          <p id="setup-media-empty" class="setup-media-empty">No media-capable models found yet. Refresh models to check your saved endpoints, or finish setup and add one later.</p>
+          <div class="setup-model-actions"><button id="setup-media-refresh" class="button outline small" type="button">Refresh models</button><button id="setup-media-skip" class="button quiet small" type="button">Skip for now</button></div>
         </section>
         <section id="settings-agent" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-agent" hidden>
           <div class="settings-section-head"><h3>Choose your agent</h3><p>Choose where conversations run. Your projects, media, skills, and canvas kits stay in Easel.</p></div>
