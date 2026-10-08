@@ -173,9 +173,9 @@ test('source_patch_does_not_autoplay', async (t) => {
   assert.equal(h.starts(), 1);
   const before = h.starts(), app = f.canvases.listFiles(saved.id).files.find((entry) => entry.path.endsWith('app.js'));
   assert.ok(app, 'The starter keeps the pattern in editable app.js');
-  const result = await h.view.applyCanvasFilePatches({ edits: [{ path: app.path, find: "c4 e4 g4 b4", replace: "c4 g4 b4 e4", expectedRevision: app.revision }], reload: true, preserveState: true, validate: false });
+  const result = await h.view.applyCanvasFilePatches({ edits: [{ path: app.path, find: "note('<bb2 ~ bb2 bb2>')", replace: "note('bb2 bb2 ~')", expectedRevision: app.revision }], reload: true, preserveState: true, validate: false });
   assert.equal(result.ok, true);
-  assert.match(f.canvases.readFile(saved.id, { path: app.path }).text, /c4 g4 b4 e4/);
+  assert.match(f.canvases.readFile(saved.id, { path: app.path }).text, /note\('bb2 bb2 ~'\)/);
   assert.equal(h.loads(), 2);
   assert.equal(h.starts(), before);
   assert.equal(h.app().getState().playing, false);

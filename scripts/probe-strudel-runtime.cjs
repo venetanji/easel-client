@@ -84,6 +84,11 @@ async function sendKeyboardActivation(win, id) {
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
 }
 
+async function pushStrudelCode(win, source) {
+  const result = await win.webContents.executeJavaScript(`EaselStrudel.evaluate(${JSON.stringify(source)})`);
+  if (!result?.ok) throw new Error(`Live Strudel evaluation failed: ${result?.error || 'no success receipt'}`);
+}
+
 function installDiagnostics() {
   window.probe = { errors: [], violations: [], plays: 0, playEvents: 0, peaks: [], ready: false, phase: 'initializing', nativeInput: [], logs: [] };
   for (const type of ['keydown', 'keypress', 'keyup', 'click']) {
@@ -331,6 +336,7 @@ async function proveProductionWavExport({ BrowserWindow, session, open, until, r
   const bridge = createStrudelExportBridge({ ...scopeOptions, controller, exportReady: true });
   const sound = await open('export.html');
   await until(sound, state => state.ready, 'wav-template-ready');
+  await pushStrudelCode(sound, "note('~ c4 ~ g4').s('sine')");
   const context = await bridge.handle({ action: 'context' });
   await sound.webContents.executeJavaScript(`probe.exportContextListener(${JSON.stringify(context)}); document.getElementById('strudel-${instanceId}-bpm').value = '120'; document.getElementById('strudel-${instanceId}-bpm').dispatchEvent(new Event('input')); void 0;`);
   await sendKeyboardActivation(sound, `strudel-${instanceId}-play`);
@@ -418,11 +424,13 @@ async function proveProductionWavExport({ BrowserWindow, session, open, until, r
     sustainedLiveSamples: 10, sameUrlNavigationEvent: true, savedReopenedBytes: true, nativeDefaultProofs: synthProofs, nativeSustainRatio, longScore: { events: longSnapshot.events.length, latePeaks: longResult.latePeaks, duration: longResult.duration }, durableAssets: receipts.map(receipt => receipt.assetId), idempotentRetries: true, pinnedKitDigest: store.getProjectKitSource(project.id, 'strudel').digest };
 }
 
-function templateFixtureHtml(bundle, { instanceId = 'c'.repeat(32), preserved, saved, edited = false, exportEnabled = false } = {}) {
+function templateFixtureHtml(bundle, { instanceId = 'c'.repeat(32), preserved, saved, edited = false, exportEnabled = false, replEnabled = true } = {}) {
   const source = createStrudelTemplate({ instanceId });
+  // Real Strudel templates opt into the evaluator; disable only for policy controls.
   let html = source.files[source.entry];
-  if (exportEnabled) html = html.replace("note('c4 e4 g4 b4')", "note('~ c4 ~ g4')");
-  if (edited) html = html.replace("note('c4 e4 g4 b4')", "note('a5 c6 e6 a6')");
+  if (!replEnabled) html = html.replace(' data-easel-strudel-repl="v1"', '');
+  if (exportEnabled) html = html.replace("note('<bb2 ~ bb2 bb2>')", "note('<~ bb2 ~ bb2>')");
+  if (edited) html = html.replace("note('<bb2 ~ bb2 bb2>')", "note('a5 c6 e6 a6')");
   html = html.replace('</body>', `<script>(${monitorTemplate.toString()})(${JSON.stringify(instanceId)});</script></body>`);
   html = buildCanvasDocument({ html, kits: ['strudel'], kitBundles: { strudel: bundle } });
   const initial = `<script>window.__easelPreservedState=${JSON.stringify(preserved || {}).replace(/</g, '\\u003c')};window.__easelProjectState=${JSON.stringify(saved || {}).replace(/</g, '\\u003c')};</script>`;
@@ -509,13 +517,15 @@ async function electronMain() {
     check(starterInitial.activeAudioContexts === 1, 'Starter created duplicate audio contexts.');
     // Long first voice: eight seconds at 30 BPM. Replacing it with a zero-gain
     // pattern tests real output isolation, not just that reset() was called.
-    await starter.webContents.executeJavaScript(`createPattern = () => strudel.note('a4').s('sine').gain(0.3).release(0.5); EaselStrudel.patternChanged(); document.getElementById('${control('bpm')}').value = '30'; document.getElementById('${control('bpm')}').dispatchEvent(new Event('input')); void 0;`);
+    await pushStrudelCode(starter, "note('a4').s('sine').gain(0.3).release(0.5)");
+    await starter.webContents.executeJavaScript(`document.getElementById('${control('bpm')}').value = '30'; document.getElementById('${control('bpm')}').dispatchEvent(new Event('input')); void 0;`);
     await sendKeyboardActivation(starter, control('play'));
     const starterPlaying = await until(starter, (state) => state.plays === 1 && state.schedulerStarted && state.peaks.some((peak) => peak > 0.001), 'template-signal');
     check(starterPlaying.trustedKeyboardPlay, 'Template Play was not trusted keyboard activation.');
     await sendKeyboardActivation(starter, control('stop'));
     await until(starter, (state) => !state.schedulerStarted && state.gain === 0, 'template-stop');
-    await starter.webContents.executeJavaScript(`createPattern = () => strudel.note('a4').s('sine').gain(0).release(0.05); EaselStrudel.patternChanged(); probe.peaks = []; void 0;`);
+    await pushStrudelCode(starter, "note('a4').s('sine').gain(0).release(0.05)");
+    await starter.webContents.executeJavaScript('probe.peaks = []; void 0;');
     await sendKeyboardActivation(starter, control('play'));
     const silentRestart = await until(starter, hasSilentTemplateRestart, 'template-no-old-voice');
     await starter.webContents.executeJavaScript(`document.getElementById('${control('bpm')}').value = '120'; document.getElementById('${control('bpm')}').dispatchEvent(new Event('input')); document.getElementById('${control('volume')}').value = '0.2'; document.getElementById('${control('volume')}').dispatchEvent(new Event('input')); void 0;`);
@@ -524,7 +534,8 @@ async function electronMain() {
     // starter. The monitor reconnects to every new destinationGain graph.
     await sendKeyboardActivation(starter, control('stop'));
     await until(starter, (state) => !state.schedulerStarted && state.gain === 0, 'template-before-positive-restart');
-    await starter.webContents.executeJavaScript(`createPattern = () => strudel.note('a5').s('sine').gain(0.3).release(0.05); EaselStrudel.patternChanged(); probe.peaks = []; void 0;`);
+    await pushStrudelCode(starter, "note('a5').s('sine').gain(0.3).release(0.05)");
+    await starter.webContents.executeJavaScript('probe.peaks = []; void 0;');
     await sendKeyboardActivation(starter, control('play'));
     const positiveRestart = await until(starter, hasAudibleTemplateRestart, 'template-positive-restart');
     // Exercise the existing question overlay with native Escape, without adding
@@ -542,8 +553,13 @@ async function electronMain() {
     check(disposed.disposal.audioState === 'closed' && !disposed.disposal.schedulerStarted && disposed.disposal.activeAudioContexts === 0 && disposed.disposal.failures.length === 0, 'Starter disposal leaked audio/scheduler resources.');
     starter.destroy();
     const reloaded = await open('template-reloaded.html');
-    const afterEdit = await until(reloaded, (state) => state.ready, 'template-source-reloaded');
-    check(afterEdit.plays === 0 && afterEdit.settings.bpm === 120 && afterEdit.settings.volume === 0.2 && afterEdit.gain === 0, 'Edited source did not restore only its settings.');
+    const afterEdit = await until(reloaded, (state) => state.phase.startsWith('Restored code needs Push live'), 'template-source-reloaded');
+    const restoredCode = await reloaded.webContents.executeJavaScript(`document.getElementById('${control('code')}').value`);
+    check(restoredCode === "note('a5').s('sine').gain(0.3).release(0.05)" && afterEdit.plays === 0 &&
+      afterEdit.settings.bpm === 120 && afterEdit.settings.volume === 0.2 && afterEdit.gain === 0,
+      'Reload must restore custom code as unapplied text and restore settings without playing.');
+    await pushStrudelCode(reloaded, restoredCode);
+    await until(reloaded, (state) => state.phase.startsWith('Pattern ready'), 'template-restored-code-pushed');
     await sendKeyboardActivation(reloaded, control('play'));
     await until(reloaded, (state) => state.schedulerStarted && state.peaks.some((peak) => peak > 0.001), 'template-edited-source-signal');
     const other = await open('template-other.html');

@@ -32,3 +32,23 @@ test('restores restrictive CSP when saving an edited DOM snapshot', () => {
   assert.match(snapshot, /data:image\/png;base64,YWJj/);
   assert.throws(() => buildCanvasSnapshotDocument('<img src="https://example.com/image.png">'), /external URLs/i);
 });
+
+test('opts into dynamic eval and blob worklets only for local Strudel documents', () => {
+  const ordinary = buildCanvasDocument({ html: '<p>ordinary</p>' });
+  assert.match(ordinary, /script-src 'unsafe-inline' blob:/);
+  assert.doesNotMatch(ordinary, /unsafe-eval|worker-src blob:/);
+
+  const ordinaryStrudelKit = buildCanvasDocument({ html: '<p>generic Strudel sketch</p>', kits: ['strudel'], kitBundles: { strudel: 'window.strudel = {};' } });
+  assert.doesNotMatch(ordinaryStrudelKit, /unsafe-eval|worker-src blob:/);
+  const strudel = buildCanvasDocument({ html: '<html data-easel-strudel-repl="v1"><head></head><body>scratchpad</body></html>', kits: ['strudel'], kitBundles: { strudel: 'window.strudel = {};' } });
+  assert.match(strudel, /script-src 'unsafe-inline' 'unsafe-eval' blob:/);
+  assert.match(strudel, /worker-src blob:/);
+  assert.match(strudel, /connect-src data: blob:/);
+  assert.doesNotMatch(strudel, /connect-src[^;]*(?:https?:|\*)/);
+
+  const snapshot = buildCanvasSnapshotDocument('<html data-easel-strudel-repl="v1"><head></head><body><script data-easel-canvas-kit="strudel">window.strudel={};</script></body></html>');
+  assert.match(snapshot, /unsafe-eval/);
+  assert.match(snapshot, /worker-src blob:/);
+  const ordinarySnapshot = buildCanvasSnapshotDocument('<html><head></head><body><p>ordinary</p></body></html>');
+  assert.doesNotMatch(ordinarySnapshot, /unsafe-eval|worker-src blob:/);
+});

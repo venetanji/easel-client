@@ -23,7 +23,15 @@ const CSP = [
   "worker-src 'none'",
   "form-action 'none'",
   "base-uri 'none'",
-].join('; ');
+] .join('; ');
+const STRUDEL_REPL_CSP = CSP
+  .replace("script-src 'unsafe-inline' blob:", "script-src 'unsafe-inline' 'unsafe-eval' blob:")
+  .replace("worker-src 'none'", 'worker-src blob:');
+
+function policyFor(html) {
+  const hasStrudelReplOptIn = /<html\b[^>]*data-easel-strudel-repl=["']v1["']/i.test(html);
+  return hasStrudelReplOptIn ? STRUDEL_REPL_CSP : CSP;
+}
 
 const RUNTIME_DIAGNOSTICS_SCRIPT = `<script id="easel-runtime-diagnostics">
 (() => {
@@ -136,7 +144,7 @@ function buildCanvasDocument({ html, assets = [], kits = [], kitBundles = {} } =
     throw new Error(`Canvas assembly uses ${assembledBytes} bytes; limit ${MAX_SNAPSHOT_BYTES} bytes. Source ${Buffer.byteLength(html)} bytes; kit bundles ${totalKitBytes} bytes; unique media budget ${MAX_ASSET_BYTES} bytes. Asset contributions: ${JSON.stringify(contributions)}. Attach existing assets incrementally instead of rebuilding embedded media.`);
   }
 
-  const policy = `<meta http-equiv="Content-Security-Policy" content="${CSP}">`;
+  const policy = `<meta http-equiv="Content-Security-Policy" content="${policyFor(output, kits)}">`;
   if (/<head(?:\s[^>]*)?>/i.test(output)) {
     return addRuntimeDiagnostics(output.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}<meta charset="utf-8">${policy}`));
   }
@@ -153,9 +161,8 @@ function buildCanvasSnapshotDocument(html, { maxBytes = MAX_SNAPSHOT_BYTES } = {
   if (/\b(?:src|href|poster|action)\s*=\s*["']?\s*(?:https?:|file:|\/\/)/i.test(html)) {
     throw new Error('Canvas cannot reference external URLs.');
   }
-
-  const policy = `<meta http-equiv="Content-Security-Policy" content="${CSP}">`;
   const output = html.replace(/<meta\b(?=[^>]*\bhttp-equiv\s*=\s*["']?content-security-policy["']?)[^>]*>/gi, '');
+  const policy = `<meta http-equiv="Content-Security-Policy" content="${policyFor(output)}">`;
   if (/<head(?:\s[^>]*)?>/i.test(output)) {
     return addRuntimeDiagnostics(output.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}<meta charset="utf-8">${policy}`));
   }

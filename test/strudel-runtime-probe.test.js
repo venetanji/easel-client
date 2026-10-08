@@ -123,12 +123,21 @@ test('diagnostic_snapshot_is_bounded_and_keeps_input_audio_and_strudel_errors', 
 test('template_fixture_runs_the_editable_starter_and_managed_lifecycle', () => {
   assert.equal(typeof runtime.templateFixtureHtml, 'function');
   const html = runtime.templateFixtureHtml('window.strudel = {};');
-  assert.match(html, /function createPattern\(params\)/);
+  assert.match(html, /function createPattern\(\)/);
   assert.match(html, /bootStrudelSketch/);
   assert.match(html, /snapshotPattern/);
   assert.match(html, /EaselCanvas\.cleanup\(\)/);
   assert.match(html, /getIsStarted\(\)/);
+  assert.match(html, /script-src 'unsafe-inline' 'unsafe-eval' blob:/);
+  const restrictedHtml = runtime.templateFixtureHtml('window.strudel = {};', { replEnabled: false });
+  assert.doesNotMatch(restrictedHtml, /unsafe-eval|worker-src blob:/);
   assert.ok(html.indexOf('window.probe =') < html.indexOf('data-easel-canvas-kit="strudel"'));
+});
+
+test('template_runtime_probe_uses_the_live_scratchpad_evaluator', () => {
+  const source = fs.readFileSync(require('node:path').join(__dirname, '../scripts/probe-strudel-runtime.cjs'), 'utf8');
+  assert.ok(source.includes('EaselStrudel.evaluate'));
+  assert.ok(!source.includes('createPattern = () => strudel.note'));
 });
 
 test('template_restart_gate_requires_new_scheduler_and_silence_during_old_voice_lifetime', () => {
@@ -177,13 +186,14 @@ test('wav_fixture_decodes_saved_pcm_and_keeps_live_context_identity', () => {
   assert.equal(typeof runtime.decodeExportWav, 'function', 'the single fixture must decode real exported WAV bytes');
   const html = runtime.templateFixtureHtml('window.strudel={};', { exportEnabled: true });
   assert.match(html, /installExportFixtureHost/);
-  assert.match(html, /~ c4 ~ g4/);
+  assert.match(html, /<bb2 ~ bb2 bb2>/);
   const source = fs.readFileSync(require('node:path').join(__dirname, '../scripts/probe-strudel-runtime.cjs'), 'utf8');
   assert.match(source, /createStrudelExportRenderer/);
   assert.match(source, /createStrudelExportController/);
   assert.match(source, /findExport/);
   assert.match(source, /liveContextIdentity/);
   assert.match(source, /volumeRatio/);
+  assert.ok(source.includes("pushStrudelCode(sound, \"note('~ c4 ~ g4').s('sine')\")"), 'WAV silence checks need an explicit rest pattern');
 });
 
 test('long_offline_score_gate_rejects_native_stealing_and_reports_only_reopened_bytes', () => {

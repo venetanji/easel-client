@@ -15,6 +15,7 @@ Use the in-app tools and local canvas runtime. There is no shell, package manage
 4. Await `EaselCanvas.whenReady()`. For attached media, await `EaselCanvas.assets.ready` and resolve `EaselCanvas.assets.getUrl(assetId)`. Attach assets by ID with `attach_canvas_assets`; do not invent IDs or depend on visible image elements.
 5. Register the app with `EaselCanvas.registerApp({id, dispose, getState, restoreState})`. Dispose resources and listeners. Use `EaselCanvas.startLoop(callback)` for a managed animation loop; its returned function stops the loop. The getState hook must return JSON. Register compact diagnostics with `EaselCanvas.registerDebugState(id, getter)`.
 6. Validate the actual open document with `validate_canvas` and `capture_live_canvas`. Report app errors separately from kit warnings. A successful source write does not prove the runtime works.
+7. For the Strudel sound template, inspect its current code and use `window.EaselStrudel.evaluate(source)` through `execute_canvas_javascript` only when the user asked to audition a live change. This updates the running Strudel scheduler without a source reload; it does not start Play. Keep `.play()` out of code pushes. Persisted custom code is displayed, not executed, on reload; push it again and require a user Play gesture. Remote samples are blocked and the sample kit is not bundled yet. The WAV exporter still rejects samples/effects.
 
 ## User input and media
 
