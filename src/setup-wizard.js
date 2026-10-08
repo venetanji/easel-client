@@ -101,7 +101,7 @@ function createSetupWizard({ document, client, storage, onSettings, onAgentState
     node('setup-back').disabled = step === 0 || locked();
     node('setup-skip').disabled = locked();
     node('setup-media-skip').disabled = locked();
-    node('setup-media-refresh').disabled = locked() || backend !== 'builtin';
+    node('setup-media-refresh').disabled = locked();
     next.disabled = locked() || !control || (step === 1 && backend === 'builtin' && !settings?.connections.length) || (step >= 2 && !ready);
     next.textContent = step === 3 ? 'Start creating' : step === 1 && backend !== 'builtin' && !settings?.connections.length ? 'Continue without media' : 'Continue';
     node('setup-progress').textContent = `Step ${step + 1} of 4`;
@@ -156,6 +156,7 @@ function createSetupWizard({ document, client, storage, onSettings, onAgentState
     node('setup-header').hidden = true;
     node('setup-footer').hidden = true;
     node('setup-model-panel').hidden = true;
+    node('setup-media-panel').hidden = true;
     builtinHint.textContent = settingsBuiltinHint;
     onClose?.();
     onSection('agent');
@@ -164,7 +165,7 @@ function createSetupWizard({ document, client, storage, onSettings, onAgentState
   }
 
   async function run(action) {
-    if (locked() || disposed) return;
+    if (!active || locked() || disposed) return;
     busy = true;
     onBusy?.(true);
     message('Saving your selection...');
