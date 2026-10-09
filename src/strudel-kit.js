@@ -35,6 +35,7 @@ function getStrudelCapabilities() {
     // Production gate: b3cb58a, Test run 37306231481.
     audioExport: true,
     externalSamples: false,
+    localSamples: true,
     repl: true,
   };
 }

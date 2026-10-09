@@ -39,14 +39,14 @@ async function fixture(t, saved) {
   await page.route(/^https?:/, route => route.request().url() === fixtureUrl
     ? route.fulfill({ body: html, contentType: 'text/html' }) : route.abort());
   await page.goto(fixtureUrl);
-  await page.waitForFunction(() => window.EaselStrudel && /Ready/.test(document.querySelector('[id$="-status"]').textContent));
+  await page.waitForFunction(() => window.EaselStrudel && /Ready/.test(document.querySelector('.status').textContent));
   return { page, editor: page.getByRole('textbox', { name: 'Strudel code' }), errors, audioErrors,
     async reloadSource(code, preserved) {
       const updated = source.replace(/const DEFAULT_LIVE_CODE = [^\n]+;/, `const DEFAULT_LIVE_CODE = ${JSON.stringify(code)};`);
       html = buildCanvasDocument({ html: updated, kits: ['strudel'], kitBundles: { strudel: browserKit() } });
       html = html.replace('<script id="easel-runtime-lifecycle">', `<script>window.__easelPreservedState=${JSON.stringify(preserved)};</script><script id="easel-runtime-lifecycle">`);
       await page.reload();
-      await page.waitForFunction(() => window.EaselStrudel && /Ready/.test(document.querySelector('[id$="-status"]').textContent));
+      await page.waitForFunction(() => window.EaselStrudel && /Ready/.test(document.querySelector('.status').textContent));
       await page.evaluate(() => EaselCanvas.restoreControls());
     },
   };
@@ -83,7 +83,7 @@ test('Ctrl+Enter runs only selected code, retains the editor, and stops reliably
   const version = await page.evaluate(() => EaselStrudel.getState().patternVersion);
   await editor.evaluate(node => node.setSelectionRange(0, 0));
   await editor.press('Control+Enter');
-  await page.waitForFunction(() => document.querySelector('[id$="-status"]').getAttribute('role') === 'alert');
+  await page.waitForFunction(() => document.querySelector('.status').getAttribute('role') === 'alert');
   assert.equal(await page.evaluate(() => EaselStrudel.getState().patternVersion), version);
   assert.equal(await page.evaluate(() => strudel.getIsStarted()), true, 'an invalid edit must preserve playback');
   await editor.press('Control+.');
@@ -111,7 +111,7 @@ test('restored code and agent-written drafts run with one gesture and reload sil
   await hasSignal(page);
   assert.equal(await page.evaluate(() => strudel.getCps()), .75, 'code-defined tempo must survive playback startup');
   await page.reload();
-  await page.waitForFunction(() => window.EaselStrudel && /Ready/.test(document.querySelector('[id$="-status"]').textContent));
+  await page.waitForFunction(() => window.EaselStrudel && /Ready/.test(document.querySelector('.status').textContent));
   assert.equal(await page.evaluate(() => strudel.getIsStarted() === true), false);
   assert.deepEqual(errors, []);
 });
@@ -177,7 +177,7 @@ test('an example never destroys an invalid or oversized draft', options, async t
   for (const draft of ['note(', '// ' + 'x'.repeat(8180) + '\n$: note("d4").s("sine")']) {
     await editor.fill(draft);
     await page.locator('[data-example="0"]').click();
-    await page.waitForFunction(() => document.querySelector('[id$="-status"]').getAttribute('role') === 'alert');
+    await page.waitForFunction(() => document.querySelector('.status').getAttribute('role') === 'alert');
     assert.equal(await editor.inputValue(), draft);
     assert.equal(await page.evaluate(() => strudel.getIsStarted() === true), false);
   }
@@ -233,4 +233,93 @@ test('authored code wins over old controls on preserved reload and cannot export
   assert.equal(await page.evaluate(() => { try { EaselStrudel.snapshotPattern(); return true; } catch { return false; } }), false, 'no unevaluated factory pattern may be exported');
   await editor.press('Control+Enter'); await hasSignal(page);
   assert.deepEqual(await page.evaluate(() => EaselStrudel.snapshotPattern().pattern.queryArc(0, 1).map(h => h.value.note)), ['a4', 'c5', 'e5']);
+});
+
+test('local drums and attached samples play, register live and render offline from captured bytes', options, async t => {
+  const { page, editor, errors, audioErrors } = await fixture(t);
+  const { nativeRenderScript } = require('../src/strudel-export-renderer');
+  const { validateStrudelWav } = require('../src/strudel-export-policy');
+  const bank = require('../assets/strudel-drums/bank.json');
+  const assetId = 'a'.repeat(32), drum = bank.samples.find(sample => sample.name === 'sd');
+  const sampleAssets = { [assetId]: { url: 'data:audio/wav;base64,' + drum.data } };
+  await editor.fill('s("bd sd hh oh cp tom rim").gain(.25)');
+  await editor.press('Control+Enter'); await hasSignal(page);
+  await page.evaluate(() => { window.__sampleLiveContext = strudel.getAudioContext(); window.__sampleLiveController = strudel.getSuperdoughAudioController(); });
+  await page.evaluate(assets => {
+    window.__easelProjectAssets = Object.freeze(assets);
+    window.__easelProjectAssetsReady = Promise.resolve(assets);
+  }, sampleAssets);
+  const code = `await window.EaselStrudelSamples.add('suno_snare', '${assetId}')\ns("suno_snare*4").gain(.25)`;
+  for (let i = 0; i < 2; i++) {
+    await editor.fill(code); await editor.press('Control+Enter');
+    await page.waitForFunction(() => /Playing/.test(document.querySelector('.status').textContent) || document.querySelector('.status').getAttribute('role') === 'alert');
+    assert.equal(await page.locator('.status').getAttribute('role'), 'status', await page.locator('.status').textContent());
+    await page.waitForFunction(() => !!EaselStrudelSamples.get('suno_snare'));
+    await hasSignal(page);
+    assert.equal(await page.evaluate(() => __sampleLiveContext === strudel.getAudioContext() && __sampleLiveController === strudel.getSuperdoughAudioController() && strudel.getIsStarted()), true);
+  }
+  await page.evaluate(async id => {
+    try { await EaselStrudelSamples.add('bd', id); throw new Error('unexpected successful overwrite'); }
+    catch (error) { if (!/reserved/.test(error.message)) throw error; }
+  }, assetId);
+  await hasSignal(page);
+  const snapshots = await page.evaluate(() => {
+    const names = [...EaselStrudelSamples.list().map(sample => sample.name)];
+    const result = names.map(name => ({ name, snapshot: queryStrudelSnapshot(strudel.s(name).fast(4).gain(.25), { bpm: 120, volume: 1 }, 1, 'd'.repeat(64), strudel, EaselStrudelSamples) }));
+    result.push({ name: 'oh_attack', snapshot: queryStrudelSnapshot(strudel.s('oh').fast(16).gain(.25).attack(.02), { bpm: 120, volume: 1 }, 1, 'd'.repeat(64), strudel, EaselStrudelSamples) });
+    return result;
+  });
+  const renderer = await page.context().browser().newPage();
+  const url = 'http://127.0.0.1:8765/sample-renderer';
+  const html = buildCanvasDocument({ html: '<!doctype html><html><head></head><body></body></html>', kits: ['strudel'], kitBundles: { strudel: browserKit() } });
+  await renderer.route(/^https?:/, route => route.request().url() === url ? route.fulfill({ body: html, contentType: 'text/html' }) : route.abort());
+  await renderer.goto(url);
+  for (const { name, snapshot } of snapshots) {
+    const result = await renderer.evaluate(nativeRenderScript(snapshot, sampleAssets));
+    const bytes = Buffer.from(result.wavBase64, 'base64');
+    assert.equal(validateStrudelWav(bytes, snapshot).frames, 120000);
+    let peak = 0;
+    for (let offset = 44; offset < bytes.length; offset += 2) peak = Math.max(peak, Math.abs(bytes.readInt16LE(offset)));
+    assert.ok(peak > 32, `${name} must produce nonempty WAV signal`);
+    if (name === 'oh_attack') {
+      let tail = 0;
+      for (let frame = 105600; frame < 110400; frame++) tail = Math.max(tail, Math.abs(bytes.readInt16LE(44 + frame * 4)));
+      assert.ok(tail > 32, 'attack-only sample envelopes must preserve the full sample tail beyond its Hap duration');
+    }
+  }
+  const attached = snapshots.find(entry => entry.name === 'suno_snare').snapshot;
+  const wrong = { ...attached, events: attached.events.map(event => ({ ...event, sample: { ...event.sample, durationSeconds: 0.01 } })) };
+  await assert.rejects(renderer.evaluate(nativeRenderScript(wrong, sampleAssets)), /duration/);
+  await hasSignal(page);
+  assert.equal(await page.evaluate(() => __sampleLiveContext === strudel.getAudioContext() && strudel.getIsStarted()), true);
+  assert.deepEqual(errors, []); assert.deepEqual(audioErrors, []);
+  await editor.press('Escape');
+});
+
+test('sample identity and export remain stable on a 44.1 kHz playback device', options, async t => {
+  const { page } = await fixture(t);
+  const { encodePCM16Wav, nativeRenderScript } = require('../src/strudel-export-renderer');
+  const frames = 48037;
+  const data = Buffer.from(encodePCM16Wav({ sampleRate: 48000, numberOfChannels: 2, length: frames,
+    getChannelData: () => Float32Array.from({ length: frames }, (_, i) => Math.sin(i / 40) * 0.2) })).toString('base64');
+  const id = 'b'.repeat(32), assets = { [id]: { url: 'data:audio/wav;base64,' + data } };
+  const captured = await page.evaluate(async ({ assets, id }) => {
+    await EaselCanvas.cleanup();
+    const context = new AudioContext({ sampleRate: 44100 });
+    strudel.setAudioContext(context);
+    window.__easelProjectAssets = Object.freeze(assets);
+    await EaselStrudelSamples.add('custom_loop', id);
+    return { rate: context.sampleRate, sample: EaselStrudelSamples.get('custom_loop'),
+      snapshot: queryStrudelSnapshot(strudel.s('custom_loop').fast(4), { bpm: 120, volume: 0.25 }, 1, 'd'.repeat(64), strudel, EaselStrudelSamples) };
+  }, { assets, id });
+  assert.equal(captured.rate, 44100);
+  assert.equal(captured.sample.durationSeconds, frames / 48000, 'sample identity uses a fixed decode rate');
+  const renderer = await page.context().browser().newPage();
+  const url = 'http://127.0.0.1:8765/rate-renderer';
+  const html = buildCanvasDocument({ html: '<!doctype html><html><head></head><body></body></html>', kits: ['strudel'], kitBundles: { strudel: browserKit() } });
+  await renderer.route(/^https?:/, route => route.request().url() === url ? route.fulfill({ body: html, contentType: 'text/html' }) : route.abort());
+  await renderer.goto(url);
+  const result = await renderer.evaluate(nativeRenderScript(captured.snapshot, assets));
+  assert.ok(Buffer.from(result.wavBase64, 'base64').length > 44);
+  await page.evaluate(() => strudel.getAudioContext().close());
 });

@@ -71,6 +71,30 @@ test("query_snapshot_retains_only_onsets_and_rejects_unsupported_authored_semant
 });
 module.exports = { snapshot };
 
+test('sample events retain content identity and budget their full native playback duration', async () => {
+  const { validateStrudelSnapshot, queryStrudelSnapshot } = load();
+  const core = await pinnedCore();
+  const sample = { assetId: 'a'.repeat(32), digest: 'b'.repeat(64), durationSeconds: 1.5 };
+  const registry = { get: name => name === 'suno_snare' ? sample : undefined };
+  const score = queryStrudelSnapshot(core.pure({ s: 'suno_snare', gain: 0.3 }), { bpm: 120, volume: 1 }, 1, 'd'.repeat(64), core, registry);
+  assert.deepEqual(score.events[0].sample, sample);
+  assert.equal(score.events[0].waveform, 'suno_snare');
+  const event = score.events[0];
+  assert.throws(() => validateStrudelSnapshot({ ...score, events: [...Array(32).fill({ ...event, durationSeconds: 0.01 }), { ...event, timeSeconds: 1, absoluteCycle: 0.5, durationSeconds: 0.01 }] }), /polyphony/);
+  for (const invalid of [{ ...sample, url: 'https://example.com' }, { ...sample, durationSeconds: 11 }, { ...sample, digest: 'bad' }]) {
+    assert.throws(() => validateStrudelSnapshot({ ...score, events: [{ ...event, sample: invalid }] }));
+  }
+  assert.throws(() => queryStrudelSnapshot(core.pure({ s: 'suno_snare', note: 60 }), { bpm: 120, volume: 1 }, 1, 'd'.repeat(64), core, registry), /sample|pitch/i);
+});
+
+test('sample attack-only export leaves release absent so the native sampler plays the full sample', async () => {
+  const core = await pinnedCore(); const { queryStrudelSnapshot } = load();
+  const sample = { assetId: 'a'.repeat(32), digest: 'b'.repeat(64), durationSeconds: 1.5 };
+  const score = queryStrudelSnapshot(core.pure({ s: 'loop', attack: 0.02 }), { bpm: 120, volume: 1 }, 1, 'd'.repeat(64), core, { get: () => sample });
+  assert.deepEqual(score.events[0].envelopeControls, { attack: 0.02 });
+  assert.equal(Object.hasOwn(score.events[0].envelopeControls, 'release'), false);
+});
+
 async function pinnedCore() {
   const [{ pure, silence }, { State }, { TimeSpan }] = await Promise.all([
     import('../node_modules/@strudel/core/pattern.mjs'), import('../node_modules/@strudel/core/state.mjs'), import('../node_modules/@strudel/core/timespan.mjs'),
@@ -120,5 +144,53 @@ test('polyphony_counts_effective_native_minimum_release_before_stop_allowance', 
     const next = { ...first, timeSeconds: 0.515, absoluteCycle: 0.2575 };
     assert.throws(() => validateStrudelSnapshot(snapshot({ events: [...Array(32).fill(first), ...Array(32).fill(next)] })), /polyphony/i);
     assert.equal(validateStrudelSnapshot(snapshot({ events: [...Array(32).fill(first), ...Array(32).fill({ ...next, timeSeconds: 0.52, absoluteCycle: 0.26 })] })).events.length, 64);
+  }
+});
+
+test('native_kick_and_noise_snapshots_keep_default_pitch_and_authored_envelopes', async () => {
+  const core = await pinnedCore();
+  const { queryStrudelSnapshot, validateStrudelSnapshot } = load();
+  const params = { bpm: 120, volume: 0.5 };
+  const kick = queryStrudelSnapshot(core.pure({ s: 'sbd', gain: 0.3 }), params, 1, 'd'.repeat(64), core);
+  assert.equal(kick.events[0].waveform, 'sbd');
+  assert.equal(kick.events[0].midiNote, 29);
+  assert.equal(kick.events[0].gain, 0.15);
+  assert.equal(kick.events[0].envelopeMode, 'native-default');
+  for (const s of ['white', 'pink', 'brown']) {
+    const controls = { decay: 0.04, sustain: 0, release: 0.02 };
+    const noise = queryStrudelSnapshot(core.pure({ s, gain: 0.08, ...controls }), params, 1, 'd'.repeat(64), core);
+    assert.equal(noise.events[0].midiNote, 36);
+    assert.equal(noise.events[0].gain, 0.04);
+    assert.deepEqual(noise.events[0].envelopeControls, controls);
+    assert.ok(Object.isFrozen(noise.events[0].envelopeControls));
+    assert.deepEqual(validateStrudelSnapshot(noise), noise);
+    assert.equal(Object.hasOwn(noise.events[0].envelopeControls, 'attack'), false);
+  }
+});
+
+test('native_kick_polyphony_counts_its_decay_beyond_short_pattern_events', async () => {
+  const core = await pinnedCore();
+  const { queryStrudelSnapshot, validateStrudelSnapshot } = load();
+  const s = queryStrudelSnapshot(core.pure({ s: 'sbd', decay: 0.4 }), { bpm: 120, volume: 1 }, 1, 'd'.repeat(64), core);
+  const event = { ...s.events[0], durationSeconds: 0.1 };
+  const next = { ...event, timeSeconds: 0.3, absoluteCycle: 0.15 };
+  assert.throws(() => validateStrudelSnapshot({ ...s, events: [...Array(32).fill(event), next] }), /polyphony/i);
+  assert.equal(validateStrudelSnapshot({ ...s, events: [...Array(32).fill(event), { ...next, timeSeconds: 0.42, absoluteCycle: 0.21 }] }).events.length, 33);
+});
+
+test('noise_envelopes_reject_executable_values_and_controls_outside_the_budget', async () => {
+  const core = await pinnedCore();
+  const { queryStrudelSnapshot, validateStrudelSnapshot } = load();
+  const params = { bpm: 120, volume: 1 };
+  const value = { s: 'white', decay: 0.04, sustain: 0 };
+  const s = queryStrudelSnapshot(core.pure(value), params, 1, 'd'.repeat(64), core);
+  for (const change of [{ decay: -1 }, { decay: 0.6 }, { sustain: 1.1 }, { sustain: null }, { release: undefined }, { attack: () => 0.1 }]) {
+    assert.throws(() => queryStrudelSnapshot(core.pure({ ...value, ...change }), params, 1, 'd'.repeat(64), core));
+  }
+  for (const controls of [{ decay: 0.6 }, { sustain: () => 0 }, { decay: 0.04, room: 1 }, Object.assign(Object.create({ sustain: 0 }), { decay: 0.04 })]) {
+    assert.throws(() => validateStrudelSnapshot({ ...s, events: [{ ...s.events[0], envelopeControls: controls }] }));
+  }
+  for (const waveform of ['bd', 'hh', 'piano', 'supersaw']) {
+    assert.throws(() => queryStrudelSnapshot(core.pure({ note: 'c4', s: waveform }), params, 1, 'd'.repeat(64), core), /sound|waveform/i);
   }
 });

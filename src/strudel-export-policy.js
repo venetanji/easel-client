@@ -1,8 +1,8 @@
 // Shared, plain-data policy. These functions are also copied into editable
 // starter source; they require no Node, live audio, callbacks or Strudel globals.
 function validateStrudelSnapshot(input) {
-  const record = (value, keys, label) => {
-    if (!value || typeof value !== "object" || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value)) || Reflect.ownKeys(value).some((key) => typeof key !== "string" || !keys.includes(key) || !Object.hasOwn(Object.getOwnPropertyDescriptor(value, key), "value"))) throw new Error(`${label} contains unsupported fields or executable values.`);
+  const record = (value, keys, label, optional = []) => {
+    if (!value || typeof value !== "object" || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value)) || Reflect.ownKeys(value).some((key) => typeof key !== "string" || !keys.includes(key) && !optional.includes(key) || !Object.hasOwn(Object.getOwnPropertyDescriptor(value, key), "value"))) throw new Error(`${label} contains unsupported fields or executable values.`);
     if (keys.some((key) => !Object.hasOwn(value, key))) throw new Error(`${label} is incomplete.`);
   };
   const finite = (value, min, max, label) => {
@@ -18,27 +18,53 @@ function validateStrudelSnapshot(input) {
   const frames = Math.ceil((loopSeconds + 0.5) * 48000);
   if (frames > 30 * 48000 || 44 + frames * 4 >= 6 * 1024 * 1024) throw new Error("Export including its tail must fit 30 seconds and 6 MiB. Reduce cycles or raise tempo.");
   if (!Array.isArray(input.events) || input.events.length > 4096) throw new Error("Export supports at most 4096 onset events.");
-  const aliases = { sin: "sine", sine: "sine", tri: "triangle", triangle: "triangle", sqr: "square", square: "square", saw: "sawtooth", sawtooth: "sawtooth" };
+  const aliases = { sin: "sine", sine: "sine", tri: "triangle", triangle: "triangle", sqr: "square", square: "square", saw: "sawtooth", sawtooth: "sawtooth", sbd: "sbd", white: "white", pink: "pink", brown: "brown" };
   const points = [];
+  const samples = new Map();
   const events = input.events.map((event) => {
-    record(event, ["timeSeconds", "durationSeconds", "absoluteCycle", "midiNote", "waveform", "gain", "attackSeconds", "releaseSeconds", "envelopeMode"], "Strudel event");
+    record(event, ["timeSeconds", "durationSeconds", "absoluteCycle", "midiNote", "waveform", "gain", "attackSeconds", "releaseSeconds", "envelopeMode"], "Strudel event", ["envelopeControls", "sample"]);
     const timeSeconds = finite(event.timeSeconds, 0, loopSeconds, "Event onset");
     if (timeSeconds >= loopSeconds) throw new Error("Event onset is outside the selected cycles.");
     const durationSeconds = finite(event.durationSeconds, Number.MIN_VALUE, loopSeconds, "Event duration");
     const absoluteCycle = finite(event.absoluteCycle, 0, input.cycles, "Event cycle");
     if (Math.abs(absoluteCycle * 240 / bpm - timeSeconds) > 1e-8 || timeSeconds + durationSeconds > loopSeconds + 1e-8) throw new Error("Event cycle/duration does not match the selected loop.");
+    let sample;
+    if (Object.hasOwn(event, "sample")) {
+      record(event.sample, ["assetId", "digest", "durationSeconds"], "Sample identity");
+      if (event.sample.assetId !== null && (typeof event.sample.assetId !== "string" || !/^[a-f0-9]{32}(?:[a-f0-9]{32})?$/.test(event.sample.assetId))) throw new Error("Sample asset ID is invalid.");
+      if (typeof event.sample.digest !== "string" || !/^[a-f0-9]{64}$/.test(event.sample.digest)) throw new Error("Sample digest is invalid.");
+      if (typeof event.waveform !== "string" || !/^[a-z][a-z0-9_]{0,47}$/.test(event.waveform) || Object.hasOwn(aliases, event.waveform)) throw new Error("Sample sound name is invalid.");
+      sample = Object.freeze({ assetId: event.sample.assetId, digest: event.sample.digest, durationSeconds: finite(event.sample.durationSeconds, Number.MIN_VALUE, 10, "Sample duration") });
+      const previous = samples.get(event.waveform);
+      if (previous && JSON.stringify(previous) !== JSON.stringify(sample)) throw new Error("A sample name has conflicting content identities.");
+      samples.set(event.waveform, sample);
+      if (samples.size > 16) throw new Error("Export supports at most 16 distinct samples.");
+    }
+    const waveform = sample ? event.waveform : typeof event.waveform === "string" && Object.hasOwn(aliases, event.waveform) ? aliases[event.waveform] : "";
+    if (!waveform) throw new Error("Unsupported sound. Use a supported synth, bundled drum or sample registered with EaselStrudelSamples.add.");
     const midiNote = finite(event.midiNote, 24, 96, "MIDI note");
-    const waveform = typeof event.waveform === "string" && Object.hasOwn(aliases, event.waveform) ? aliases[event.waveform] : "";
-    if (!waveform) throw new Error("Unsupported waveform. Export uses native sine, triangle, square or sawtooth only.");
     const gain = finite(event.gain, 0, 1, "Event gain");
     const attackSeconds = finite(event.attackSeconds, 0, 0.5, "Attack");
     const releaseSeconds = finite(event.releaseSeconds, 0, 0.5, "Release");
     const envelopeMode = event.envelopeMode;
     if (!["native-default", "explicit"].includes(envelopeMode) || (envelopeMode === "native-default" && (attackSeconds !== 0.001 || releaseSeconds !== 0.01))) throw new Error("The native envelope discriminator/default fields are invalid.");
+    let envelopeControls;
+    if (Object.hasOwn(event, "envelopeControls")) {
+      const names = ["attack", "decay", "sustain", "release"];
+      record(event.envelopeControls, [], "Envelope controls", names);
+      envelopeControls = {};
+      for (const name of names) if (Object.hasOwn(event.envelopeControls, name)) envelopeControls[name] = finite(event.envelopeControls[name], 0, name === "sustain" ? 1 : 0.5, name);
+      if (!Object.keys(envelopeControls).length || envelopeMode !== "explicit" || attackSeconds !== (envelopeControls.attack ?? 0.001) || releaseSeconds !== (envelopeControls.release ?? 0.01)) throw new Error("Envelope controls do not match the event.");
+      Object.freeze(envelopeControls);
+    }
+    if (sample && envelopeMode === "explicit" && !envelopeControls) throw new Error("Explicit sample envelopes must preserve their supplied controls.");
     // Native synth stops 0.01s after its release. Voices are conservatively
     // budgeted through that allowance; output is cropped at the fixed tail.
-    points.push([timeSeconds, 1], [timeSeconds + durationSeconds + Math.max(releaseSeconds, 0.01) + 0.01, -1]);
-    return Object.freeze({ timeSeconds, durationSeconds, absoluteCycle, midiNote, waveform, gain, attackSeconds, releaseSeconds, envelopeMode });
+    // The native kick stops after decay, independently of the pattern duration.
+    const voiceSeconds = sample ? Math.max(sample.durationSeconds, durationSeconds) + Math.max(releaseSeconds, 0.01) + 0.01 : waveform === "sbd" ? (envelopeControls?.decay ?? 0.5) + 0.01 : durationSeconds + Math.max(releaseSeconds, 0.01) + 0.01;
+    points.push([timeSeconds, 1], [timeSeconds + voiceSeconds, -1]);
+    if (sample && midiNote !== 36) throw new Error("Pitched sample export is not supported.");
+    return Object.freeze({ timeSeconds, durationSeconds, absoluteCycle, midiNote, waveform, gain, attackSeconds, releaseSeconds, envelopeMode, ...(envelopeControls ? { envelopeControls } : {}), ...(sample ? { sample } : {}) });
   });
   let voices = 0;
   points.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -46,14 +72,14 @@ function validateStrudelSnapshot(input) {
     voices += change;
     if (voices > 32) throw new Error("Export exceeds the 32-voice polyphony budget.");
   }
-  events.sort((a, b) => a.timeSeconds - b.timeSeconds || a.midiNote - b.midiNote || a.waveform.localeCompare(b.waveform) || a.durationSeconds - b.durationSeconds || a.gain - b.gain || a.attackSeconds - b.attackSeconds || a.releaseSeconds - b.releaseSeconds || a.envelopeMode.localeCompare(b.envelopeMode));
+  events.sort((a, b) => a.timeSeconds - b.timeSeconds || a.midiNote - b.midiNote || a.waveform.localeCompare(b.waveform) || a.durationSeconds - b.durationSeconds || a.gain - b.gain || a.attackSeconds - b.attackSeconds || a.releaseSeconds - b.releaseSeconds || a.envelopeMode.localeCompare(b.envelopeMode) || JSON.stringify(a.envelopeControls ?? {}).localeCompare(JSON.stringify(b.envelopeControls ?? {})));
   return Object.freeze({ bpm, cycles: input.cycles, tailSeconds: 0.5, parameterDigest: input.parameterDigest, events: Object.freeze(events) });
 }
 function snapshotTiming(snapshot) {
   const frames = Math.ceil((snapshot.cycles * 240 / snapshot.bpm + 0.5) * 48000);
   return { frames, duration: frames / 48000, channels: 2, sampleRate: 48000, bytes: 44 + frames * 4 };
 }
-function queryStrudelSnapshot(pattern, params, cycles, parameterDigest, { State, TimeSpan } = {}) {
+function queryStrudelSnapshot(pattern, params, cycles, parameterDigest, { State, TimeSpan } = {}, sampleRegistry) {
   // Reject huge selections before invoking authored query code.
   const empty = validateStrudelSnapshot({ bpm: params.bpm, cycles, tailSeconds: 0.5, parameterDigest, events: [] });
   if (!Number.isFinite(params.volume) || params.volume < 0 || params.volume > 1) throw new Error("Export volume is invalid.");
@@ -70,9 +96,12 @@ function queryStrudelSnapshot(pattern, params, cycles, parameterDigest, { State,
     if (context.locations !== undefined && (!Array.isArray(context.locations) || context.locations.some(location => !location || typeof location !== "object" || Array.isArray(location) || ![Object.prototype, null].includes(Object.getPrototypeOf(location)) || Reflect.ownKeys(location).some(key => !["start", "end"].includes(key) || !Object.hasOwn(Object.getOwnPropertyDescriptor(location, key), "value")) || !Number.isFinite(location.start) || !Number.isFinite(location.end)))) throw new Error("Unsupported executable source-location context.");
     if (!hap.hasOnset()) continue;
     const value = hap.value;
-    const keys = ["note", "s", "gain", "attack", "release"];
-    if (!value || typeof value !== "object" || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value)) || Reflect.ownKeys(value).some((key) => typeof key !== "string" || !keys.includes(key) || !Object.hasOwn(Object.getOwnPropertyDescriptor(value, key), "value"))) throw new Error("Unsupported pattern fields. Export excludes samples, effects, callbacks, duration and clip overrides.");
-    let midiNote = value.note;
+    const keys = ["note", "s", "gain", "attack", "decay", "sustain", "release", "n"];
+    if (!value || typeof value !== "object" || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value)) || Reflect.ownKeys(value).some((key) => typeof key !== "string" || !keys.includes(key) || !Object.hasOwn(Object.getOwnPropertyDescriptor(value, key), "value"))) throw new Error("Unsupported pattern fields. Export excludes effects, callbacks, duration, speed and clip overrides.");
+    const sample = sampleRegistry?.get(value.s);
+    if (sample && Object.hasOwn(value, "note")) throw new Error("Pitched sample export is not supported. Use s(name) without note.");
+    if (Object.hasOwn(value, "n") && (!sample || value.n !== 0)) throw new Error("Export supports only sample index 0.");
+    let midiNote = Object.hasOwn(value, "note") ? value.note : value.s === "sbd" ? 29 : 36;
     if (typeof midiNote === "string") {
       // Matches the pinned native note spelling/default-octave semantics.
       const match = /^([a-gA-G])([#bsf]*)(-?[0-9]*)$/.exec(midiNote);
@@ -83,7 +112,7 @@ function queryStrudelSnapshot(pattern, params, cycles, parameterDigest, { State,
     }
     const absoluteCycle = Number(hap.whole.begin), end = Number(hap.whole.end);
     if (!Number.isFinite(absoluteCycle) || !Number.isFinite(end)) throw new Error("Event timing must be finite.");
-    for (const control of ["gain", "attack", "release"]) if (Object.hasOwn(value, control) && (typeof value[control] !== "number" || !Number.isFinite(value[control]))) throw new Error(`Supplied ${control} control must be a finite number.`);
+    for (const control of ["gain", "attack", "decay", "sustain", "release"]) if (Object.hasOwn(value, control) && (typeof value[control] !== "number" || !Number.isFinite(value[control]))) throw new Error(`Supplied ${control} control must be a finite number.`);
     const gain = Object.hasOwn(value, "gain") ? value.gain : 0.8;
     if (typeof gain !== "number" || !Number.isFinite(gain) || gain < 0 || gain > 1) throw new Error("Event gain must be finite and between 0 and 1 before volume.");
     events.push({
@@ -92,10 +121,13 @@ function queryStrudelSnapshot(pattern, params, cycles, parameterDigest, { State,
       absoluteCycle,
       midiNote,
       waveform: value.s,
+      ...(sample ? { sample } : {}),
       gain: gain * params.volume,
       attackSeconds: Object.hasOwn(value, "attack") ? value.attack : 0.001,
       releaseSeconds: Object.hasOwn(value, "release") ? value.release : 0.01,
-      envelopeMode: Object.hasOwn(value, "attack") || Object.hasOwn(value, "release") ? "explicit" : "native-default"
+      envelopeMode: ["attack", "decay", "sustain", "release"].some(control => Object.hasOwn(value, control)) ? "explicit" : "native-default",
+      // Keep omitted ADSR controls absent: native sustain inference depends on it.
+      ...(Object.hasOwn(value, "decay") || Object.hasOwn(value, "sustain") || sample && ["attack", "release"].some(control => Object.hasOwn(value, control)) ? { envelopeControls: Object.fromEntries(["attack", "decay", "sustain", "release"].filter(control => Object.hasOwn(value, control)).map(control => [control, value[control]])) } : {})
     });
     if (events.length > 4096) throw new Error("Export supports at most 4096 onset events.");
   }

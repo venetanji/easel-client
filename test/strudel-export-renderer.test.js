@@ -158,3 +158,13 @@ test('native_total_scheduled_limit_preserves_scores_above_128_without_expanding_
   assert.equal(scheduled.calls.length, 129); assert.ok(scheduled.limits[0] >= 129); assert.ok(scheduled.calls.every(call => call.admittedLimit >= 129));
   assert.throws(() => validateStrudelSnapshot({ ...score, events: Array(33).fill(event) }), /polyphony/);
 });
+
+test('native_noise_render_keeps_absent_attack_for_decay_only_envelopes', async () => {
+  const event = { timeSeconds: 0, durationSeconds: 0.25, absoluteCycle: 0, midiNote: 36, waveform: 'white', gain: 0.08,
+    attackSeconds: 0.001, releaseSeconds: 0.01, envelopeMode: 'explicit', envelopeControls: { decay: 0.04 } };
+  const scheduled = await nativeSchedule({ ...snapshot(), events: [event] });
+  const value = scheduled.calls[0].value;
+  assert.equal(value.decay, 0.04);
+  assert.equal(Object.hasOwn(value, 'attack'), false, 'an injected attack changes the native inferred sustain');
+  assert.equal(Object.hasOwn(value, 'release'), false);
+});

@@ -19,4 +19,27 @@ Requires the installed Tone.js kit, enabled for the project in Files. Check the 
 
 Inspect `validate_canvas` audio and app diagnostics. Ask the user to click the harness-owned Enable audio testing control when testing is needed. Inspect `EaselCanvas.audio` for supported diagnostics rather than inventing methods. RMS/peak/analyzer activity establishes signal activity; only the user can confirm that sound was audible. Distinguish a suspended context, a disconnected graph and scheduling errors before changing synthesis code. Do not loop through identical failed tests.
 
-Microphone capture is separate from output playback and needs consent through the canvas Devices flow. Do not imply that enabling audio testing grants microphone permission. Audio generation endpoints are not implemented yet.
+Microphone capture is separate from output playback and needs consent through the canvas Devices flow. Do not imply that enabling audio testing grants microphone permission. Studio exposes Suno audio generation when its Media tools are available; use the exact discovered schemas.
+
+## Strudel samples
+
+The Strudel sound template uses its own project-pinned kit, rather than Tone.
+New kits include offline drums: `bd`, `sd`, `hh`, `oh`, `cp`, `tom`, `rim`.
+Use `s("bd sd hh").gain(.25)` after the user starts playback.
+
+For a generated sample, use Suno `generate_sound` with `soundType: "one_shot"`
+or `"loop"`, wait for the managed job to save its real Media asset, and attach
+that asset to the intended project. In the complete saved score include
+`await window.EaselStrudelSamples.add('suno_snare', 'REAL_ATTACHED_ASSET_ID')`
+before `s("suno_snare")`. Use single quotes for the plain registration strings;
+Strudel transforms double-quoted strings into patterns. Do not invent asset IDs. Samples must be mono/stereo
+WAV or MP3, at most 10 seconds and 4 MiB; full songs usually need trimming.
+Inspect `EaselStrudelSamples.list()` to discover registered names. Built-in
+names are reserved. Older project-pinned kits may lack this registry.
+
+Adding a sample and `EaselStrudel.evaluate(completeScore)` preserve the live
+context and scheduler. Keep registration lines in durable score source so
+reopening restores them. Studio Media/job attachment paths refresh asset URLs
+without a reload. WAV export supports these registered samples, at most 16 names
+and 8 MiB of sample bytes, with gain/envelopes but without note, speed or slicing.
+Never call the offline renderer in a user's live audio document.

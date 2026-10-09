@@ -128,17 +128,26 @@ queries only 1–16 cycles, bounds total audio including a fixed 0.5-second tail
 30 seconds, allows 4,096 onset events and at most 32 simultaneous native voices,
 and rounds total sample frames up exactly once at 48 kHz. Voice budgeting includes
 the pinned native synth's effective release (minimum 0.01 seconds) plus its
-0.01-second node-stop allowance; the output is explicitly
+0.01-second node-stop allowance. The kick instead uses its decay plus the same
+stop allowance, independently of the pattern duration; the output is explicitly
 cropped at the fixed tail. Stereo PCM16 WAV remains below 6 MiB.
 
-Authored event values support only `note`, `s`, `gain`, `attack`, `release`:
+Authored event values support `note`, `s`, `gain`, `attack`, `decay`, `sustain`,
+`release`, and sample index `n: 0` for registered single-sample names:
 
 - Sine/sin, triangle/tri, square/sqr, sawtooth/saw
+- Native `sbd` kick and `white`, `pink`, `brown` noise; no sample packs are needed
+- Bundled drums and registered attached WAV/MP3 samples, without sample pitch,
+  speed or slicing. Up to 16 names and 8 MiB of attached sample bytes per export;
+  each sample is mono/stereo, at most 10 seconds and 4 MiB. Content hashes and
+  fixed-rate decoded durations identify the captured samples. Sample voice
+  budgeting includes their full duration, with output cropped at the fixed tail.
 - Finite MIDI notes 24–96 or the pinned native note spelling/default-octave rules
-- Gain 0–1 (omission uses the pinned native 0.8 default) and attack/release 0–0.5 seconds; explicitly supplied null/undefined/non-finite controls reject
+- Omitted notes use the native default 29 for kick or 36 for other supported synths
+- Gain 0–1 (omission uses the pinned native 0.8 default), sustain 0–1 and attack/decay/release 0–0.5 seconds; explicitly supplied null/undefined/non-finite controls reject
 - Rests and volume-zero loops are valid; volume multiplies event gain once
 
-Samples, effects, callbacks/stateful values, continuous events, additional
+Unregistered samples, effects, callbacks/stateful values, continuous events, additional
 control fields, `duration` and `clip` overrides are rejected with visible errors.
 Actual Hap callback context, including dominant/non-dominant `onTrigger`, rejects;
 plain source-location metadata remains harmless. The native bounded query uses
@@ -150,8 +159,10 @@ The strict plain event's `envelopeMode` discriminates `native-default` from
 `explicit`. All-omitted native ADSR uses its pinned decay 0.05/sustain 0.6; numeric
 metadata 0.001/0.01 is not materialized as native controls in that branch.
 Explicit attack-only, release-only or explicitly-default-valued envelopes retain
-the native explicit decay/sustain behavior. No authored decay/sustain fields are
-introduced. In the isolated realm only, `setMaxPolyphony(eventCount)` prevents the
+the native explicit decay/sustain behavior. Authored decay/sustain use a validated,
+frozen `envelopeControls` record that retains only supplied ADSR fields, preserving
+the native sustain inference for decay-only sounds. Older oscillator snapshots
+retain their existing representation. In the isolated realm only, `setMaxPolyphony(eventCount)` prevents the
 native total-scheduled source map from stealing voices before offline time starts;
 the separate host 32-overlap/4,096-event caps still apply.
 
@@ -312,6 +323,22 @@ upstream notice or relicense these dependencies.
 The separate licensing review owns these decisions and Easel's root license.
 
 ## Verification
+
+Local sample validation on 9 October 2026 covers the new project-pinned drum
+bank and registered attached audio. A browser fixture plays all seven drums,
+adds and repeatedly evaluates an attached one-shot on the same live context
+and output controller, and renders each sound through a separate offline page.
+It rejects mismatched decoded sample durations while the original score keeps
+playing. A separate 44.1 kHz context test checks that registration metadata uses
+a fixed 48 kHz decode and remains valid in the export realm. An attack-only
+sample test measures the full tail beyond its short pattern event. A hidden
+native Electron fixture additionally runs all seven drums,
+an attached WAV and an attached MP3 through the actual export bridge,
+controller, isolated renderer and Media store: nonzero PCM, save, attachment,
+identical bytes after reopening and idempotent retries, with no network requests.
+These fixtures use disposable profiles and do not focus the user's desktop.
+They establish measured signal; they do not establish subjective sample quality
+or validate new Suno generation. The original synth validation remains below.
 
 `node --test test/strudel-kit.test.js` tests the exact pin, install/catalog
 visibility, adapter order and non-awaited startup, API preservation, actual

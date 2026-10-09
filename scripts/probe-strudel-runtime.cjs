@@ -370,11 +370,17 @@ async function proveProductionWavExport({ BrowserWindow, session, open, until, r
   // Query actual pinned patterns without a scheduler/audio context. The same
   // production bridge/controller/renderer saves and decodes these plain scores.
   const { validateStrudelSnapshot, queryStrudelSnapshot } = require('../src/strudel-export-policy');
-  const queryScore = async expression => decoderWindow.webContents.executeJavaScript(`(() => {
-    const validateStrudelSnapshot = ${validateStrudelSnapshot.toString()};
-    const queryStrudelSnapshot = ${queryStrudelSnapshot.toString()};
-    return queryStrudelSnapshot(${expression}, { bpm: 120, volume: 1 }, 1, '${'d'.repeat(64)}', strudel);
-  })()`);
+  const queryScore = async expression => {
+    const result = await decoderWindow.webContents.executeJavaScript(`(() => {
+      try {
+        const validateStrudelSnapshot = ${validateStrudelSnapshot.toString()};
+        const queryStrudelSnapshot = ${queryStrudelSnapshot.toString()};
+        return { snapshot: queryStrudelSnapshot(${expression}, { bpm: 120, volume: 1 }, 1, '${'d'.repeat(64)}', strudel) };
+      } catch (error) { return { error: String(error.message || error) }; }
+    })()`);
+    if (result.error) throw new Error(`Native export query ${expression} failed: ${result.error}`);
+    return result.snapshot;
+  };
   const synthProofs = [];
   for (const [name, expression] of [
     ['omitted-gain-default-envelope', "strudel.note('c4').s('sine')"],
@@ -394,6 +400,21 @@ async function proveProductionWavExport({ BrowserWindow, session, open, until, r
   const nativeSustainRatio = synthProofs[0].latePeaks[0] / synthProofs[2].latePeaks[0];
   check(Math.abs(nativeSustainRatio - 0.6) < 0.005, 'The all-omitted native envelope branch lost its default sustain.');
   check(synthProofs.slice(3).every(proof => Math.abs(proof.latePeaks[0] - synthProofs[2].latePeaks[0]) < 0.00004), 'One-sided explicit envelopes differ from their native branch.');
+  const percussionProofs = [];
+  for (const [name, expression] of [
+    ['native-kick', "strudel.s('sbd').fast(4).gain(0.3)"],
+    ['native-hats', "strudel.s('white').fast(8).gain(0.08).decay(0.04).sustain(0).release(0.02)"],
+    ['native-pink', "strudel.s('pink').fast(4).gain(0.1).decay(0.07).sustain(0)"],
+    ['native-brown', "strudel.s('brown').fast(4).gain(0.1).decay(0.07).sustain(0)"],
+  ]) {
+    const snapshot = await queryScore(expression);
+    const receipt = await bridge.handle({ action: 'export', input: { exportId: name, expectedSourceRevision: context.sourceRevision, snapshot } });
+    const asset = await media.get(receipt.assetId);
+    const result = await decoderWindow.webContents.executeJavaScript(`(${decodeExportWav.toString()})(${JSON.stringify(asset.data)},${JSON.stringify(snapshot)})`);
+    check(result.frames === 120000 && result.sampleRate === 48000 && result.channels === 2, `${name}: WAV format/timing changed.`);
+    check(result.eventPeaks.every(peaks => peaks.every(peak => peak > 0.001)), `${name}: a percussion onset is silent.`);
+    percussionProofs.push({ name, frames: result.frames, peaks: result.peaks, eventPeaks: result.eventPeaks });
+  }
   const longSnapshot = await decoderWindow.webContents.executeJavaScript(`(() => {
     const validateStrudelSnapshot = ${validateStrudelSnapshot.toString()};
     const queryStrudelSnapshot = ${queryStrudelSnapshot.toString()};
@@ -421,7 +442,7 @@ async function proveProductionWavExport({ BrowserWindow, session, open, until, r
   check(navigation.url === sameUrl && navigation.isMainFrame === true && navigation.isSameDocument === false, 'Native same-URL reload did not emit a top-level replacement event.');
 
   return { decoded: decoded.map(({ eventPeaks, quietPeaks, ...summary }) => ({ ...summary, eventPeaks, quietPeaks })), volumeRatio, liveContextIdentity: true,
-    sustainedLiveSamples: 10, sameUrlNavigationEvent: true, savedReopenedBytes: true, nativeDefaultProofs: synthProofs, nativeSustainRatio, longScore: { events: longSnapshot.events.length, latePeaks: longResult.latePeaks, duration: longResult.duration }, durableAssets: receipts.map(receipt => receipt.assetId), idempotentRetries: true, pinnedKitDigest: store.getProjectKitSource(project.id, 'strudel').digest };
+    sustainedLiveSamples: 10, sameUrlNavigationEvent: true, savedReopenedBytes: true, nativeDefaultProofs: synthProofs, percussionProofs, nativeSustainRatio, longScore: { events: longSnapshot.events.length, latePeaks: longResult.latePeaks, duration: longResult.duration }, durableAssets: receipts.map(receipt => receipt.assetId), idempotentRetries: true, pinnedKitDigest: store.getProjectKitSource(project.id, 'strudel').digest };
 }
 
 function templateFixtureHtml(bundle, { instanceId = 'c'.repeat(32), preserved, saved, edited = false, exportEnabled = false, replEnabled = true } = {}) {

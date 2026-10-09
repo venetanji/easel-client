@@ -91,7 +91,8 @@ function buildStrudelKit(destination = outputPath) {
   fs.writeFileSync(path.join(destination, 'strudel.js'), bundle);
   for (const filename of ['package.json', 'package-lock.json', 'packages/media-mcp/package.json',
     'LICENSE', 'NOTICE', 'packages/media-mcp/LICENSE', 'packages/media-mcp/NOTICE', 'licenses/creative-skills-MIT.txt',
-    'scripts/build-canvas-kits.js', 'src/strudel-kit.js', 'src/strudel-kit-entry.mjs', 'src/strudel-score.js', 'src/canvas-kits.js', 'src/project-zip.js']) {
+    'scripts/build-canvas-kits.js', 'scripts/generate-strudel-drums.cjs', 'assets/strudel-drums/bank.json',
+    'src/strudel-samples.js', 'src/strudel-kit.js', 'src/strudel-kit-entry.mjs', 'src/strudel-score.js', 'src/canvas-kits.js', 'src/project-zip.js']) {
     const target = path.join(sourceRoot, 'easel', filename);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(path.join(root, filename), target);

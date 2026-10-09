@@ -32,6 +32,7 @@ function fixture(options = {}) {
       if (!valid) throw new Error("Runtime changed");
     },
     captureDependency: () => ({ source: "pinned A", digest: "e".repeat(64) }),
+    captureSamples: options.captureSamples,
     render: async (_s, { signal, kitSource }) => {
       renders.push(_s);
       assert.equal(kitSource, "pinned A");
@@ -99,6 +100,21 @@ test("repeat_id_returns_same_receipt", async () => {
   assert.equal(f.saved.length, 1);
   assert.equal(f.saved[0].scope.kind, "strudel-export");
   assert.equal(f.saved[0].scope.kitDigest, "e".repeat(64));
+});
+
+test('saved sample export retries recover the durable WAV after the input sample is removed', async () => {
+  let removed = false;
+  const id = 'a'.repeat(32);
+  const f = fixture({ captureSamples: () => { if (removed) throw new Error('Input sample removed'); return { [id]: { url: 'captured sample' } }; } });
+  const input = request();
+  input.snapshot.events = [{ timeSeconds: 0, durationSeconds: 0.5, absoluteCycle: 0, midiNote: 36, waveform: 'custom_snare', gain: 0.3,
+    attackSeconds: 0.001, releaseSeconds: 0.01, envelopeMode: 'native-default', sample: { assetId: id, digest: 'b'.repeat(64), durationSeconds: 0.2 } }];
+  const first = await f.controller.start(scope, input);
+  removed = true;
+  const recovered = await f.controller.start(scope, input);
+  assert.equal(recovered.assetId, first.assetId);
+  assert.equal(f.saved.length, 1);
+  assert.equal(f.renders.length, 1);
 });
 // Returning the cached attachment status must fail these membership transitions.
 test('completed_retry_reports_detachment_without_rendering_saving_or_attaching_again', async () => {
