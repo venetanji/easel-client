@@ -7,6 +7,19 @@ const STRUDEL_OFFLINE_SETUP = `${STRUDEL_OFFLINE_MARKER}
   // This promise waits for a real gesture. Never await it during page startup.
   // Only the Strudel scratchpad opts into dynamic evaluation and its local worklets.
   const scratchpad = document.documentElement?.dataset?.easelStrudelRepl === 'v1';
+  const worklet = window.AudioWorklet?.prototype;
+  if (scratchpad && worklet?.addModule) {
+    const addModule = worklet.addModule;
+    worklet.addModule = function (url, options) {
+      const prefix = 'data:text/javascript;base64,';
+      if (typeof url !== 'string' || !url.startsWith(prefix)) return addModule.call(this, url, options);
+      // Upstream embeds worklets as data URLs. Load those exact bytes through
+      // the canvas's permitted blob source without widening its script policy.
+      const bytes = Uint8Array.from(atob(url.slice(prefix.length)), character => character.charCodeAt(0));
+      const local = URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
+      return Promise.resolve().then(() => addModule.call(this, local, options)).finally(() => URL.revokeObjectURL(local));
+    };
+  }
   strudel.initAudioOnFirstClick({ disableWorklets: !scratchpad });
 })();
 `;

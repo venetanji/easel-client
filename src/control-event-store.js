@@ -2,9 +2,9 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const EVENT_TYPES = new Set(['media-job-ready', 'media-job-notification', 'media-job-removed', 'canvas-input-answer', 'canvas-input', 'project-opened', 'project-created', 'project-deleted', 'project-assets', 'canvas']);
+const EVENT_TYPES = new Set(['audio-generation', 'media-job-ready', 'media-job-notification', 'media-job-removed', 'canvas-input-answer', 'canvas-input', 'project-opened', 'project-created', 'project-deleted', 'project-assets', 'canvas']);
 const FIELDS = {
-  event: ['type', 'jobId', 'projectId', 'chatId', 'canvasId', 'documentPath', 'title', 'documentTitle', 'status', 'text', 'error'],
+  event: ['type', 'jobId', 'projectId', 'chatId', 'canvasId', 'documentPath', 'title', 'documentTitle', 'status', 'text', 'error', 'modelId', 'attemptId', 'toolName'],
   job: ['id', 'remoteId', 'name', 'mediaType', 'modelId', 'projectId', 'chatId', 'status', 'progress', 'etaSeconds', 'seconds', 'queuePosition', 'createdAt', 'updatedAt', 'error'],
   request: ['id', 'kind', 'canvasId', 'documentPath', 'chatId', 'question', 'afterSubmit', 'value', 'prompt', 'text', 'status', 'createdAt', 'answeredAt', 'completedAt', 'error', 'actionApplied', 'actionError'],
   origin: ['backend', 'chatId', 'threadId', 'model'],
@@ -29,6 +29,7 @@ function summary(value, shape) {
   }
   if (['event', 'job', 'request'].includes(shape) && value.origin) clean.origin = summary(value.origin, 'origin');
   if (shape === 'event') {
+    if (Array.isArray(value.trackIds)) clean.trackIds = value.trackIds.filter((id) => typeof id === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)).slice(0, 16);
     if (value.job) clean.job = summary(value.job, 'job');
     if (value.request) clean.request = summary(value.request, 'request');
     if (Array.isArray(value.assetIds)) clean.assetIds = value.assetIds.filter((id) => typeof id === 'string' && /^(?:[a-f0-9]{32}|[a-f0-9]{64})$/.test(id)).slice(0, 128);
@@ -89,7 +90,23 @@ function createControlEventStore({ userDataPath, fileSystem = fs, maxEvents = 25
     return { events, nextCursor: events.at(-1)?.eventId || after, hasMore: events.length < available.length,
       gap: Boolean(state.events.length && after && after < state.events[0].eventId - 1), delivery: 'Saved locally across app restarts. Read once after a notification or at the beginning of a turn; do not poll.' };
   }
-  return { append, read, getCursor: () => state.nextId - 1 };
+  function listAudioGenerations({ chatId } = {}) {
+    const receipts = new Map();
+    for (const event of state.events) {
+      if (event.type !== 'audio-generation' || !event.attemptId) continue;
+      const key = `${event.modelId || ''}:${event.attemptId}`;
+      if (event.toolName !== 'get_audio_generation_status') receipts.set(key, { ...event });
+      else if (receipts.has(key)) {
+        // Shared status may belong to another chat; retain the submission's owner.
+        const original = receipts.get(key);
+        receipts.set(key, { ...original, status: event.status, timestamp: event.timestamp,
+          trackIds: [...new Set([...(original.trackIds || []), ...(event.trackIds || [])])] });
+      }
+    }
+    return { generations: [...receipts.values()].filter((entry) => entry.chatId === chatId).reverse(),
+      guidance: 'Recent saved Suno receipts, not a job queue. Match the original attempt when checking shared status; use captured track IDs after takeover. Never resubmit automatically.' };
+  }
+  return { append, read, listAudioGenerations, getCursor: () => state.nextId - 1 };
 }
 
 module.exports = { createControlEventStore };

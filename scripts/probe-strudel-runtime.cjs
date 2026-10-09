@@ -429,8 +429,8 @@ function templateFixtureHtml(bundle, { instanceId = 'c'.repeat(32), preserved, s
   // Real Strudel templates opt into the evaluator; disable only for policy controls.
   let html = source.files[source.entry];
   if (!replEnabled) html = html.replace(' data-easel-strudel-repl="v1"', '');
-  if (exportEnabled) html = html.replace("note('<bb2 ~ bb2 bb2>')", "note('<~ bb2 ~ bb2>')");
-  if (edited) html = html.replace("note('<bb2 ~ bb2 bb2>')", "note('a5 c6 e6 a6')");
+  if (exportEnabled) html = html.replaceAll('<bb2 ~ bb2 bb2>', '<~ bb2 ~ bb2>');
+  if (edited) html = html.replaceAll('<bb2 ~ bb2 bb2>', 'a5 c6 e6 a6');
   html = html.replace('</body>', `<script>(${monitorTemplate.toString()})(${JSON.stringify(instanceId)});</script></body>`);
   html = buildCanvasDocument({ html, kits: ['strudel'], kitBundles: { strudel: bundle } });
   const initial = `<script>window.__easelPreservedState=${JSON.stringify(preserved || {}).replace(/</g, '\\u003c')};window.__easelProjectState=${JSON.stringify(saved || {}).replace(/</g, '\\u003c')};</script>`;
@@ -553,13 +553,13 @@ async function electronMain() {
     check(disposed.disposal.audioState === 'closed' && !disposed.disposal.schedulerStarted && disposed.disposal.activeAudioContexts === 0 && disposed.disposal.failures.length === 0, 'Starter disposal leaked audio/scheduler resources.');
     starter.destroy();
     const reloaded = await open('template-reloaded.html');
-    const afterEdit = await until(reloaded, (state) => state.phase.startsWith('Restored code needs Push live'), 'template-source-reloaded');
+    const afterEdit = await until(reloaded, (state) => state.ready, 'template-source-reloaded');
     const restoredCode = await reloaded.webContents.executeJavaScript(`document.getElementById('${control('code')}').value`);
-    check(restoredCode === "note('a5').s('sine').gain(0.3).release(0.05)" && afterEdit.plays === 0 &&
+    check(restoredCode.includes('a5 c6 e6 a6') && afterEdit.plays === 0 &&
       afterEdit.settings.bpm === 120 && afterEdit.settings.volume === 0.2 && afterEdit.gain === 0,
-      'Reload must restore custom code as unapplied text and restore settings without playing.');
+      'Reload must retain the new authored default over old editor state and restore settings without playing.');
     await pushStrudelCode(reloaded, restoredCode);
-    await until(reloaded, (state) => state.phase.startsWith('Pattern ready'), 'template-restored-code-pushed');
+    await until(reloaded, (state) => state.phase.startsWith('Code ready'), 'template-restored-code-pushed');
     await sendKeyboardActivation(reloaded, control('play'));
     await until(reloaded, (state) => state.schedulerStarted && state.peaks.some((peak) => peak > 0.001), 'template-edited-source-signal');
     const other = await open('template-other.html');

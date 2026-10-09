@@ -5,24 +5,16 @@ description: Generate and edit Easel media, assemble managed clips with revision
 
 # Easel Media
 
-Use the Media MCP tools to create media; use saved assets for references and the
-host monitor for accepted jobs. Distinguish a planned workflow from one the
-current tool schema and endpoint actually support.
+Create media with MCP; reuse saved references. Host monitoring follows accepted
+image/video jobs and captured audio tracks. Require exposed tools and endpoint support.
 
 ## Models and references
 
-Known provider models include `qwen-image-2.1` for images/reference edits and
-`ltx-2.5` for video; discover the enabled IDs rather than treating this list as
-exhaustive. The legacy `flux2-9b` and `flux2-4b`
-models are being retired. Do not substitute Flux for an unavailable model.
-`flux-2.5` is not the LTX video model ID.
+Known models: `qwen-image-2.1` for images/edits, `ltx-2.5` for video; discover enabled IDs. Legacy `flux2-9b`/`flux2-4b` are retiring. Do not substitute Flux; `flux-2.5` is not LTX.
 
-Use the exact enabled ID from `list_models`; in-app IDs can include an endpoint
-prefix, so do not replace them with bare provider names. Discovery and tool
-schemas, not this target configuration, determine what can be called now.
+Use exact IDs from `list_models`, including endpoint prefixes. Discovery and exposed schemas determine current tools.
 
-The in-app harness injects this file only, so the essential practices and full
-ID inventory are included here. File-aware agents can read more detail as needed:
+The in-app harness injects this file only. File-aware agents can also read:
 
 - [Prompting and review](references/prompting-and-review.md): distilled image,
   shot, reference, continuity and audio practices from creative-skills.
@@ -32,22 +24,21 @@ ID inventory are included here. File-aware agents can read more detail as needed
   states; [pinned catalog](references/lora-catalog.json) contains exact files,
   revisions, checksums and validation metadata.
 
-The catalog is a snapshot, not a live installation or compatibility guarantee.
-Before selecting an adapter, verify live discovery when available and require
-`supported`, `installed`, required inputs and an exposed tool path. If discovery
-or an advanced tool is unavailable, describe the limitation instead of submitting
-unknown arguments or falling back to direct host commands.
+The catalog is a snapshot. Require live `supported`, `installed`, required
+inputs and an exposed tool path. Otherwise explain the limitation; never guess
+arguments or fall back to direct host commands.
 
 ## Available tools
 
 The current Media MCP package exposes:
 
 - `list_models` to inspect enabled Media model IDs, endpoint names and discovered output types.
-- `generate_image` to create images from a prompt, optional model, `WIDTHxHEIGHT` size, and `n` from 1 to 4. Easel also interprets `|||` as independent image prompts; see the batching limits below.
+- `generate_image`: prompt, model, `WIDTHxHEIGHT` size, `n` 1–4. `|||` separates independent image prompts; see batching below.
 - `edit_image` and `create_image_variation` to transform saved reference images when supported by the endpoint.
 - `discover_video_capabilities({model})` and `list_video_loras({model})` for read-only, selected-endpoint discovery of limits, guide-node availability, supported/installed adapters and validation evidence.
-- `generate_video` to submit one video job with a video model, prompt, seconds, size, first-image or timed-image references, and the typed advanced controls below.
+- `generate_video`: one job with model, prompt, seconds, size, first-image/timed-image references and advanced controls below.
 - `get_video` and `get_image_job` to retrieve accepted jobs in standalone MCP use.
+- Suno: `generate_music`, `generate_speech`, `generate_sound`, `get_audio_generation_status`, `get_audio_track`, `download_audio`, `abandon_audio_generation`; require matching exposed tools and exact configured IDs.
 - In-app `list_media_jobs` and `list_media_assets` to inspect jobs and real saved references; `inspect_media_asset` shows saved images, not decoded video frames.
 - In-app `inspect_timeline`, `create_timeline`, `apply_timeline_edit`, `undo_timeline` and `redo_timeline` for revision-safe hard-cut assembly; `attach_canvas_assets` attaches existing managed media to the active project.
 - `capture_canvas_screenshot` to render HTML and local image assets in an offline browser and return a PNG screenshot.
@@ -55,9 +46,21 @@ The current Media MCP package exposes:
 Built-in, embedded Codex and external in-app MCP agents use the same saved-asset
 schema. Standalone MCP uses bounded image upload objects. Server capability
 schema version 1 is authoritative; unknown/older responses are unknown support,
-not permission to guess. Audio generation/source-audio tools and guide-video
-uploads are not available. Do not imply that a job was submitted or finished
+not permission to guess. Source-audio and guide-video uploads for video generation
+are not available. Do not imply that a job was submitted or finished
 without its tool result.
+
+## Suno audio
+
+Submit once; preserve `attempt_id`/track UUIDs. Status observes the shared browser,
+not a durable queue: match the attempt; after takeover, use captured track IDs.
+Studio monitors captured UUIDs, saves audio and notifies chat. End the turn;
+do not poll monitored tracks. Uncaptured attempts need a later check;
+`list_audio_generations` recovers receipts. CAPTCHA needs manual noVNC; never
+automatically resubmit or abandon. `dryRun` uses the live browser. Download by
+`trackId`: Studio saves WAV/MP3/M4A to Media/project/chat, no output directory.
+Storage failure: keep the receipt; never regenerate. Omit `sunoModel` to keep the
+native browser selection; it is not the routing model.
 
 ## Timeline stitching and review
 
@@ -269,7 +272,7 @@ but v0.0.2 image result parsing rejects more than four, including queued-job
 downloads. Do not create a larger job until that client path is upgraded. Prefer
 a small coherent batch over many individual submissions; review before expanding.
 
-## Queue discipline
+## Image/video queue discipline
 
 - Let the host poll; use `list_media_jobs` only when a status snapshot is useful.
 - Preserve the receipt ID and original model/endpoint. Stop, model retirement or

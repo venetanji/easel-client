@@ -146,7 +146,7 @@ test('mixed_template_host_workflow_preserves_instances_answers_media_and_distrib
   for (const file of beforeAdd.files) assert.equal(canvases.readFile(projectId, { path: file.path }).revision, file.revision);
   for (const sound of [soundA, soundB]) {
     const app = canvases.readFile(projectId, { path: sound.documentPath.replace('index.html', 'app.js') }).text;
-    assert.match(app, /function createPattern\(\)/);
+    assert.match(app, /const DEFAULT_LIVE_CODE =/);
     assert.ok(app.includes(JSON.stringify(sound.instanceId)), 'Factory binds each authored starter to its own identity');
     assert.match(app, /playing: false/); // Source default only; native silence has separate measured proof.
   }

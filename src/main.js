@@ -112,6 +112,7 @@ const CANVAS_INPUTS = createCanvasInputStore({ userDataPath: app.getPath('userDa
 const CAPTURE_MEDIA = createCanvasMediaStore({ userDataPath: app.getPath('userData') });
 const MEDIA_JOBS = createMediaJobStore({ userDataPath: app.getPath('userData') });
 const MEDIA_ASSETS = {
+  updateMetadata: (...args) => CAPTURE_MEDIA.updateMetadata(...args),
   save: (media) => media.mimeType?.startsWith('image/') ? ASSETS.save(media) : CAPTURE_MEDIA.save(media),
   getMetadata: async (id) => {
     try { return await CAPTURE_MEDIA.getMetadata(id); } catch {}
@@ -198,7 +199,7 @@ async function importLocalMedia(input = {}) {
   const projectId = input.projectId ? validateOpaqueId(input.projectId, 'Project ID') : '';
   if (projectId) CANVASES.getProject(projectId);
   const picked = await dialog.showOpenDialog(mainWindow, { title: 'Import media to Easel', properties: ['openFile', 'multiSelections'],
-    filters: [{ name: 'Images, audio and video', extensions: ['png', 'jpg', 'jpeg', 'webp', 'wav', 'mp3', 'mp4', 'webm'] }] });
+    filters: [{ name: 'Images, audio and video', extensions: ['png', 'jpg', 'jpeg', 'webp', 'wav', 'mp3', 'm4a', 'mp4', 'webm'] }] });
   if (picked.canceled || !picked.filePaths.length) return { canceled: true, assets: [], errors: [] };
   const result = await importMediaFiles({ filenames: picked.filePaths, imageStore: ASSETS, mediaStore: CAPTURE_MEDIA,
     validateImage: (bytes) => { if (nativeImage.createFromBuffer(bytes).isEmpty()) throw new Error('This image cannot be decoded.'); },
@@ -346,11 +347,7 @@ async function listStoredMedia() {
   const shared = CANVASES.listLibraryAssets({ thumbnail: true });
   const assets = new Map(shared.map((asset) => [asset.id, asset]));
   for (const asset of [...images, ...captures]) assets.set(asset.id, { ...assets.get(asset.id), ...asset });
-  return [...jobCards(), ...assets.values()].sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 200);
-}
-
-function jobCards(projectId) {
-  return MEDIA_JOBS.list({ ...(projectId ? { projectId } : {}) }).filter((job) => job.status !== 'ready').map((job) => ({ id: job.id, name: job.name, mimeType: job.mediaType === 'video' ? 'video/mp4' : job.mediaType === 'audio' ? 'audio/wav' : 'image/png', updatedAt: job.updatedAt, projectId: job.projectId, kind: 'job', job }));
+  return [...assets.values()].sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 200);
 }
 
 async function forgetMediaJob(id, { signal } = {}) {
@@ -359,6 +356,18 @@ async function forgetMediaJob(id, { signal } = {}) {
     detail: `This removes the saved job ID and stops monitoring. It does not cancel generation on the server. Media cannot be retrieved without its job ID; keep a copy before removing it. Any files already downloaded are kept.\n\nJob ID: ${job.remoteId}`,
     buttons: ['Remove job', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, ...(signal ? { signal } : {}) });
   return answer.response === 0 ? JOB_MONITOR.forget(job.id) : { deleted: false, canceled: true };
+}
+
+async function cancelMediaJob(id) {
+  const job = MEDIA_JOBS.get(validateOpaqueId(id, 'Media job ID'));
+  if (['ready', 'failed', 'cancelled'].includes(job.status)) return { canceled: false };
+  const answer = await dialog.showMessageBox(mainWindow, { type: 'question', title: 'Cancel job tracking', message: `Stop tracking ${job.name}?`,
+    detail: 'Studio will stop checking and downloading this job. The provider may continue generating and credits are not refunded. The job ID and any files already saved are kept.',
+    buttons: ['Stop tracking', 'Keep tracking'], defaultId: 1, cancelId: 1, noLink: true });
+  if (answer.response !== 0) return { canceled: false };
+  // A job can finish while its confirmation is open.
+  if (['ready', 'failed', 'cancelled'].includes(MEDIA_JOBS.get(job.id).status)) return { canceled: false };
+  return { canceled: true, job: JOB_MONITOR.cancel(job.id) };
 }
 
 async function readMediaReference({ assetId, projectId } = {}) {
@@ -372,7 +381,7 @@ async function readMediaReference({ assetId, projectId } = {}) {
 }
 
 async function saveAssetDownload(asset) {
-  const extension = ({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'audio/wav': 'wav', 'audio/mpeg': 'mp3', 'video/webm': 'webm', 'video/mp4': 'mp4' })[asset.mimeType];
+  const extension = ({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'audio/wav': 'wav', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'video/webm': 'webm', 'video/mp4': 'mp4' })[asset.mimeType];
   if (!extension) throw new Error('This media format cannot be downloaded.');
   const name = String(asset.name || asset.id || 'Easel media').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').replace(/\.[A-Za-z0-9]{1,8}$/, '').slice(0, 100) || 'Easel media';
   const selected = await dialog.showSaveDialog(mainWindow, { defaultPath: `${name}.${extension}`, filters: [{ name: 'Media', extensions: [extension] }] });
@@ -483,7 +492,9 @@ const CANVAS_CONTROLLER = {
     getCurrentDocumentPath: () => requireCanvasView().getCurrentDocumentPath(),
     getCanvasInputScope: () => currentCanvasInputScope(),
     getDefaultDocumentPath: () => CANVASES.getProject(requireCanvasView().getCurrentCanvasId()).manifest.entry,
+    listAudioGenerations: (_args, context = {}) => CONTROL_EVENTS.listAudioGenerations({ chatId: context.chatId || CHAT.getActiveChatId() }),
     listMediaJobs: () => ({ jobs: MEDIA_JOBS.list(), polling: 'The host polls and downloads pending jobs across restarts. Do not resubmit.' }),
+    updateMediaJobAssets: (jobId, assets) => JOB_MONITOR.updateAssets(jobId, assets),
     forgetMediaJob: ({ jobId }, context) => forgetMediaJob(jobId, context),
     listCanvasDocuments: () => withCanvas((controller) => controller.listCanvasDocuments()),
     openCanvasDocument: (args) => withCanvas(async (controller) => {
@@ -588,7 +599,7 @@ const emitAgentEvent = (event) => {
       if (scope?.projectId === event.projectId && scope.timelineId === event.timelineId && scope.instanceId === event.instanceId) canvasView.view.webContents.send('canvas:timeline-changed', event);
     }
     if (event.type === 'control-settled') { emitControlState(); return; }
-    if (['canvas', 'project-assets', 'project-deleted'].includes(event.type)) recordControlChange(event);
+    if (['canvas', 'project-assets', 'project-deleted', 'audio-generation'].includes(event.type)) recordControlChange(event);
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, event);
   };
 const CONTROL_EVENTS = createControlEventStore({ userDataPath: app.getPath('userData') });
@@ -826,9 +837,9 @@ const JOB_MONITOR = createMediaJobMonitor({
   store: MEDIA_JOBS, settingsStore: SETTINGS, mediaAssetStore: MEDIA_ASSETS,
   enrichAssets: VIDEO_METADATA.enrichAssets,
   runtime: { isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, userDataPath: app.getPath('userData') },
-  attachAssets: (projectId, assetIds) => withCanvas((controller) => {
+  attachAssets: (projectId, assetIds, { beforeCommit } = {}) => withCanvas((controller) => {
     if (!CANVASES.list().some((project) => project.id === projectId)) return { projectDeleted: true };
-    return attachProjectAssets(controller, projectId, assetIds);
+    return attachProjectAssets(controller, projectId, assetIds, { beforeCommit });
   }),
   onEvent: (event) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.AGENT_EVENT, event); },
   onReady: (job) => CHAT.notifyMediaJob(job),
@@ -1096,7 +1107,7 @@ function registerIpcHandlers() {
       const preview = await CANVASES.getAsset(projectId, asset.id, { thumbnail: true });
       return { ...asset, thumbnail: preview.thumbnail || '' };
     }));
-    return { ...result, projectId, projectTitle: result.title, assets: [...jobCards(projectId), ...assets] };
+    return { ...result, projectId, projectTitle: result.title, assets };
   });
   ipcMain.handle(IPC_CHANNELS.GET_PROJECT_ASSET, async (event, id, assetId) => {
     assertTrustedSender(event, mainWindow);
@@ -1299,6 +1310,7 @@ function registerIpcHandlers() {
   ipcMain.handle(IPC_CHANNELS.LIST_MEDIA_JOBS, (event) => { assertTrustedSender(event, mainWindow); return MEDIA_JOBS.list(); });
   ipcMain.handle(IPC_CHANNELS.DELETE_MEDIA_JOB, (event, id) => { assertTrustedSender(event, mainWindow); return forgetMediaJob(id); });
   ipcMain.handle(IPC_CHANNELS.RETRY_MEDIA_JOB, (event, id) => { assertTrustedSender(event, mainWindow); return JOB_MONITOR.retry(validateOpaqueId(id, 'Media job ID')); });
+  ipcMain.handle(IPC_CHANNELS.CANCEL_MEDIA_JOB, (event, id) => { assertTrustedSender(event, mainWindow); return cancelMediaJob(id); });
   ipcMain.handle(IPC_CHANNELS.LIST_CANVASES, (event) => {
     assertTrustedSender(event, mainWindow);
     return CANVASES.list();

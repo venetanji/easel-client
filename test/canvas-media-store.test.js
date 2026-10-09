@@ -15,6 +15,22 @@ function temporaryLibrary(t) {
   return directory;
 }
 
+test('M4A retains its encoding through save, playback, restart, list and removal', async (t) => {
+  const userDataPath = temporaryLibrary(t);
+  const bytes = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypM4A \0\0\0\0M4A isom')]);
+  const store = createCanvasMediaStore({ userDataPath });
+  const id = await store.save({ data: bytes.toString('base64'), mimeType: 'audio/mp4', name: 'Suno song.m4a' });
+  const restored = createCanvasMediaStore({ userDataPath });
+  const playback = await restored.getPlaybackSource(id);
+  assert.equal(path.basename(playback.filename), 'media.m4a');
+  assert.deepEqual(fs.readFileSync(playback.filename), bytes);
+  assert.equal((await restored.get(id)).mimeType, 'audio/mp4');
+  assert.equal((await restored.list())[0].id, id);
+  await assert.rejects(store.save({ data: Buffer.from('not M4A').toString('base64'), mimeType: 'audio/mp4' }), /declared file format/);
+  await restored.remove(id);
+  assert.deepEqual(await restored.list(), []);
+});
+
 test('removes a complete capture including frame and poster metadata while preserving other media and project copies', async (t) => {
   const userDataPath = temporaryLibrary(t);
   const id = 'a'.repeat(32);

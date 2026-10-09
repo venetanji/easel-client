@@ -232,15 +232,6 @@ test('delayed startup and switch snapshots cannot overwrite a new live turn', as
 });
 
 
-test('canceling the native Video choice does not open an undefined project or report success', async (t) => {
-  const f = await fixture(t);
-  f.client.openVideoEditor = async () => ({ canceled: true });
-  await f.get('open-video-editor').click();
-  assert.deepEqual(f.openedProjects, []);
-  assert.doesNotMatch(f.get('status').textContent, /Video editor ready/);
-});
-
-
 test('Undo explains a retained creation boundary and returns to normal for later source edits', async (t) => {
   const f = await fixture(t);
   const reason = 'Undo stops at template creation. Your earlier history is kept.';

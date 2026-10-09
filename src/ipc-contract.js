@@ -65,6 +65,7 @@ const IPC_CHANNELS = Object.freeze({
   LIST_MEDIA_JOBS: 'media:jobs:list',
   DELETE_MEDIA_JOB: 'media:jobs:delete',
   RETRY_MEDIA_JOB: 'media:jobs:retry',
+  CANCEL_MEDIA_JOB: 'media:jobs:cancel',
   LIST_CANVASES: 'canvases:list',
   CREATE_CANVAS: 'canvases:create',
   OPEN_CANVAS: 'canvases:open',

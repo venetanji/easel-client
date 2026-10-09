@@ -1,6 +1,8 @@
 const { executeEaselTool, handleMcpResult, toOpenAITools, validateToolArguments, toolCorrection } = require('./agent');
 const { EXTERNAL_INSTRUCTIONS } = require('./harness-instructions');
 const { MEDIA_OUTPUT_TOOLS } = require('./media-reference-tools');
+const { AUDIO_GENERATION_TOOLS, AUDIO_TOOLS } = require('./media-mcp-client');
+const { registerAudioTrackJobs, managedAudioTrackResult, enrichAudioDownload } = require('./audio-track-jobs');
 const { throwIfAborted } = require('./turn-abort');
 
 const WORKSPACE_TOOLS = [
@@ -21,7 +23,7 @@ function createEaselToolHost({ canvasController, presentCanvas, assetStore, medi
   let stopping = false;
   const submissions = new Set();
   const clients = new Set();
-  const detachedTools = new Set([...MEDIA_OUTPUT_TOOLS, 'generate_video']);
+  const detachedTools = new Set([...MEDIA_OUTPUT_TOOLS, ...AUDIO_GENERATION_TOOLS, 'generate_video']);
   async function withMedia(action, signal) {
     throwIfAborted(signal);
     const client = await createMediaClient(signal);
@@ -81,17 +83,29 @@ function createEaselToolHost({ canvasController, presentCanvas, assetStore, medi
         function registerOnce(input) {
           const key = `${input.modelId || input.job?.modelId || ''}:${input.job?.id || ''}`;
           if (!registeredJobs.has(key)) registeredJobs.set(key, Promise.resolve().then(() => registerMediaJob?.({
-            ...input, ...origin, projectId: submittedProjectId,
+            ...input, ...origin, projectId: input.projectId ?? submittedProjectId,
             turnOptions: { ...origin.turnOptions, kits },
           })));
           return registeredJobs.get(key);
         }
         const mcp = {
-          callTool: (tool, input, options = {}) => {
+          callTool: async (tool, input, options = {}) => {
+            let managedAudioJob;
+            if (tool === 'download_audio' && typeof canvasController.listMediaJobs === 'function') {
+              const listing = await canvasController.listMediaJobs();
+              managedAudioJob = listing.jobs?.find(entry => entry.mediaType === 'audio' && entry.remoteId === input.trackId && entry.modelId === input.model && !['cancelled', 'failed'].includes(entry.status));
+              if (managedAudioJob) {
+                const reused = await managedAudioTrackResult(managedAudioJob, mediaAssetStore);
+                if (reused) return reused;
+              }
+            }
             if (!detachedTools.has(tool)) return withMedia((client) => client.callTool(tool, input, options), signal);
             // Once submitted, generation must save its receipt even if the controller disconnects.
             const submission = withMedia(async (client) => {
-              const response = await client.callTool(tool, input);
+              let response = await client.callTool(tool, input);
+              if (tool === 'download_audio') response = await enrichAudioDownload(response, input, client);
+              if (AUDIO_GENERATION_TOOLS.has(tool)) response = await registerAudioTrackJobs(response,
+                { model: input.model, prompt: input.prompt, projectId: submittedProjectId }, registerMediaJob ? registerOnce : undefined);
               const hasOutput = response.content?.some((item) => ['image', 'audio', 'resource'].includes(item.type)) || response.structuredContent?.assets?.length;
               if (!response.isError && response.structuredContent?.job && !hasOutput && !['failed', 'cancelled'].includes(response.structuredContent.job.status)) {
                 const acceptedJob = { remoteId: response.structuredContent.job.id, modelId: response.structuredContent.job.modelId || input.model,
@@ -106,8 +120,13 @@ function createEaselToolHost({ canvasController, presentCanvas, assetStore, medi
               if (!response.isError && (hasOutput || !response.structuredContent?.job)) {
                 const saved = JSON.parse(await handleMcpResult(response, mediaAssetStore, (event) => {
                   if (event.type === 'image' && event.data) outputObservations.push({ data: event.data, mimeType: event.mimeType });
-                  onEvent?.(event);
-                }, { generated: true, projectId: submittedProjectId, kits, attachGeneratedAssets: canvasController.attachGeneratedAssets }));
+                  onEvent?.({ ...event, chatId: origin.chatId, origin: origin.origin });
+                }, { generated: !AUDIO_GENERATION_TOOLS.has(tool), projectId: submittedProjectId, kits, attachGeneratedAssets: canvasController.attachGeneratedAssets,
+                  ...(AUDIO_TOOLS.has(tool) ? { audioContext: { toolName: tool, modelId: input.model, trackId: input.trackId } } : {}) }));
+                if (managedAudioJob && saved.assets?.length) {
+                  try { await canvasController.updateMediaJobAssets?.(managedAudioJob.id, saved.assets); }
+                  catch { /* A removed receipt must not prevent an explicit download. */ }
+                }
                 return { content: [], structuredContent: saved };
               }
               return response;

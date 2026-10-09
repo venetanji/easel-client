@@ -116,6 +116,15 @@ function injectedMediaInstructions() {
     .find((entry) => entry.name === 'easel-media').instructions.replace(/\s+/g, ' ');
 }
 
+test('injected media skill exposes Suno without promising a durable browser queue', () => {
+  const instructions = injectedMediaInstructions();
+  for (const name of ['generate_music', 'generate_speech', 'generate_sound', 'get_audio_generation_status', 'get_audio_track', 'download_audio', 'abandon_audio_generation']) assert.ok(instructions.includes('`' + name + '`'), name);
+  assert.doesNotMatch(instructions, /Audio generation\/source-audio tools.*not available/);
+  assert.match(instructions, /shared browser.*not.*queue/);
+  assert.match(instructions, /CAPTCHA.*manual/);
+  assert.match(instructions, /never.*resubmit.*abandon/i);
+});
+
 test('injected media skill explains managed timeline assembly without source retiming', () => {
   const instructions = injectedMediaInstructions();
   for (const { function: tool } of TIMELINE_TOOLS) {

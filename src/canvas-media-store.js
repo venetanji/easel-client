@@ -8,7 +8,7 @@ const MAX_MEDIA_BYTES = 32 * 1_048_576;
 const MAX_VIDEO_FRAMES = 6;
 const MAX_FRAME_BYTES = 2 * 1_048_576;
 const MAX_POSTER_CHARACTERS = 65_536;
-const FORMATS = Object.freeze({ 'audio/wav': 'wav', 'audio/mpeg': 'mp3', 'video/webm': 'webm', 'video/mp4': 'mp4' });
+const FORMATS = Object.freeze({ 'audio/wav': 'wav', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'video/webm': 'webm', 'video/mp4': 'mp4' });
 const ID_PATTERN = /^[a-f0-9]{32}$/;
 
 function readBase64(value, limit, label) {
@@ -23,7 +23,7 @@ function validateMediaBytes(bytes, mimeType) {
   const mp3 = bytes.length >= 3 && (bytes.toString('ascii', 0, 3) === 'ID3' || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0));
   const webm = bytes.length >= 4 && bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
   const mp4 = bytes.length >= 12 && bytes.toString('ascii', 4, 8) === 'ftyp';
-  if (!({ 'audio/wav': wav, 'audio/mpeg': mp3, 'video/webm': webm, 'video/mp4': mp4 })[mimeType]) throw new Error('Capture media does not match its declared file format.');
+  if (!({ 'audio/wav': wav, 'audio/mpeg': mp3, 'audio/mp4': mp4, 'video/webm': webm, 'video/mp4': mp4 })[mimeType]) throw new Error('Capture media does not match its declared file format.');
 }
 
 function jpegBytes(data, limit = MAX_FRAME_BYTES) {
@@ -75,7 +75,7 @@ function createCanvasMediaStore({ userDataPath, fileSystem = fs, idFactory = () 
   }
 
   async function save({ data, mimeType, name, width, height, duration, codec, thumbnail = '', frames = [], scope } = {}) {
-    if (!Object.hasOwn(FORMATS, mimeType)) throw new Error('Capture media must be WAV, MP3, WebM, or MP4.');
+    if (!Object.hasOwn(FORMATS, mimeType)) throw new Error('Capture media must be WAV, MP3, M4A, WebM, or MP4.');
     const bytes = readBase64(data, MAX_MEDIA_BYTES, 'Capture media');
     validateMediaBytes(bytes, mimeType);
     const video = mimeType.startsWith('video/');
@@ -282,7 +282,7 @@ function createCanvasMediaStore({ userDataPath, fileSystem = fs, idFactory = () 
 
   async function list() {
     if (!fileSystem.existsSync(directory)) return [];
-    const ids = new Set(fileSystem.readdirSync(directory).flatMap((filename) => ID_PATTERN.test(filename) ? [filename] : /^[a-f0-9]{32}\.(?:wav|mp3|webm|mp4)$/.test(filename) ? [filename.slice(0, 32)] : []));
+    const ids = new Set(fileSystem.readdirSync(directory).flatMap((filename) => ID_PATTERN.test(filename) ? [filename] : /^[a-f0-9]{32}\.(?:wav|mp3|m4a|webm|mp4)$/.test(filename) ? [filename.slice(0, 32)] : []));
     const result = [];
     for (const id of ids) {
       try { result.push(publicMetadata(record(id).metadata)); } catch { /* One damaged capture does not hide the rest of the library. */ }

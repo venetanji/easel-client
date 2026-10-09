@@ -144,6 +144,93 @@ test('forgetting an in-flight job prevents late attachment or completion notific
   assert.equal(store.list().length, 0);
 });
 
+test('canceling an in-flight job keeps its receipt and blocks late output and restart polling', async (t) => {
+  const { root, store } = fixture(t);
+  let resolve;
+  const response = new Promise(finish => { resolve = finish; });
+  const events = [];
+  const monitor = createMediaJobMonitor({ store, settingsStore, now: () => 1000,
+    mediaAssetStore: { save: () => assert.fail('Canceled jobs must not save late output.') },
+    attachAssets: () => assert.fail('Canceled jobs must not attach late output.'),
+    onReady: () => assert.fail('Canceled jobs must not notify completion.'), onEvent: event => events.push(event),
+    mcpFactory: async () => ({ async callTool() { return response; }, async close() {} }),
+  });
+  const job = monitor.track(input);
+  monitor.start();
+  await new Promise(finish => setImmediate(finish));
+  assert.equal(monitor.cancel(job.id).status, 'cancelled');
+  resolve({ structuredContent: { job: { id: input.job.id, status: 'completed' } },
+    content: [{ type: 'resource', resource: { mimeType: 'video/mp4', blob: 'YWJj' } }] });
+  await monitor.stop();
+  assert.equal(store.get(job.id).remoteId, input.job.id);
+  assert.equal(store.get(job.id).status, 'cancelled');
+  assert.equal(store.list({ pending: true }).length, 0);
+  assert.equal(events.at(-1).job.status, 'cancelled');
+  assert.throws(() => monitor.retry(job.id), /pending job/);
+  const restored = createMediaJobStore({ userDataPath: root });
+  const restarted = createMediaJobMonitor({ store: restored, settingsStore,
+    mcpFactory: () => assert.fail('Canceled jobs must not poll after restart.') });
+  restarted.start(); await restarted.stop();
+  assert.equal(restored.get(job.id).status, 'cancelled');
+});
+
+test('a terminal job cannot be canceled or lose its saved output', t => {
+  const { store } = fixture(t);
+  const job = store.track(input);
+  store.update(job.id, { status: 'ready', assets: [{ assetId: 'a'.repeat(32), mimeType: 'video/mp4' }] });
+  const monitor = createMediaJobMonitor({ store });
+  assert.throws(() => monitor.cancel(job.id), /pending job/);
+  assert.equal(store.get(job.id).status, 'ready');
+});
+
+test('retrieving a canceled job reports stopped tracking and never promises another notification', async t => {
+  const { store } = fixture(t);
+  const job = store.track(input); store.update(job.id, { status: 'cancelled' });
+  let completion = 0;
+  const service = createChatService({ settingsStore, mediaJobStore: store,
+    canvasController: { getCurrentCanvasId: () => projectId },
+    registerMediaJob: () => assert.fail('Canceled jobs must not be registered again.'),
+    mcpLaunchOptions: () => ({ command: 'fake' }),
+    mcpFactory: async () => ({ async close() {},
+      listTools: async () => [{ name: 'get_video', inputSchema: { type: 'object', properties: { model: { type: 'string' }, videoId: { type: 'string' } } } }],
+      callTool: () => assert.fail('Canceled job retrieval must use the retained receipt.'),
+    }),
+    llmFactory: () => ({ async createCompletion({ messages }) {
+      if (completion++ === 0) return { choices: [{ message: { role: 'assistant', tool_calls: [
+        { id: 'check', type: 'function', function: { name: 'get_video', arguments: JSON.stringify({ model: modelId, videoId: input.job.id }) } },
+      ] } }] };
+      const result = JSON.parse(messages.filter(message => message.role === 'tool').at(-1).content);
+      assert.equal(result.job.status, 'cancelled');
+      assert.equal(result.monitoredJob, undefined);
+      assert.ok(result.text.some(text => text.includes('no longer polls')));
+      return { choices: [{ message: { role: 'assistant', content: 'Tracking is canceled.' } }] };
+    } }),
+  });
+  assert.equal((await service.sendMessage('Check my canceled job')).text, 'Tracking is canceled.');
+  await service.shutdown();
+});
+
+test('canceling during attachment prevents a late project commit while keeping saved files', async t => {
+  const { store } = fixture(t);
+  const saved = store.track(input);
+  store.update(saved.id, { status: 'downloading', assets: [{ assetId: 'a'.repeat(32), mimeType: 'video/mp4' }] });
+  let release;
+  let started;
+  let committed = false;
+  const gate = new Promise(resolve => { release = resolve; });
+  const attaching = new Promise(resolve => { started = resolve; });
+  const monitor = createMediaJobMonitor({ store, mediaAssetStore: {},
+    attachAssets: async (_projectId, _assetIds, { beforeCommit } = {}) => {
+      started(); await gate; beforeCommit?.(); committed = true;
+    }, onReady: () => assert.fail('Canceled attachment must not announce completion.'),
+  });
+  monitor.start(); await attaching;
+  monitor.cancel(saved.id); release(); await monitor.stop();
+  assert.equal(committed, false);
+  assert.equal(store.get(saved.id).status, 'cancelled');
+  assert.equal(store.get(saved.id).assets.length, 1);
+});
+
 test('endpoint changes preserve IDs without sending them to a different endpoint', async (t) => {
   const { store } = fixture(t);
   const monitor = createMediaJobMonitor({ store, settingsStore: { ...settingsStore, loadPublic: () => ({ ...settings, connections: [] }) }, now: () => 1000,

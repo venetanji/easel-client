@@ -36,7 +36,7 @@ test('preload exposes a narrow frozen API with an explicit MCP connection action
   const api = exposed.easelClient;
 
   assert.deepEqual(Object.keys(api).sort(), [
-    'acknowledgeChat', 'addAssetToCanvas', 'attachProjectAsset', 'checkModelCapabilities', 'clearChat', 'closeCanvas', 'codexCancelLogin', 'codexLogin', 'codexLogout', 'createCanvas', 'createProject', 'createProjectDocument',
+    'acknowledgeChat', 'addAssetToCanvas', 'attachProjectAsset', 'cancelMediaJob', 'checkModelCapabilities', 'clearChat', 'closeCanvas', 'codexCancelLogin', 'codexLogin', 'codexLogout', 'createCanvas', 'createProject', 'createProjectDocument',
     'deleteLibraryAsset', 'deleteMediaJob', 'deleteProject', 'deleteProjectAsset', 'deleteProjectFile', 'exportCanvas', 'exportProject', 'getAgentControl', 'getAvailableKits', 'getCurrentChat', 'getLibraryAsset', 'getMcpConnection', 'getModelCatalog', 'getProjectAsset', 'getProjectAssets', 'getProjectKits', 'getSettings', 'hideCanvasPreview',
     'listAssets', 'listCanvasFiles', 'listCanvasInputs', 'listCanvases', 'listChats', 'listInstalledSkills', 'listLiteLLMModels', 'listMediaJobs', 'listProjectDocuments', 'manageCanvasDevices',
     'onAgentEvent', 'openCanvas', 'openChat', 'openExternal', 'openProjectDocument', 'readCanvasFile', 'removeConnection', 'renameProject', 'retryCanvasInput', 'retryMediaJob',

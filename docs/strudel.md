@@ -1,62 +1,86 @@
 # Strudel sound template
 
-Strudel sound is an offline live-coding scratchpad, bundled locally through
-Easel's pinned Strudel kit. It starts silent and offers Play, Stop, tempo, volume,
-a live code editor and bounded WAV loop export. The editor uses Strudel's REPL;
-ordinary canvases retain the stricter CSP. Network access remains blocked.
+Strudel sound is an offline Strudel interpreter with one code editor, Run/Stop,
+BPM and volume controls. A collapsible panel on the right holds references,
+examples and WAV export. It uses the locally bundled, pinned Strudel runtime.
 
-## Start and listen
+## Write and listen
 
-1. Open **Templates → Strudel sound** and choose **Create project** or **Add to
-   current project**. If the kit is missing, check **Kits** in Settings. See
-   [Creative templates](templates.md) for independent instances and recovery.
-2. Press **Play** yourself. Mouse activation or a focused button's Enter/Space
-   activation supplies the genuine gesture needed to resume audio. An agent
-   tool call is not that gesture.
-3. Adjust **Tempo · BPM** from 30–240 and **Volume** from 0–100%. These local
-   controls act immediately and do not need a model call.
-4. Press **Stop** or **Escape** for silence. Escape also works while the existing
-   canvas question overlay has focus. You can dismiss a question and press Stop.
+1. Create a fresh **Templates → Strudel sound** instance. Existing projects keep
+   their authored template source and are not replaced by an app update.
+2. Edit the code. Select a passage to execute only that passage, or leave no
+   selection to execute the whole buffer.
+3. Press **Ctrl+Enter** (Cmd+Enter also works) or **Run**. That one gesture
+   evaluates the code and starts sound. During playback it updates the pattern
+   on the existing clock. Syntax errors retain the last good pattern.
+4. Press **Stop**, **Ctrl+.** or **Escape** for silence, including while a canvas
+   question has focus. Stop also mutes already scheduled sound tails.
 
-Stop mutes the managed output as well as stopping the scheduler, so already
-scheduled sound tails do not keep playing. Explicit restart disconnects the old
-voice graph before unmuting the new pattern. Repeated Play does not create another
-context or scheduler. Initialization or pattern errors appear in the sketch;
-Retry Play requires another genuine gesture. An initialization reload/retry
-remains silent.
+The editor fills the canvas. **Reference** toggles the right panel; its close
+button returns focus to the editor. Syntax highlighting distinguishes functions,
+strings, numbers, labels, keywords and comments in the editor and examples.
+Each example shows its code and an
+**Add & run** button. It appends a layer and evaluates the whole score in one
+gesture, preserving existing layers and tempo. During playback it keeps the
+same clock and audio graph. A plain final pattern becomes a `$:` layer before
+the first example is added; setup code and comments remain intact. Invalid or
+oversized drafts are preserved with an error instead of replaced.
+Scores using dynamic `.p()` registrations or conditional labels require adding
+the example manually; the automatic action leaves these scores unchanged.
+Tab inserts two spaces; Shift+Tab moves keyboard focus onward.
+Tempo and volume controls apply immediately. Code may also set tempo with
+`setcpm(30)` (120 BPM); starting playback preserves that tempo.
 
-## Live-code the pattern
+Opening or reloading the project stays silent. Restored custom code needs only
+Run or Ctrl+Enter, with no separate push step. Managed state includes unexecuted
+editor text, settings and panel visibility. An authored default source change
+wins over editor state captured from the previous default.
 
-Use the built-in code editor and **Push live**. The pinned Strudel REPL compiles
-and replaces the current pattern on its running scheduler; Easel adds no
-next-bar wait. If code fails, the previous valid pattern stays in place. While
-the editor differs from the active pattern, current playback continues, but Play
-and WAV export stay disabled until the draft is pushed. Pushing code does not call Play. Keep `.play()` out of submitted code; use the visible
-Play button to start sound with a real user gesture.
+## Agent editing
 
-The authored `app.js` contains `DEFAULT_LIVE_CODE` and the matching safe starter
-pattern factory. When changing that authored default, keep both definitions in
-sync. Runtime pushes are available to the agent through
-`window.EaselStrudel.evaluate(source)` in `execute_canvas_javascript`; use that
-only when the user asked to audition the code. A successful push is retained in
-this instance's project state. It is not an `app.js` source edit and does not
-create a source-history entry.
+Inspect `window.EaselStrudel.getState().code` through
+`execute_canvas_javascript`. `window.EaselStrudel.setCode(source)` fills the
+editor without evaluating or playing it. When the user asks to audition a live
+change, `window.EaselStrudel.evaluate(source)` compiles it on the current
+scheduler; it does not start audio. The user supplies Run/Ctrl+Enter to start.
+Keep `.play()` out of submitted code.
 
-Custom saved code is displayed after reload but deliberately is not evaluated
-at startup. Push it again, then press Play. Playback never restores. This avoids
-a saved code buffer starting audio or running effects while the project opens.
+Runtime editor changes participate in managed state preservation; they do not
+create source-history entries. To save a pattern change while keeping playback,
+patch `DEFAULT_LIVE_CODE` in the instance's `app.js` with `reload:false`, check
+the save result, then call `EaselStrudel.evaluate` with that same complete score.
+The saved default survives reopening, and live evaluation updates the existing
+clock. A failed evaluation keeps the previous good pattern playing; correct
+the saved default as well before reporting success. Source-only saves leave
+the host's document revision pending reload, so WAV export remains gated until
+reload. Changes to the editor UI or libraries still require a reload, which
+stays silent until Run. Run always evaluates the editor buffer.
 
-The REPL runs in the isolated canvas and uses dynamic JavaScript evaluation.
-Only a document marked `data-easel-strudel-repl="v1"` receives the additional
-`unsafe-eval` and `worker-src blob:` CSP sources needed by the pinned evaluator
-and local audio worklets. `connect-src` remains limited to `data:` and `blob:`;
-remote `samples('github:...')` requests are blocked. No sample bank or Suno
-sample-creation workflow is included yet.
+Suno's `generate_sound` tool exposes `soundType: "one_shot"` and `"loop"`.
+Generated audio can be saved to Media, attached by its returned asset ID, and
+registered with `samples({name: [EaselCanvas.assets.getUrl(assetId)]})` after
+the attached asset is available to the runtime. The current general attachment
+tool needs a reload to provide newly attached assets to an already open canvas;
+automatic live attachment and sample preparation are not implemented here.
+Once available, local samples can be loaded and the pattern updated while
+audio continues. Check generated attacks, pitch, duration and loop boundaries;
+these controls alone do not establish a ready-to-use drum or piano sample bank.
 
-The built-in example layers native synth patterns and live effects. The WAV
-export contract remains narrower than live playback: it accepts only validated
-native note/synth events and rejects samples and effect controls rather than
-silently changing their sound.
+## Local sounds and effects
+
+The reference panel lists working native sounds: sine, triangle, square,
+sawtooth, sbd (synth kick), supersaw, pulse and white/pink/brown noise. Melody,
+rhythm and layered examples use these sounds and work offline.
+
+Website sample banks such as bd, sd, hh and piano are not bundled. Remote
+`samples('github:...')` requests remain blocked. Live audio effects use bundled
+worklets; their embedded bytes load through temporary local blob URLs, released
+after loading. Only the marked Strudel document receives the REPL's
+`unsafe-eval` and `worker-src blob:` policy. Ordinary canvas policy is unchanged,
+and network access stays blocked.
+
+WAV export remains narrower than playback: it accepts validated native
+note/synth events, and reports unsupported sample/effect controls explicitly.
 
 ## Explore an idea
 
@@ -68,14 +92,14 @@ and instance context; stale instance answers are rejected.
 
 Questions restore or clear the previous view without resetting source. Agent
 changes take a model round trip and source patches may reload the canvas. Tempo
-and volume remain direct local controls; after reload, press Play again. Merely
+and volume remain direct local controls; after reload, press Run again. Merely
 opening the sketch or preparing a prompt starts no model call, generation,
 upload or sound.
 
 ## Export a WAV loop
 
-Choose **Cycles · four beats each**, then **Export loop**. You do not have to
-start live playback first. Export snapshots the loaded source revision, tempo,
+Run the code once, then open **Reference → Save a WAV loop**, choose **Cycles**,
+and press **Save to Media**. You can Stop playback before saving. Export snapshots the loaded source revision, tempo,
 volume, pattern version and selected onset events before asynchronous work.
 It uses the project-pinned Strudel bytes, not an arbitrary newer installed kit.
 
@@ -122,7 +146,7 @@ automatically.
 
 ### Cancel and recover
 
-**Cancel export** disposes the separate renderer. Source changes, pending/failed
+**Cancel** disposes the separate renderer. Source changes, pending/failed
 reload, hide, document/project switching or renderer loss invalidate its token;
 late render results cannot create an asset. A cancelled or failed render leaves
 live playback intact. OfflineAudioContext has no abort/close method, so the host

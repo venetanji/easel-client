@@ -35,6 +35,11 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   const mediaNameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
   const mediaUnreadBadge = document.getElementById('media-unread');
   const mediaGenerationIndicator = document.getElementById('media-generating');
+  const mediaAssetsTab = document.getElementById('media-tab-assets');
+  const mediaJobsTab = document.getElementById('media-tab-jobs');
+  const mediaJobsList = document.getElementById('media-jobs-list');
+  const mediaJobsCount = document.getElementById('media-jobs-count');
+  let mediaView = 'assets';
   const projectKitList = document.getElementById('project-kit-list');
   const projectKitStatus = document.getElementById('project-kit-status');
   const documentsList = document.getElementById('canvases-list');
@@ -54,6 +59,9 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   let documents = [];
   let assets = [];
   let libraryAssets = [];
+  let jobs = [];
+  let jobVersion = 0;
+  const jobVersions = new Map();
   let kitCatalog = [];
   let kitCatalogPromise;
   let projectKits = ['canvas-2d', 'tone'];
@@ -66,6 +74,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   let selectionVersion = 0;
   let mediaVersion = 0;
   let mediaUrl = '';
+  let previewMimeType = '';
   let zoomed = false;
   let deletionQueue = Promise.resolve();
   const tabs = new Map();
@@ -128,15 +137,15 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     svg.setAttribute('aria-hidden', 'true');
     if (className) svg.setAttribute('class', className);
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', kind === 'video' ? 'm7 4 8 6-8 6V4Z' : kind === 'audio' ? 'M3 8v4M6.5 5v10M10 2.5v15M13.5 5v10M17 8v4' : 'M3 3h14v14H3V3Zm2 11 4-4 3 3 2-2 2 3M7 6h.1');
+    path.setAttribute('d', kind === 'video' ? 'm7 4 8 6-8 6V4Z' : kind === 'audio' ? 'M8 14V4l9-2v10M8 7l9-2M8 14c0 1.4-1.3 2.5-3 2.5S2 15.4 2 14s1.3-2.5 3-2.5S8 12.6 8 14Zm9-2c0 1.4-1.3 2.5-3 2.5S11 13.4 11 12s1.3-2.5 3-2.5 3 1.1 3 2.5Z' : 'M3 3h14v14H3V3Zm2 11 4-4 3 3 2-2 2 3M7 6h.1');
     svg.append(path);
     return svg;
   }
   function updateMediaActivity(unread = [...mediaNotices.values()].filter((notice) => !notice.acknowledged).length) {
-    const active = new Set([...assets, ...libraryAssets]
-      .filter((asset) => asset.kind === 'job' && ['queued', 'generating', 'downloading'].includes(asset.job?.status))
-      .map((asset) => asset.job.id)).size;
+    const active = jobs.filter(job => ['queued', 'generating', 'downloading'].includes(job.status)).length;
     if (mediaGenerationIndicator) mediaGenerationIndicator.hidden = active === 0;
+    if (mediaJobsCount) { mediaJobsCount.textContent = String(active); mediaJobsCount.hidden = active === 0; }
+    mediaJobsTab?.setAttribute('aria-label', active ? `Jobs, ${active} in progress` : 'Jobs');
     const open = !mediaDrawer.hidden;
     const progress = active ? `, ${active} media ${active === 1 ? 'job' : 'jobs'} in progress` : '';
     mediaDrawerToggle.setAttribute('aria-label', `${open ? 'Hide' : 'Show'} media${unread ? `, ${unread} new ${unread === 1 ? 'asset' : 'assets'}` : ''}${progress}`);
@@ -167,7 +176,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       const kind = mediaKind(asset);
       if (!/^[a-f0-9]{32}$/.test(assetId || '') || !kind || knownMedia.has(assetId)) continue;
       knownMedia.add(assetId);
-      mediaNotices.set(assetId, { assetId, kind, acknowledged: !mediaDrawer.hidden });
+      mediaNotices.set(assetId, { assetId, kind, acknowledged: !mediaDrawer.hidden && mediaView === 'assets' });
     }
     updateMediaNotices();
   }
@@ -193,7 +202,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     mediaDrawerToggle.setAttribute('aria-expanded', String(showMedia));
     mediaDrawerToggle.setAttribute('aria-pressed', String(showMedia));
     mediaDrawerToggle.setAttribute('aria-label', showMedia ? 'Hide media' : 'Show media');
-    if (showMedia) for (const notice of mediaNotices.values()) notice.acknowledged = true;
+    if (showMedia && mediaView === 'assets') for (const notice of mediaNotices.values()) notice.acknowledged = true;
     updateMediaNotices();
     onDrawerChange?.(open, kind);
     if (focus) {
@@ -218,6 +227,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     }
     if (mediaUrl) URL.revokeObjectURL(mediaUrl);
     mediaUrl = '';
+    previewMimeType = '';
     zoomed = false;
     preview.dataset.zoom = 'fit';
     document.getElementById('image-size-toggle').textContent = 'Actual size';
@@ -250,7 +260,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     } finally { operation = false; updateBusy(); }
   }
   function mediaBlob(asset) {
-    if (!['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm', 'audio/mpeg', 'audio/wav'].includes(asset.mimeType) || typeof asset.data !== 'string') throw new Error('This media format cannot be previewed.');
+    if (!['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm', 'audio/mpeg', 'audio/wav', 'audio/mp4'].includes(asset.mimeType) || typeof asset.data !== 'string') throw new Error('This media format cannot be previewed.');
     const bytes = Uint8Array.from(atob(asset.data), (character) => character.charCodeAt(0));
     return new Blob([bytes], { type: asset.mimeType });
   }
@@ -266,6 +276,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       if (!trustedPreview) await client.hideCanvasPreview();
       hideMedia();
       mediaUrl = URL.createObjectURL(mediaBlob(full));
+      previewMimeType = full.mimeType;
       const kind = mediaKind(full);
       preview.setAttribute('aria-label', `Full ${kind} preview`);
       preview.hidden = false;
@@ -303,7 +314,8 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   async function refreshAssets() {
     const owner = projectId;
     const version = ++mediaVersion;
-    let [current, all] = await Promise.all([owner ? client.getProjectAssets(owner) : [], client.listAssets()]);
+    const requestedJobVersion = jobVersion;
+    let [current, all, tracked] = await Promise.all([owner ? client.getProjectAssets(owner) : [], client.listAssets(), client.listMediaJobs?.()]);
     if (version !== mediaVersion || owner !== projectId) return;
     const currentAssets = new Map();
     let offset = 0;
@@ -315,9 +327,16 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       current = await client.getProjectAssets(owner, { offset, limit: 200 });
       if (version !== mediaVersion || owner !== projectId) return;
     }
-    assets = [...currentAssets.values()];
-    libraryAssets = Array.isArray(all) ? all : all.assets || [];
+    const currentItems = [...currentAssets.values()];
+    const allItems = Array.isArray(all) ? all : all.assets || [];
+    const savedJobs = tracked || [...new Map([...currentItems, ...allItems].filter(asset => asset.kind === 'job').map(asset => [asset.job.id, { name: asset.name, ...asset.job }])).values()];
+    const refreshedJobs = new Map(savedJobs.map(job => [job.id, job]));
+    for (const job of jobs) if ((jobVersions.get(job.id) || 0) > requestedJobVersion) refreshedJobs.set(job.id, job);
+    jobs = [...refreshedJobs.values()];
+    assets = currentItems.filter(asset => asset.kind !== 'job');
+    libraryAssets = allItems.filter(asset => asset.kind !== 'job');
     renderAssets();
+    renderJobs();
   }
   function mediaFilters() {
     return {
@@ -354,8 +373,8 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     const libraryMedia = libraryAssets.filter((asset) => mediaKind(asset));
     const current = visibleMedia(currentMedia, filters);
     const all = visibleMedia(libraryMedia, filters);
-    mediaList.replaceChildren(...current.map((asset) => asset.kind === 'job' ? jobCard(asset) : mediaCard(asset, false, true)));
-    allMediaList.replaceChildren(...all.map((asset) => asset.kind === 'job' ? jobCard(asset) : mediaCard(asset, true, attached.has(asset.id))));
+    mediaList.replaceChildren(...current.map((asset) => mediaCard(asset, false, true)));
+    allMediaList.replaceChildren(...all.map((asset) => mediaCard(asset, true, attached.has(asset.id))));
     const empty = document.getElementById('media-empty');
     empty.hidden = current.length > 0;
     const noMatches = 'No media matches these filters. Try another search or reset the filters.';
@@ -446,7 +465,13 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
         actions.append(add);
       }
     }
-    actions.append(iconButton('Use in chat', 'useInChat', () => attachMedia(asset, library)));
+    const useInChat = iconButton('Use in chat', 'useInChat', () => attachMedia(asset, library));
+    if (asset.mimeType === 'audio/mp4') {
+      useInChat.dataset.unsupportedChat = 'true';
+      useInChat.disabled = true;
+      useInChat.title = 'Audio chat attachments require WAV or MP3. Play, download or use this M4A in a canvas.';
+    }
+    actions.append(useInChat);
     actions.append(iconButton('Download', 'download', () => downloadMedia(asset.id, library)));
     const heading = node('div', 'project-media-heading');
     const trash = deleteButton(`${library ? 'Delete from library' : 'Remove from project'}: ${label.textContent}`, () => deleteMedia(asset.id, library));
@@ -460,17 +485,14 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     return figure;
   }
   function updateMediaJob(job) {
-    if (!job?.id || job.status === 'ready') return false;
-    let found = false;
-    let updated;
-    for (const collection of [assets, libraryAssets]) {
-      const asset = collection.find((item) => item.kind === 'job' && item.job.id === job.id);
-      if (asset) { asset.job = { ...asset.job, ...job }; updated = asset.job; found = true; }
-    }
-    if (!found) return false;
-    for (const list of [mediaList, allMediaList]) {
-      const card = [...list.children].find((item) => item.dataset.jobId === job.id);
-      if (card) updateJobCard(card, updated);
+    if (!job?.id) return false;
+    jobVersions.set(job.id, ++jobVersion);
+    const existing = jobs.find(item => item.id === job.id);
+    if (!existing) { jobs.unshift(job); renderJobs(); }
+    else {
+      Object.assign(existing, job);
+      const card = [...(mediaJobsList?.children || [])].find(item => item.dataset.jobId === job.id);
+      if (card) updateJobCard(card, existing);
     }
     updateMediaActivity();
     return true;
@@ -493,13 +515,33 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     const full = library ? await client.getLibraryAsset(asset.id) : await client.getProjectAsset(owner, asset.id);
     if (owner !== projectId) throw new Error('The project changed. Choose the media again.');
     guard();
-    const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm', 'audio/mpeg': 'mp3', 'audio/wav': 'wav' }[full.mimeType];
+    if (full.mimeType === 'audio/mp4') throw new Error('Audio chat attachments require WAV or MP3. Play, download or use this M4A in a canvas.');
+    const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm', 'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/mp4': 'm4a' }[full.mimeType];
     const name = full.name || asset.name || `Media-${asset.id.slice(0, 8)}.${extension}`;
     setDrawer(false, false);
     onAttach(new File([mediaBlob(full)], name, { type: full.mimeType }));
   }
-  function jobCard(asset) {
-    const job = asset.job;
+  function setMediaView(view, focus = false) {
+    mediaView = view === 'jobs' ? 'jobs' : 'assets';
+    for (const [tab, paneId, selected] of [[mediaAssetsTab, 'media-assets-panel', mediaView === 'assets'], [mediaJobsTab, 'media-jobs-panel', mediaView === 'jobs']]) {
+      tab?.setAttribute('aria-selected', String(selected));
+      if (tab) tab.tabIndex = selected ? 0 : -1;
+      const pane = document.getElementById(paneId);
+      if (pane) pane.hidden = !selected;
+      if (selected && focus) tab?.focus();
+    }
+    if (mediaView === 'assets' && !mediaDrawer.hidden) for (const notice of mediaNotices.values()) notice.acknowledged = true;
+    updateMediaNotices();
+  }
+  function renderJobs() {
+    if (!mediaJobsList) return;
+    const pending = job => ['queued', 'generating', 'downloading'].includes(job.status);
+    mediaJobsList.replaceChildren(...[...jobs].sort((a, b) => Number(pending(b)) - Number(pending(a)) || (b.createdAt || 0) - (a.createdAt || 0)).map(jobCard));
+    const empty = document.getElementById('media-jobs-empty');
+    if (empty) empty.hidden = jobs.length > 0;
+    updateMediaActivity();
+  }
+  function jobCard(job) {
     const figure = node('article', 'project-media-item media-job');
     figure.dataset.jobId = job.id;
     const visual = node('div', 'project-thumbnail media-job-preview');
@@ -516,9 +558,9 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     progress.max = 100;
     visual.append(mediaIcon(job.mediaType, 'project-thumbnail-placeholder'), cog, node('strong', 'media-job-status'), progress);
     const heading = node('div', 'project-media-heading');
-    const name = node('p', 'project-media-name', asset.name);
-    name.title = asset.name;
-    heading.append(name, deleteButton(`Remove generation job: ${asset.name}`, async () => {
+    const name = node('p', 'project-media-name', job.name || `Generated ${job.mediaType}`);
+    name.title = name.textContent;
+    heading.append(name, deleteButton(`Remove generation job: ${name.textContent}`, async () => {
       const result = await client.deleteMediaJob(job.id);
       if (result?.deleted) await refreshAssets();
     }));
@@ -527,30 +569,59 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     figure.append(node('p', 'media-job-error'));
     const actions = node('div', 'media-job-recovery');
     actions.append(button('Check now', 'button quiet small', () => client.retryMediaJob(job.id)));
-    figure.append(actions);
+    const controls = node('div', 'media-job-actions');
+    const cancel = node('button', 'button quiet small media-job-cancel', 'Cancel tracking');
+    cancel.type = 'button';
+    cancel.setAttribute('aria-haspopup', 'dialog');
+    cancel.setAttribute('aria-label', `Cancel tracking: ${name.textContent}`);
+    cancel.addEventListener('click', async () => {
+      if (cancel.disabled) return;
+      cancel.disabled = true;
+      try { const result = await client.cancelMediaJob(job.id); if (result?.job) updateMediaJob(result.job); }
+      catch (error) { report(error); }
+      finally { cancel.disabled = false; }
+    });
+    const view = button('View media', 'button quiet small media-job-view', async () => {
+      setMediaView('assets');
+      const asset = job.assets?.[0];
+      if (asset) await openMediaReference(asset);
+    });
+    controls.append(cancel, view);
+    const identity = node('code', 'media-job-id', job.remoteId || '');
+    identity.title = 'Original job ID';
+    figure.append(identity, actions, controls);
     updateJobCard(figure, job);
     return figure;
   }
   function updateJobCard(figure, job) {
-    const status = job.status === 'failed' ? 'Generation failed' : job.status === 'downloading' ? 'Saving media' : job.providerStatus === 'queued' ? 'Queued' : 'Generating';
+    const terminal = ['ready', 'failed', 'cancelled'].includes(job.status);
+    const status = job.status === 'ready' ? 'Ready' : job.status === 'cancelled' ? 'Tracking canceled' : job.status === 'failed' ? 'Generation failed' : job.status === 'downloading' ? 'Saving media' : job.status === 'queued' || job.providerStatus === 'queued' ? 'Queued' : 'Generating';
     figure.querySelector('.media-job-status').textContent = status;
     const cog = figure.querySelector('.media-job-cog');
-    if (job.status === 'failed') cog.setAttribute('hidden', '');
+    if (terminal) cog.setAttribute('hidden', '');
     else cog.removeAttribute('hidden');
     const progress = figure.querySelector('.media-job-progress');
-    progress.hidden = !(job.progress > 0 && job.progress < 100);
+    progress.hidden = terminal || !(job.progress > 0 && job.progress < 100);
     progress.value = job.progress || 0;
     progress.setAttribute('aria-label', `${status}: ${job.progress || 0}%`);
     const details = [];
-    if (Number.isInteger(job.queuePosition) && job.queuePosition > 0) details.push(`Queue position ${job.queuePosition}`);
-    if (Number.isFinite(job.estimatedWaitSeconds)) details.push(job.estimatedWaitSeconds < 60 ? `About ${Math.max(1, Math.round(job.estimatedWaitSeconds))} seconds` : `About ${Math.ceil(job.estimatedWaitSeconds / 60)} min`);
-    else if (job.status !== 'failed') details.push('Estimating completion');
+    details.push(`${job.mediaType?.[0]?.toUpperCase() || ''}${job.mediaType?.slice(1) || 'Media'}`);
+    if (job.projectId) details.push(projects.find(project => project.id === job.projectId)?.title || 'Another project');
+    if (!terminal) {
+      if (Number.isInteger(job.queuePosition) && job.queuePosition > 0) details.push(`Queue position ${job.queuePosition}`);
+      if (Number.isFinite(job.estimatedWaitSeconds)) details.push(job.estimatedWaitSeconds < 60 ? `About ${Math.max(1, Math.round(job.estimatedWaitSeconds))} seconds` : `About ${Math.ceil(job.estimatedWaitSeconds / 60)} min`);
+      else details.push(job.status === 'downloading' ? 'Downloading output' : 'Waiting for the provider');
+    }
+    if (job.status === 'cancelled') details.push('Provider generation may continue');
     figure.querySelector('.media-job-detail').textContent = details.join(' / ');
     const error = figure.querySelector('.media-job-error');
     error.hidden = !job.error;
     error.textContent = job.status === 'failed' ? job.error || '' : 'Retrieval will retry. Job ID is saved.';
     error.title = job.error || '';
-    figure.querySelector('.media-job-recovery').hidden = !job.error || job.status === 'failed';
+    figure.querySelector('.media-job-recovery').hidden = !job.error || terminal;
+    figure.querySelector('.media-job-cancel').hidden = terminal;
+    figure.querySelector('.media-job-view').hidden = job.status !== 'ready' || !job.assets?.length;
+    figure.querySelector('.delete-control').hidden = !terminal;
   }
   async function downloadMedia(id, library = false) {
     const result = library ? await client.saveLibraryAsset(id) : await client.saveProjectAsset(projectId, id);
@@ -675,7 +746,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
   function renderDocuments() {
     documentsList.replaceChildren(...documents.map((entry) => {
       const path = entry.path || entry.documentPath;
-      const item = button(entry.title || path, 'project-document', () => openDocument(path));
+      const item = button(entry.title || path, 'project-document drawer-list-row', () => openDocument(path));
       item.title = path;
       item.setAttribute('aria-current', String(activeTab?.kind === 'document' && activeTab.resource === path));
       const detail = node('small', '', path);
@@ -770,7 +841,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     renderDocuments();
     const files = (source.files || []).filter((file) => !/\.html?$/i.test(file.path));
     document.getElementById('project-source-files').replaceChildren(...files.map((file) => {
-      const item = button(file.path, 'project-source-file', () => onFiles(file.path));
+      const item = button(file.path, 'project-source-file drawer-list-row', () => onFiles(file.path));
       item.title = `${file.path} - ${Number(file.bytes || 0).toLocaleString()} bytes`;
       const row = node('div', 'project-file-row');
       row.append(item, deleteButton(`Delete ${file.path}`, () => deleteFile(file.path)));
@@ -969,8 +1040,9 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     picker.disabled = busy;
     document.getElementById('export-current').disabled = busy || selectionPending || !projectId;
     for (const element of document.querySelectorAll('.project-document, .project-file-device, .project-source-file, .library .delete-control, .media-drawer .delete-control, .project-media-actions button, .media-job-recovery button, button.project-thumbnail, .canvas-tab button, #project-new, #project-rename, #drawer-new-document')) {
-      element.disabled = busy || (selectionPending && element.id !== 'project-new') || element.dataset.referenced === 'true' || (element.dataset.requiresProject === 'true' && !projectId);
+      element.disabled = busy || (selectionPending && element.id !== 'project-new') || element.dataset.referenced === 'true' || element.dataset.unsupportedChat === 'true' || (element.dataset.requiresProject === 'true' && !projectId);
     }
+    for (const element of mediaJobsList?.querySelectorAll('.media-job-view') || []) element.disabled = busy || selectionPending;
     for (const checkbox of projectKitList?.querySelectorAll('input') || []) checkbox.disabled = busy || selectionPending || !projectId || (checkbox.dataset.unavailable === 'true' && !checkbox.checked);
     document.getElementById('project-rename').disabled = busy || selectionPending || !projectId;
     const deleteControl = document.getElementById('project-delete');
@@ -989,13 +1061,24 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
       document.getElementById('canvases-empty').hidden = documents.length > 0;
       document.getElementById('canvases-empty').textContent = projectId ? 'Create an HTML canvas in this project.' : 'Select a project above to browse its documents.';
     }
-    document.getElementById('image-use-chat').disabled = busy || !isMediaTab();
+    const useInChat = document.getElementById('image-use-chat');
+    useInChat.disabled = busy || !isMediaTab() || previewMimeType === 'audio/mp4';
+    useInChat.title = previewMimeType === 'audio/mp4' ? 'Audio chat attachments require WAV or MP3. Play, download or use this M4A in a canvas.' : 'Use in chat';
     document.getElementById('image-download').disabled = busy || !isMediaTab();
   }
   drawerToggle.addEventListener('click', () => setDrawer(drawer.hidden));
   document.getElementById('library-collapse').addEventListener('click', () => setDrawer(false));
   mediaDrawerToggle.addEventListener('click', () => setMediaDrawer(mediaDrawer.hidden));
   document.getElementById('media-collapse').addEventListener('click', () => setMediaDrawer(false));
+  for (const [tab, view] of [[mediaAssetsTab, 'assets'], [mediaJobsTab, 'jobs']]) {
+    tab?.addEventListener('click', () => setMediaView(view));
+    tab?.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      setMediaView(event.key === 'Home' ? 'assets' : event.key === 'End' ? 'jobs' : view === 'assets' ? 'jobs' : 'assets', true);
+    });
+  }
+  setMediaView('assets');
   templatesDrawerToggle?.addEventListener('click', () => setDrawer(templatesDrawer.hidden, true, 'templates'));
   document.getElementById('templates-collapse')?.addEventListener('click', () => setDrawer(false, true, 'templates'));
   mediaSearch?.addEventListener('input', renderAssets);

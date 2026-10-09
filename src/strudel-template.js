@@ -1,18 +1,37 @@
 const { validateOpaqueId } = require('./ipc-contract');
 const { validateStrudelSnapshot, queryStrudelSnapshot } = require('./strudel-export-policy');
+const { highlightStrudel } = require('./strudel-score');
+
+const DEFAULT_LIVE_CODE = `stack(
+  note("<bb2 ~ bb2 bb2>").s("sine").gain(.52).release(.08),
+  note("<d4 f4 ab4 c5>").s("triangle").gain(.18).attack(.02).release(.16),
+  note("<f2 ab2 c3 eb3>").s("sawtooth").gain(.09).attack(.04).release(.2)
+)`;
+const EXAMPLES = [
+  { title: 'Melody', description: 'Four notes on a triangle synth.', code: 'note("c4 e4 g4 b4").s("triangle").gain(.2)' },
+  { title: 'Kick', description: 'A synth kick on every beat.', code: 's("sbd*4").gain(.3)' },
+  { title: 'Hi-hats', description: 'Short bursts of noise between the beats.', code: 's("white*8").gain(.08).decay(.04).sustain(0).release(.02)' },
+  { title: 'Bass', description: 'A low note that changes each cycle.', code: 'note("<c2 a1 f1 g1>").s("sine").gain(.25)' },
+  { title: 'Chords', description: 'Three notes played together.', code: 'note("c4,e4,g4").s("triangle").gain(.1).release(.3)' },
+];
 
 // This function is copied into ordinary editable project source, not evaluated.
 function bootStrudelSketch(instanceId) {
   const id = `strudel-${instanceId}`;
   const control = (name) => document.getElementById(`${id}-${name}`);
   const playButton = control('play'), stopButton = control('stop');
-  const codeEditor = control('code'), evaluateButton = control('evaluate');
+  const codeEditor = control('code');
+  const codeHighlight = control('highlight');
+  const codeResize = typeof ResizeObserver === 'function' ? new ResizeObserver(syncCodeScroll) : null;
+  const referencePanel = control('reference'), referenceButton = control('reference-toggle');
+  const referenceClose = control('reference-close');
+  const examples = Array.from(referencePanel.querySelectorAll?.('[data-example]') || []);
   const bpmInput = control('bpm'), volumeInput = control('volume'), status = control('status');
   const state = { bpm: 100, volume: 0.5, patternVersion: 1, playing: false };
   let context, controller, repl, disposed = false, pending = false, epoch = 0, startingEpoch = -1;
   let initializationFailed = false, disposal, preparedPattern;
-  let activeCode = DEFAULT_LIVE_CODE, evaluationTail = Promise.resolve(), needsApply = false;
-  let sourceNeedsApply = false, restoredCodeNeedsApply = false;
+  let activeCode = DEFAULT_LIVE_CODE, executedBuffer = DEFAULT_LIVE_CODE, evaluationTail = Promise.resolve(), needsApply = false;
+  let sourceNeedsApply = true, restoredCodeNeedsApply = false;
   const exportButton = control('export'), cancelExportButton = control('cancel-export');
   const cyclesInput = control('cycles'), exportStatus = control('export-status');
   let exportContext, exportPending = false, exportId, cancelRequested = false;
@@ -22,14 +41,14 @@ function bootStrudelSketch(instanceId) {
     exportStatus.setAttribute('role', error ? 'alert' : 'status');
   };
   function syncExportControls() {
-    exportButton.disabled = disposed || !repl || needsApply || !exportContext?.exportReady || exportPending;
+    exportButton.disabled = disposed || !preparedPattern || needsApply || !exportContext?.exportReady || exportPending;
     cyclesInput.disabled = disposed || exportPending;
     cancelExportButton.disabled = disposed || !exportPending || cancelRequested;
   }
   function receiveExportContext(value) {
     exportContext = value;
     syncExportControls();
-    reportExport(value?.exportReady ? 'Export a bounded loop straight to Media.' : value?.reason || 'Waiting for the loaded source context before exporting WAV.');
+    reportExport(value?.exportReady ? (needsApply ? 'Run code before saving a loop.' : 'Ready to save the executed pattern to Media.') : value?.reason || 'Waiting for the loaded source context before exporting WAV.');
   }
   const unsubscribeExport = window.EaselHost?.onStrudelExportContext?.(receiveExportContext);
   async function exportLoop() {
@@ -80,23 +99,25 @@ function bootStrudelSketch(instanceId) {
     bpmInput.value = String(state.bpm);
     volumeInput.value = String(state.volume);
     control('volume-value').textContent = `${Math.round(state.volume * 100)}%`;
-    playButton.disabled = disposed || pending || needsApply;
+    playButton.disabled = disposed || pending;
+    for (const button of examples) button.disabled = disposed || pending;
   }
   function refreshApplyState() {
-    needsApply = sourceNeedsApply || restoredCodeNeedsApply || codeEditor.value !== activeCode;
+    needsApply = sourceNeedsApply || restoredCodeNeedsApply || codeEditor.value !== executedBuffer;
     syncControls();
     syncExportControls();
   }
-  function stop(message = 'Stopped. Press Play to restart.') {
+  function stop(message = 'Stopped. Run code to listen.') {
     epoch++;
     state.playing = false;
     setGain(0); // hush alone does not silence already scheduled synth tails.
     if (repl) window.strudel.hush();
-    if (!disposed) { playButton.disabled = pending || needsApply; report(message); }
+    if (!disposed) { playButton.disabled = pending; report(message); }
   }
   function getState() {
     // Playback is deliberately never restored, including preserved-state reloads.
-    return { bpm: state.bpm, volume: state.volume, patternVersion: state.patternVersion, code: activeCode, playing: false };
+    return { bpm: state.bpm, volume: state.volume, patternVersion: state.patternVersion,
+      code: codeEditor.value, sourceCode: DEFAULT_LIVE_CODE, referenceOpen: !referencePanel.hidden, playing: false };
   }
   function restoreState(previous) {
     if (!previous || typeof previous !== 'object' || disposed) return;
@@ -104,11 +125,15 @@ function bootStrudelSketch(instanceId) {
     state.bpm = bounded(previous.bpm, 30, 240, state.bpm);
     state.volume = bounded(previous.volume, 0, 1, state.volume);
     // Source owns patternVersion; persisted state must not undo a source edit.
-    if (typeof previous.code === 'string' && new TextEncoder().encode(previous.code).length <= 8192) {
+    if ((previous.sourceCode === undefined || previous.sourceCode === DEFAULT_LIVE_CODE) &&
+      typeof previous.code === 'string' && new TextEncoder().encode(previous.code).length <= 8192) {
       activeCode = previous.code;
+      executedBuffer = previous.code;
       restoredCodeNeedsApply = activeCode !== DEFAULT_LIVE_CODE;
       codeEditor.value = activeCode;
+      paintCode();
     }
+    if (typeof previous.referenceOpen === 'boolean') setReferenceOpen(previous.referenceOpen);
     repl?.setCps(state.bpm / 240);
     refreshApplyState();
   }
@@ -118,7 +143,7 @@ function bootStrudelSketch(instanceId) {
     preparedPattern = undefined;
     sourceNeedsApply = true;
     refreshApplyState();
-    stop('Pattern changed. Push the updated code before Play.');
+    stop('Pattern changed. Run the updated code to listen.');
   }
   function snapshotPattern() {
     if (disposed || !repl || !preparedPattern) throw new Error('The sound sketch is not ready.');
@@ -127,44 +152,64 @@ function bootStrudelSketch(instanceId) {
     const params = Object.freeze({ bpm: state.bpm, volume: state.volume, patternVersion: state.patternVersion });
     return { params, pattern: preparedPattern };
   }
-  async function applyCode(source) {
+  function validateCode(source) {
+    if (typeof source !== 'string' || !source.trim()) throw new Error('Enter Strudel code to run.');
+    if (new TextEncoder().encode(source).length > 8192) throw new Error('Strudel code is limited to 8 KiB.');
+  }
+  function setCode(source) {
+    if (disposed) return { ok: false, error: 'This editor is closed.' };
+    try { validateCode(source); }
+    catch (error) { return { ok: false, error: error.message }; }
+    codeEditor.value = source;
+    codeEdited();
+    return { ok: true };
+  }
+  async function applyCode(source, buffer) {
     try {
       if (disposed || !repl) throw new Error('The sound sketch is not ready.');
-      if (typeof source !== 'string' || !source.trim()) throw new Error('Enter Strudel code before pushing it.');
-      if (new TextEncoder().encode(source).length > 8192) throw new Error('Strudel code is limited to 8 KiB.');
-      evaluateButton.disabled = true;
-      report('Evaluating code… Playback continues on the current clock.');
+      validateCode(source);
+      report('Running code…');
       const nextPattern = await repl.evaluate(source, false);
+      if (disposed) return { ok: false, error: 'This editor is closed.' };
       const evalError = repl.state?.evalError;
       if (evalError || !nextPattern) throw evalError || new Error('Strudel did not produce a pattern.');
       preparedPattern = nextPattern;
       activeCode = source;
-      codeEditor.value = source;
+      executedBuffer = buffer;
+      const cps = repl.scheduler?.cps;
+      if (typeof cps === 'number' && Number.isFinite(cps)) state.bpm = cps * 240;
       state.patternVersion++;
       sourceNeedsApply = false;
       restoredCodeNeedsApply = false;
       refreshApplyState();
-      report(state.playing ? 'Pattern updated live on the running clock.' : 'Pattern ready. Press Play yourself to listen.');
+      if (exportContext?.exportReady) reportExport('Ready to save the executed pattern to Media.');
+      report(state.playing ? 'Playing. Code updated.' : 'Code ready. Run or Ctrl+Enter to listen.');
       return { ok: true, playing: state.playing, patternVersion: state.patternVersion };
     } catch (error) {
       report(`Code error: ${error.message}. The last good pattern is unchanged.`, true);
       return { ok: false, error: error.message };
-    } finally {
-      if (!disposed) evaluateButton.disabled = false;
     }
   }
-  function evaluateCode(source = codeEditor.value) {
-    const task = evaluationTail.then(() => applyCode(source), () => applyCode(source));
+  function queueEvaluation(source, buffer) {
+    const task = evaluationTail.then(() => applyCode(source, buffer), () => applyCode(source, buffer));
     evaluationTail = task.catch(() => {});
     return task;
   }
+  function evaluateCode(source = codeEditor.value) {
+    const written = setCode(source);
+    if (!written.ok) { report(written.error, true); return Promise.resolve(written); }
+    return queueEvaluation(source, source);
+  }
   async function play(event) {
-    if (disposed || pending || state.playing || needsApply) return;
-    if (!event.isTrusted || !navigator.userActivation.isActive) { report('Press Play yourself to enable sound.', true); return; }
+    if (disposed || pending) return;
+    if (!event.isTrusted || !navigator.userActivation.isActive) { report('Use Run or Ctrl+Enter yourself to enable sound.', true); return; }
     if (initializationFailed) { window.location.reload(); return; }
     const token = ++epoch;
+    const buffer = codeEditor.value;
+    const selected = codeEditor.selectionStart !== codeEditor.selectionEnd;
+    const source = selected ? buffer.slice(codeEditor.selectionStart, codeEditor.selectionEnd) : buffer;
     pending = true;
-    playButton.disabled = true;
+    syncControls();
     report('Starting sound…');
     try {
       // Resume synchronously inside the trusted click, before any await. Native
@@ -175,12 +220,14 @@ function bootStrudelSketch(instanceId) {
       if (disposed || token !== epoch) return;
       await window.strudel.initAudio({ disableWorklets: false });
       if (disposed || token !== epoch) return;
+      const result = await queueEvaluation(source, buffer);
+      if (disposed || token !== epoch || !result.ok) return;
+      if (state.playing) { report(selected ? 'Playing selection.' : 'Playing. Code updated.'); return; }
       const { pattern } = snapshotPattern();
       // Keep old voices disconnected when starting again, even if authored notes
       // have long releases. This is the pinned public SuperDough reset API.
       controller.reset();
       setGain(0);
-      repl.setCps(state.bpm / 240);
       await repl.setPattern(pattern, false);
       if (disposed || token !== epoch) return;
       startingEpoch = token;
@@ -188,17 +235,17 @@ function bootStrudelSketch(instanceId) {
       if (disposed || token !== epoch) { window.strudel.hush(); setGain(0); return; }
       state.playing = true;
       setGain(state.volume);
-      playButton.textContent = 'Play';
-      report('Playing. Stop or press Escape for silence.');
+      playButton.textContent = 'Run';
+      report(selected ? 'Playing selection.' : 'Playing. Ctrl+Enter to update; Escape to stop.');
     } catch (error) {
       if (!disposed && token === epoch) {
         stop();
-        playButton.textContent = 'Retry Play';
-        report(`Sound could not start: ${error.message}. Check the Strudel code in the scratchpad, then Retry Play.`, true);
+        playButton.textContent = 'Retry Run';
+        report(`Sound could not start: ${error.message}. Check the code, then Run again.`, true);
       }
     } finally {
       pending = false;
-      if (!disposed) playButton.disabled = state.playing;
+      syncControls();
     }
   }
   function updateBpm() {
@@ -212,7 +259,36 @@ function bootStrudelSketch(instanceId) {
     syncControls();
   }
   const stopClick = () => stop();
-  const escape = (event) => { if (event.key === 'Escape') stop(); };
+  const escape = (event) => {
+    if (event.key === 'Escape' || ((event.ctrlKey || event.metaKey) && event.key === '.')) {
+      event.preventDefault?.(); stop();
+    } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && event.target === codeEditor) {
+      event.preventDefault(); if (!event.repeat) play(event);
+    } else if (event.key === 'Tab' && event.target === codeEditor && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      event.preventDefault();
+      codeEditor.setRangeText('  ', codeEditor.selectionStart, codeEditor.selectionEnd, 'end'); codeEdited();
+    }
+  };
+  function setReferenceOpen(open) {
+    referencePanel.hidden = !open;
+    referenceButton.setAttribute('aria-expanded', String(open));
+  }
+  function toggleReference() { setReferenceOpen(referencePanel.hidden); if (referencePanel.hidden) codeEditor.focus?.(); }
+  function addExample(event) {
+    if (disposed || pending) return;
+    const layer = EXAMPLES[Number(event.currentTarget.dataset.example)]?.code;
+    if (!layer) return;
+    try {
+      const source = window.EaselStrudelScore.appendLayer(codeEditor.value, layer);
+      const result = setCode(source);
+      if (!result.ok) throw new Error(result.error);
+      codeEditor.focus();
+      codeEditor.setSelectionRange(source.length, source.length);
+      return play(event);
+    } catch (error) {
+      report(`Cannot add example: ${error.message}. Edit the score, then try again.`, true);
+    }
+  }
   function dispose() {
     if (disposal) return disposal;
     if (exportPending && !cancelRequested) cancelExport();
@@ -220,7 +296,11 @@ function bootStrudelSketch(instanceId) {
     unsubscribeExport?.();
     syncExportControls();
     codeEditor.removeEventListener('input', codeEdited);
-    evaluateButton.removeEventListener('click', evaluateClick);
+    codeEditor.removeEventListener('scroll', syncCodeScroll);
+    codeResize?.disconnect();
+    referenceButton.removeEventListener('click', toggleReference);
+    referenceClose.removeEventListener('click', toggleReference);
+    for (const button of examples) button.removeEventListener('click', addExample);
     exportButton.removeEventListener('click', exportLoop);
     cancelExportButton.removeEventListener('click', cancelExport);
     stop();
@@ -252,25 +332,42 @@ function bootStrudelSketch(instanceId) {
       (detail?.type === undefined && /^\[(?:cyclist|getTrigger|superdough)\] error:/.test(message));
     if (!disposed && runtimeError) {
       stop();
-      playButton.textContent = 'Retry Play';
-      report(`Pattern error: ${message.slice(0, 240)}. Edit the Strudel code, then Retry Play.`, true);
+      playButton.textContent = 'Retry Run';
+      report(`Sound error: ${message.slice(0, 240)}. Use a sound from Reference, then Run again.`, true);
     }
   }
-  const api = { getState, restoreState, stop, patternChanged, snapshotPattern, evaluate: evaluateCode, exportLoop, cancelExport };
+  const api = { getState, restoreState, stop, patternChanged, snapshotPattern, setCode, evaluate: evaluateCode, exportLoop, cancelExport };
   window.EaselStrudel = api;
+  setReferenceOpen((window.innerWidth || 1280) > 760);
+  codeEditor.value = DEFAULT_LIVE_CODE;
   syncControls();
   restoreState(window.__easelProjectState?.strudel?.[instanceId]);
   window.EaselCanvas?.registerApp({ id, dispose, getState, restoreState });
   codeEditor.value = activeCode;
+  paintCode();
   refreshApplyState();
-  const evaluateClick = () => evaluateCode();
-  const codeEdited = () => {
+  function codeEdited() {
+    paintCode();
     refreshApplyState();
-    if (needsApply) report('Code edited. Push live to apply before restarting or exporting.');
+    if (needsApply) report('Edited. Ctrl+Enter to run the selection or all code.');
     else report('Code matches the active pattern.');
-  };
+  }
   codeEditor.addEventListener('input', codeEdited);
-  evaluateButton.addEventListener('click', evaluateClick);
+  codeEditor.addEventListener('scroll', syncCodeScroll);
+  codeResize?.observe(codeEditor);
+  function syncCodeScroll() {
+    codeHighlight.style.width = `${codeEditor.clientWidth}px`;
+    codeHighlight.style.height = `${codeEditor.clientHeight}px`;
+    codeHighlight.scrollTop = codeEditor.scrollTop;
+    codeHighlight.scrollLeft = codeEditor.scrollLeft;
+  }
+  function paintCode() {
+    codeHighlight.innerHTML = window.EaselStrudelScore.highlight(codeEditor.value) + '\n';
+    syncCodeScroll();
+  }
+  referenceButton.addEventListener('click', toggleReference);
+  referenceClose.addEventListener('click', toggleReference);
+  for (const button of examples) button.addEventListener('click', addExample);
   exportButton.addEventListener('click', exportLoop);
   cancelExportButton.addEventListener('click', cancelExport);
   reportExport(window.EaselHost?.strudelExport ? 'WAV export is awaiting its loaded runtime check.' : 'Open this project in Easel to export loops to Media.');
@@ -296,12 +393,9 @@ function bootStrudelSketch(instanceId) {
       });
       if (disposed) { window.strudel.hush(); return; }
       repl.setCps(state.bpm / 240);
-      preparedPattern = createPattern({ bpm: state.bpm, volume: state.volume });
-      if (!preparedPattern) throw new Error('The starter pattern could not be prepared.');
-      await repl.setPattern(preparedPattern, false);
       syncExportControls();
       syncControls();
-      report(needsApply ? 'Restored code needs Push live before you can play.' : 'Ready. Press Play to listen.');
+      report('Ready. Run or Ctrl+Enter to listen.');
     } catch (error) {
       if (disposed) return;
       initializationFailed = true;
@@ -316,30 +410,26 @@ function bootStrudelSketch(instanceId) {
 function createStrudelTemplate({ instanceId } = {}) {
   validateOpaqueId(instanceId, 'Strudel instance ID');
   const id = `strudel-${instanceId}`;
+  const exampleHtml = EXAMPLES.map((example, index) => {
+    const code = highlightStrudel('$: ' + example.code);
+    return `<section class="example" aria-label="${example.title} example"><h4>${example.title}</h4><p>${example.description}</p><pre><code>${code}</code></pre><button type="button" data-example="${index}" aria-label="Add ${example.title} and run">Add &amp; run</button></section>`;
+  }).join('');
   const html = `<!doctype html><html lang="en" data-easel-strudel-repl="v1"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="easel-strudel-repl" content="v1"><title>Strudel sound</title><style>
-:root{color-scheme:light;font-family:"Segoe UI","Helvetica Neue",sans-serif;background:#fbfaf6;color:#202d27;--line:#d4d9d0;--green:#174d3a;--muted:#58675f}*{box-sizing:border-box}body{margin:0;padding:clamp(20px,5vw,56px)}main{max-width:720px;margin:auto}h1{font-size:clamp(28px,5vw,42px);letter-spacing:-.025em;margin:0 0 12px}p{line-height:1.6;max-width:65ch}button,input{font:inherit;accent-color:var(--green)}button{padding:11px 22px;border:1px solid var(--line);border-radius:6px;color:inherit;background:#fbfaf6;cursor:pointer;font-weight:600}button:first-child{background:var(--green);color:white}button:hover{filter:brightness(.94)}button:disabled{opacity:.55;cursor:default}button:focus-visible,input:focus-visible,.code-editor:focus-visible{outline:2px solid var(--green);outline-offset:4px}::selection{background:#d4e6d9}.transport{display:flex;gap:12px;flex-wrap:wrap;margin:28px 0 16px}.controls{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin:28px 0;padding:24px 0;border-block:1px solid var(--line)}label{display:grid;gap:12px;font-weight:600}.code-editor{width:100%;min-height:250px;resize:vertical;background:#18231f;color:#e6f0e8;border:1px solid #34483e;border-radius:8px;padding:16px;font:13px/1.55 ui-monospace,monospace;tab-size:2}input[type=number]{width:100%;max-width:150px;background:white;border:1px solid var(--line);border-radius:6px;padding:10px;color:inherit;caret-color:var(--green)}input[type=range]{width:100%;min-height:36px}output{font-variant-numeric:tabular-nums;font-weight:400}h2{font-size:19px;margin:32px 0 8px}.muted{color:var(--muted)}[role=alert]{color:#9d3425}code{font-size:.94em}footer{margin-top:32px;font-size:13px;color:var(--muted)}@media(max-width:420px){.controls{grid-template-columns:1fr;gap:22px}}
-</style></head><body><main><h1>Strudel sound</h1><p class="muted">A small melody, ready to make your own. Sound starts only when you press Play.</p>
-<div class="transport" aria-label="Playback"><button type="button" id="${id}-play">Play</button><button type="button" id="${id}-stop">Stop</button></div>
-<p id="${id}-status" role="status" aria-live="polite">Preparing sound…</p><p class="muted">Press Escape to stop, including while a canvas question is open.</p>
-<div class="controls"><label for="${id}-bpm">Tempo · BPM<input id="${id}-bpm" type="number" min="30" max="240" step="1" value="100"></label><label for="${id}-volume">Volume <output id="${id}-volume-value" for="${id}-volume">50%</output><input id="${id}-volume" type="range" min="0" max="1" step="0.01" value="0.5"></label></div>
-<section aria-label="Loop export"><h2>Save a loop</h2><label for="${id}-cycles">Cycles · four beats each<input id="${id}-cycles" type="number" min="1" max="16" step="1" value="1"></label><div class="transport"><button type="button" id="${id}-export" disabled>Export loop</button><button type="button" id="${id}-cancel-export" disabled>Cancel export</button></div><p id="${id}-export-status" role="status" aria-live="polite">Waiting for the loaded source context before exporting WAV.</p><p class="muted">Up to 16 cycles and 30 seconds including a 0.5-second tail. Stereo 48 kHz WAV saves to Media. Export supports only note, s, gain, attack and release fields: native sine/triangle/square/saw aliases, MIDI notes 24–96, gain 0–1 and envelopes up to 0.5 seconds. Samples, effects, callbacks, continuous controls, duration and clip overrides receive an error. The fixed tail crops the native synth’s final 0.01-second stop allowance.</p></section>
-<h2>Live Strudel scratchpad</h2><p>Edit code here, then push it into the running Strudel evaluator. If playback is active, the pattern changes on Strudel’s scheduler without waiting for a bar; a code error leaves the last good pattern playing.</p><label for="${id}-code">Strudel code<textarea class="code-editor" id="${id}-code" spellcheck="false" aria-describedby="${id}-code-help"></textarea></label><div class="transport"><button type="button" id="${id}-evaluate">Push live</button></div><p class="muted" id="${id}-code-help">Code is evaluated locally in the isolated canvas. Network access stays blocked. Keep .play() out of pushes; use Play to start sound.</p>
-<footer>Bounded native-synth WAV export saves directly to Media in Easel. Settings restore on preserved-state reload; playback never restores. Saved project settings, when supplied, belong under strudel → this instance ID.</footer></main><script id="easel-runtime-strudel-export-policy">
+:root{color-scheme:light;font-family:"Segoe UI","Helvetica Neue",sans-serif;background:#fbfaf6;color:#202d27;--paper:#fbfaf6;--line:#d4d9d0;--green:#174d3a;--muted:#58675f;--editor:#18231f;--code:#e6f0e8}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0}button,input{font:inherit;accent-color:var(--green)}button{min-height:36px;padding:7px 14px;border:1px solid var(--line);border-radius:5px;color:inherit;background:var(--paper);cursor:pointer;font-weight:600;white-space:nowrap}button:hover{background:#e9eee6}button:disabled{opacity:.55;cursor:default}button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--green);outline-offset:3px}::selection{background:#c5ddcb;color:#172b20}main{height:100dvh;min-height:360px;display:flex;flex-direction:column}.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--line)}h1{font-size:16px;letter-spacing:-.02em;margin:0 12px 0 0}.run{background:var(--green);color:white;border-color:var(--green)}.run:hover{background:#236047}.setting{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);margin-left:8px}.setting input[type=number]{width:65px;padding:6px;border:1px solid var(--line);border-radius:4px;background:var(--paper);color:#202d27;font-variant-numeric:tabular-nums}.setting input[type=range]{width:72px;min-height:30px}.setting output{font-variant-numeric:tabular-nums;min-width:3ch}.reference-toggle{margin-left:auto}.workspace{display:flex;flex:1;min-height:0;position:relative}.editor-pane{display:flex;flex:1;min-width:0;flex-direction:column;background:var(--editor);color:var(--code)}.editor-help{margin:0;padding:12px 22px;color:#adc5b6;font-size:12px;border-bottom:1px solid #34483e}.code-editor{display:block;flex:1;width:100%;min-height:0;resize:none;border:0;border-radius:0;padding:24px 22px;background:transparent;color:var(--code);font:15px/1.7 "Cascadia Code","Consolas",monospace;tab-size:2;caret-color:#b7e8c8;outline-offset:-3px}.code-editor:focus-visible{outline:2px solid #90c5a2}.status{margin:0;padding:10px 16px;min-height:38px;border-top:1px solid #34483e;font-size:12px;color:#adc5b6;overflow-wrap:anywhere}.status[role=alert]{color:#ffb7a4}.reference{flex:0 0 280px;padding:18px 20px;overflow:auto;border-left:1px solid var(--line);background:var(--paper);scrollbar-color:#9eafa0 var(--paper);scrollbar-width:thin}.reference-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:22px}.reference h2{font-size:15px;margin:0}.reference h3{font-size:13px;margin:24px 0 10px}.reference p{font-size:12px;line-height:1.6;color:var(--muted);margin:8px 0}.close{width:32px;min-height:32px;padding:6px;display:grid;place-items:center}.close svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6}.reference dl{margin:0;font-size:12px}.reference dt{margin-top:10px;font-family:"Consolas",monospace}.reference dd{margin:3px 0 0;color:var(--muted);line-height:1.5}.example{padding:16px 0;border-bottom:1px solid var(--line)}.example h4{font-size:13px;margin:0}.example pre{margin:10px 0;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 "Cascadia Code","Consolas",monospace;color:var(--green)}.example button{font-size:12px;min-height:32px;padding:6px 10px}details{border-top:1px solid var(--line);margin-top:24px;padding-top:14px}summary{font-size:13px;font-weight:600;cursor:pointer}details label{display:flex;align-items:center;gap:8px;font-size:12px;margin:14px 0}details input{width:58px;padding:6px;background:var(--paper);border:1px solid var(--line);border-radius:4px;color:inherit}details button{font-size:12px;margin:0 4px 8px 0}details [role=alert]{color:#9d3425}.code-editor{scrollbar-color:#586d60 var(--editor);scrollbar-width:thin}@media(max-width:760px){.toolbar{padding:10px;gap:6px}h1{margin-right:4px}.setting{margin-left:0}.reference{position:absolute;right:0;top:0;bottom:0;width:min(280px,85vw);z-index:1;box-shadow:-8px 0 20px #18231f26}.code-editor{font-size:14px;padding:18px 16px}.editor-help{padding:10px 16px}.reference-toggle{margin-left:auto}}@media(max-width:420px){.setting{order:1}.toolbar h1{flex:1}.reference-toggle{margin-left:0}.editor-help{font-size:11px}}
+.code-surface{position:relative;display:flex;flex:1;min-height:0;min-width:0}.code-highlight,.code-editor{margin:0;font:15px/1.7 "Cascadia Code","Consolas",monospace;tab-size:2}.code-highlight{position:absolute;top:0;left:0;width:100%;height:100%;padding:24px 22px;white-space:pre;overflow:hidden;pointer-events:none;color:var(--code)}.code-editor{position:relative;color:transparent;-webkit-text-fill-color:transparent;background:transparent}.code-editor::selection{background:#40685380;color:transparent}.token-comment{color:#8ca99a}.token-keyword{color:#d8b4db}.token-string{color:#a6d6b0}.token-number{color:#f0b78e}.token-function{color:#e4d08a}.token-label{color:#9dcee8}.reference .token-comment{color:#58675f}.reference .token-keyword{color:#74516e}.reference .token-string{color:#2a6146}.reference .token-number{color:#8f4b26}.reference .token-function{color:#785e20}.reference .token-label{color:#28617d}@media(max-width:760px){.code-highlight,.code-editor{font-size:14px;padding:18px 16px}}
+</style></head><body><main><header class="toolbar"><h1>Strudel</h1><button type="button" class="run" id="${id}-play">Run</button><button type="button" id="${id}-stop">Stop</button><label class="setting" for="${id}-bpm">BPM<input id="${id}-bpm" data-easel-managed-state type="number" min="30" max="240" step="1" value="100"></label><label class="setting" for="${id}-volume">Volume<input id="${id}-volume" data-easel-managed-state type="range" min="0" max="1" step="0.01" value="0.5"><output id="${id}-volume-value" for="${id}-volume">50%</output></label><button type="button" class="reference-toggle" id="${id}-reference-toggle" aria-controls="${id}-reference" aria-expanded="true">Reference</button></header>
+<div class="workspace"><section class="editor-pane" aria-label="Strudel editor"><p class="editor-help" id="${id}-code-help">Ctrl+Enter: run selection or all code &nbsp; / &nbsp; Ctrl+. or Escape: stop</p><div class="code-surface"><pre class="code-highlight" id="${id}-highlight" aria-hidden="true"></pre><textarea class="code-editor" data-easel-managed-state id="${id}-code" aria-label="Strudel code" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" aria-describedby="${id}-code-help"></textarea></div><p class="status" id="${id}-status" role="status" aria-live="polite">Preparing sound…</p></section>
+<aside class="reference" id="${id}-reference" aria-label="References and examples"><div class="reference-heading"><h2>Reference &amp; examples</h2><button class="close" id="${id}-reference-close" type="button" aria-label="Hide reference"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button></div><h3>Add a layer</h3><p>Add &amp; run appends an example to your score and plays it. Your existing layers keep playing.</p>${exampleHtml}
+<h3>Pattern basics</h3><dl><dt>note("c4 e4 g4")</dt><dd>A sequence of pitches.</dd><dt>.s("triangle")</dt><dd>Choose the sound.</dd><dt>.gain(.3)</dt><dd>Set a pattern's loudness.</dd><dt>.fast(2) / .slow(2)</dt><dd>Double or halve the speed.</dd><dt>stack(a, b)</dt><dd>Play patterns together.</dd><dt>$: note("c4")</dt><dd>Give each line its own pattern.</dd><dt>setcpm(30)</dt><dd>30 cycles per minute = 120 BPM.</dd></dl><h3>Mini notation</h3><dl><dt>~ &nbsp; *4 &nbsp; &lt;c4 e4&gt;</dt><dd>Rest, repeat, alternate each cycle.</dd><dt>[c4 e4] &nbsp; c4,e4</dt><dd>Subdivide a beat, play together.</dd></dl><h3>Sounds available here</h3><p><code>sine · triangle · square · sawtooth<br>sbd · supersaw · pulse<br>white · pink · brown</code></p><p>These synths work offline. Website sample banks such as bd, sd, hh and piano aren't included.</p>
+<details><summary>Save a WAV loop</summary><label for="${id}-cycles">Cycles<input id="${id}-cycles" type="number" min="1" max="16" step="1" value="1"></label><button type="button" id="${id}-export" disabled>Save to Media</button><button type="button" id="${id}-cancel-export" disabled>Cancel</button><p id="${id}-export-status" role="status" aria-live="polite">Run code before saving.</p><p>1–16 cycles, up to 30 seconds. WAV export supports sine, triangle, square and sawtooth with note, gain, attack and release. Other sounds and effects can't be exported yet.</p></details></aside></div></main><script id="easel-runtime-strudel-export-policy">
 // Plain-data export policy, shared with the host. No executable events cross the bridge.
 ${validateStrudelSnapshot.toString()}
 ${queryStrudelSnapshot.toString()}
 </script><script>
 const STRUDEL_INSTANCE_ID = ${JSON.stringify(instanceId)};
-// This compact example stays local and uses Strudel's normal JavaScript REPL.
-const DEFAULT_LIVE_CODE = "stack(\\n  note(\\"<bb2 ~ bb2 bb2>\\").s(\\"sine\\").gain(.52).release(.08),\\n  note(\\"<d4 f4 ab4 c5>\\").s(\\"triangle\\").gain(.18).attack(.02).release(.16),\\n  note(\\"<f2 ab2 c3 eb3>\\").s(\\"sawtooth\\").gain(.09).attack(.04).release(.2)\\n)";
-function createPattern() {
-  const note = window.strudel.note;
-  return window.strudel.stack(
-    note('<bb2 ~ bb2 bb2>').s('sine').gain(.52).release(.08),
-    note('<d4 f4 ab4 c5>').s('triangle').gain(.18).attack(.02).release(.16),
-    note('<f2 ab2 c3 eb3>').s('sawtooth').gain(.09).attack(.04).release(.2)
-  );
-}
+// Edit this code to change the authored default. Run always evaluates the editor.
+const DEFAULT_LIVE_CODE = ${JSON.stringify(DEFAULT_LIVE_CODE)};
+const EXAMPLES = ${JSON.stringify(EXAMPLES)};
 (${bootStrudelSketch.toString()})(STRUDEL_INSTANCE_ID);
 </script></body></html>`;
   return { files: { 'index.html': html }, entry: 'index.html' };

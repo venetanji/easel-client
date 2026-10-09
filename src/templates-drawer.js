@@ -119,7 +119,13 @@ function createTemplatesDrawer({ document, client, onOpen, onPrompt, onStatus, i
       selectedId = '';
       renderList();
       Array.from(list.querySelectorAll('button')).find((item) => item.dataset.templateId === previous)?.focus();
-    }, 'detail', 'button quiet small');
+    }, 'detail', 'button outline small template-back');
+    const backIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    for (const [name, value] of Object.entries({ viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false' })) backIcon.setAttribute(name, value);
+    const backPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    backPath.setAttribute('d', 'M15 10H5m5-5-5 5 5 5');
+    backIcon.append(backPath);
+    back.replaceChildren(backIcon, node('span', '', 'All templates'));
     const heading = node('h3', 'template-detail-title', entry.title);
     heading.id = 'template-detail-title';
     heading.setAttribute('tabindex', '-1');
@@ -157,7 +163,7 @@ function createTemplatesDrawer({ document, client, onOpen, onPrompt, onStatus, i
         if (blocked() || !available(selected())) return;
         try { onPrompt?.(`Help me develop a creative brief for a ${entry.title} sketch. ${entry.questions.join(' ')} Start by discussing ideas with me.`); }
         catch (error) { setStatus(error.message || 'The conversation is unavailable.', true); }
-      }, 'detail', 'button quiet');
+      }, 'detail', 'button outline');
       controls.push([explore, 'prompt']);
       detail.append(explore, node('p', 'template-context', 'Prepares an editable chat prompt for you to send.'));
     }
@@ -173,22 +179,35 @@ function createTemplatesDrawer({ document, client, onOpen, onPrompt, onStatus, i
     const plannedCount = ordered.filter((entry) => entry.status === 'planned').length;
     planned.append(node('summary', '', `Coming later (${plannedCount})`));
     for (const entry of ordered) {
-      const row = node('div', 'template-entry');
-      row.dataset.templateId = entry.id;
+      const copy = node('span', 'drawer-list-copy');
+      const description = node('span', 'drawer-list-description', entry.purpose);
+      description.id = `template-${entry.id}-description`;
+      copy.append(node('strong', '', entry.title), description);
+      let row;
       if (entry.status === 'planned') {
-        row.append(node('h3', '', entry.title), node('span', 'template-state', 'Planned'), node('p', '', entry.purpose));
+        row = node('div', 'template-entry drawer-list-row');
+        copy.append(node('span', 'template-state', 'Planned'));
+        row.append(copy);
       } else {
-        const choice = button(entry.title, () => {
+        row = button('', () => {
           viewVersion += 1;
           selectedId = entry.id;
           for (const item of list.querySelectorAll('button')) item.setAttribute('aria-pressed', String(item.dataset.templateId === selectedId));
           renderDetails(true);
-        }, 'list', 'template-choice');
-        choice.dataset.templateId = entry.id;
-        choice.setAttribute('aria-controls', 'templates-detail');
-        choice.setAttribute('aria-pressed', String(selectedId === entry.id));
-        row.append(choice, node('span', 'template-state', available(entry) ? 'Ready' : 'Unavailable'), node('p', '', entry.purpose));
+        }, 'list', 'template-entry template-choice drawer-list-row');
+        row.setAttribute('aria-label', entry.title);
+        row.setAttribute('aria-describedby', description.id);
+        row.setAttribute('aria-controls', 'templates-detail');
+        row.setAttribute('aria-pressed', String(selectedId === entry.id));
+        if (!available(entry)) copy.append(node('span', 'template-state', entry.availability?.missingKits?.length ? 'Requires kits' : 'Unavailable'));
+        const chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        for (const [name, value] of Object.entries({ class: 'drawer-list-chevron', viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false' })) chevron.setAttribute(name, value);
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', 'm8 5 5 5-5 5');
+        chevron.append(path);
+        row.append(copy, chevron);
       }
+      row.dataset.templateId = entry.id;
       if (entry.status === 'planned') planned.append(row);
       else list.append(row);
     }

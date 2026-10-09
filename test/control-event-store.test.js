@@ -11,6 +11,36 @@ function directory(t) {
   return userDataPath;
 }
 
+test('Suno receipts retain attempt and track UUIDs across restarts without browser data', (t) => {
+  const userDataPath = directory(t);
+  const attemptId = '11111111-1111-4111-8111-111111111111';
+  const trackId = '22222222-2222-4222-8222-222222222222';
+  createControlEventStore({ userDataPath }).append({ type: 'audio-generation', modelId: 'studio:suno-music',
+    attemptId, status: 'submitted', trackIds: [trackId, 'invalid'], browser: { cookie: 'private' } });
+  const receipt = createControlEventStore({ userDataPath }).read().events[0];
+  assert.equal(receipt.attemptId, attemptId);
+  assert.equal(receipt.modelId, 'studio:suno-music');
+  assert.deepEqual(receipt.trackIds, [trackId]);
+  assert.equal(receipt.browser, undefined);
+});
+
+test('chat receipt lookup merges status tracks into the original owner and ignores unrelated shared attempts', (t) => {
+  const userDataPath = directory(t);
+  const attemptId = '11111111-1111-4111-8111-111111111111';
+  const trackId = '22222222-2222-4222-8222-222222222222';
+  const store = createControlEventStore({ userDataPath });
+  store.append({ type: 'audio-generation', toolName: 'generate_music', chatId: 'original', modelId: 'studio:suno-music', attemptId, status: 'submitted', trackIds: [] });
+  store.append({ type: 'audio-generation', toolName: 'get_audio_generation_status', chatId: 'other', modelId: 'studio:suno-music', attemptId, status: 'complete', trackIds: [trackId] });
+  store.append({ type: 'audio-generation', toolName: 'get_audio_generation_status', chatId: 'original', modelId: 'studio:suno-music', attemptId: trackId, status: 'submitted', trackIds: [] });
+  const restored = createControlEventStore({ userDataPath });
+  const { generations } = restored.listAudioGenerations({ chatId: 'original' });
+  assert.equal(generations.length, 1);
+  assert.equal(generations[0].attemptId, attemptId);
+  assert.equal(generations[0].status, 'complete');
+  assert.deepEqual(generations[0].trackIds, [trackId]);
+  assert.deepEqual(restored.listAudioGenerations({ chatId: 'other' }).generations, []);
+});
+
 test('persists bounded cursor notifications across restarts and reports gaps', (t) => {
   const userDataPath = directory(t);
   const store = createControlEventStore({ userDataPath, maxEvents: 2 });

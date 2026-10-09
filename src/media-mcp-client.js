@@ -2,7 +2,10 @@ const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
 const { abortError, awaitAbortable, combinedSignal, isTurnAbort, throwIfAborted } = require('./turn-abort');
 
+const AUDIO_GENERATION_TOOLS = Object.freeze(new Set(['generate_music', 'generate_speech', 'generate_sound']));
+const AUDIO_TOOLS = Object.freeze(new Set([...AUDIO_GENERATION_TOOLS, 'get_audio_generation_status', 'get_audio_track', 'download_audio', 'abandon_audio_generation']));
 const ALLOWED_MEDIA_TOOLS = Object.freeze(new Set([
+  ...AUDIO_TOOLS,
   'list_models',
   'discover_video_capabilities',
   'list_video_loras',
@@ -118,4 +121,4 @@ function createMediaMcpClient({
   return connect().then(() => ({ listTools, callTool, close }));
 }
 
-module.exports = { ALLOWED_MEDIA_TOOLS, createMediaMcpClient };
+module.exports = { ALLOWED_MEDIA_TOOLS, AUDIO_GENERATION_TOOLS, AUDIO_TOOLS, createMediaMcpClient };

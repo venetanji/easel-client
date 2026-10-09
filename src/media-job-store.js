@@ -5,7 +5,7 @@ const { validateInteractionOrigin } = require('./interaction-origin');
 
 const ID = /^[a-f0-9]{32}$/;
 const REMOTE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
-const TERMINAL = new Set(['ready', 'failed']);
+const TERMINAL = new Set(['ready', 'failed', 'cancelled']);
 
 function mediaJobSummary(entry) {
   const { turnOptions, approvedAgent, baseUrl, origin, ...summary } = entry;
@@ -25,7 +25,7 @@ function createMediaJobStore({ userDataPath, fileSystem = fs, now = Date.now }) 
     const url = new URL(entry.baseUrl);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Saved media job endpoint is invalid.');
     if (entry.chatId && !ID.test(entry.chatId) || entry.projectId && !ID.test(entry.projectId)) throw new Error('Saved media job destination is invalid.');
-    if (!['queued', 'generating', 'downloading', 'ready', 'failed'].includes(entry.status) || !Array.isArray(entry.assets) || entry.assets.length > 16 || entry.assets.some((asset) => !ID.test(asset.assetId || '') || typeof asset.mimeType !== 'string')) throw new Error('Saved media job state is invalid.');
+    if (!['queued', 'generating', 'downloading', 'ready', 'failed', 'cancelled'].includes(entry.status) || !Array.isArray(entry.assets) || entry.assets.length > 16 || entry.assets.some((asset) => !ID.test(asset.assetId || '') || typeof asset.mimeType !== 'string')) throw new Error('Saved media job state is invalid.');
     if (!Number.isFinite(entry.createdAt) || !Number.isFinite(entry.nextPollAt) || !Number.isInteger(entry.attempts) || entry.attempts < 0) throw new Error('Saved media job polling state is invalid.');
     if (entry.origin !== undefined) entry.origin = validateInteractionOrigin(entry.origin);
     return entry;

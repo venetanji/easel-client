@@ -413,6 +413,26 @@ test('completed video references render one playable card across ready, notifica
   assert.equal(previews.get(assetId).image.src, undefined);
 });
 
+test('downloaded Suno M4A renders an audio player when the conversation is restored', async () => {
+  const document = { createElement: (tag) => element(tag), createElementNS: (_ns, tag) => element(tag) };
+  const messages = element();
+  const previews = new Map();
+  const objectUrls = new Set();
+  const assetId = 'a'.repeat(32);
+  const asset = { assetId, mimeType: 'audio/mp4', name: 'Pixel Haze.m4a', duration: 120 };
+  assert.equal(appendReadyMediaCards({ document, messagesElement: messages, event: { assets: [asset] }, assetPreviews: previews,
+    options: { objectUrls, loadAsset: async () => ({ ...asset, data: 'YWJj' }), onUse: async () => assert.fail('M4A cannot be sent as model audio input.') } }), 1);
+  const use = messages.querySelector('.message-media-actions').children[0];
+  assert.equal(use.disabled, true);
+  assert.match(use.title, /WAV or MP3/);
+  const player = previews.get(assetId);
+  assert.equal(player.image.tagName, 'audio');
+  await player.load();
+  assert.match(player.image.src, /^blob:/);
+  player.dispose();
+  assert.equal(objectUrls.size, 0);
+});
+
 test('a late video read cannot attach bytes after its chat preview is disposed', async () => {
   const document = { createElement: (tag) => element(tag) };
   const objectUrls = new Set();

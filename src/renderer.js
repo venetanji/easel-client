@@ -385,6 +385,10 @@ function appendMediaPreviewMessage(document, messagesElement, event, onAddToCanv
         finally { button.disabled = false; }
       });
       RendererActionIcons.setActionIcon(document, button, icon, text);
+      if (icon === 'useInChat' && event.mimeType === 'audio/mp4') {
+        button.disabled = true;
+        button.title = 'Audio chat attachments require WAV or MP3. Play, download or use this M4A in a canvas.';
+      }
       actions.append(button);
     }
     message.append(actions);
@@ -408,7 +412,7 @@ function appendReadyMediaCards({ document, messagesElement, event, assetPreviews
   const assets = event.assets || event.result?.assets || event.job?.assets || [];
   for (const asset of assets) {
     const assetId = asset.assetId || asset.id;
-    if (!/^(?:[a-f0-9]{32}|[a-f0-9]{64})$/i.test(assetId || '') || !['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm', 'audio/wav', 'audio/mpeg'].includes(asset.mimeType) || assetPreviews.has(assetId)) continue;
+    if (!/^(?:[a-f0-9]{32}|[a-f0-9]{64})$/i.test(assetId || '') || !['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm', 'audio/wav', 'audio/mpeg', 'audio/mp4'].includes(asset.mimeType) || assetPreviews.has(assetId)) continue;
     const media = { ...asset, assetId, projectId: event.projectId || event.job?.projectId || asset.projectId, name: asset.name || event.job?.name || `Generated ${event.job?.mediaType || 'media'}` };
     const newMedia = typeof options.newMedia === 'function' ? options.newMedia(assetId) : options.newMedia !== false;
     const preview = appendMediaPreviewMessage(document, messagesElement, media, null, { ...options, newMedia });
@@ -792,7 +796,7 @@ function renderAgentEvent({ document, messagesElement, imagesElement, event, sta
   }
   if (event.type === 'image' || (event.type === 'media' && (event.generated || event.captured))) {
     if (event.data !== undefined && (typeof event.data !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(event.data))) return;
-    if (!['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm', 'audio/wav', 'audio/mpeg'].includes(event.mimeType)) return;
+    if (!['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm', 'audio/wav', 'audio/mpeg', 'audio/mp4'].includes(event.mimeType)) return;
     if (messagesElement && assetPreviews instanceof Map && /^[a-f0-9]{32}$/i.test(event.assetId || '')) {
       const assetId = event.assetId.toLowerCase();
       if (assetPreviews.has(assetId)) return;
@@ -1151,7 +1155,6 @@ function wireRenderer({ document, client }) {
     : null;
   let activeCanvasId = '';
   let timelineSelection = null;
-  let videoEditorOpening = false;
   let templatesOperating = false;
   let rendererDisposed = false;
   let templatesDrawer = null;
@@ -1238,7 +1241,7 @@ function wireRenderer({ document, client }) {
   templatesDrawer = RendererTemplates.createTemplatesDrawer({
     document, client,
     getProjectId: () => workspace.getProjectId(),
-    isBusy: () => chatBusy || canvasResumeBusy || backendHistoryBusy || videoEditorOpening || workspace.isOperating() || templatesOperating || Boolean(agentControlUi?.getState()?.busy),
+    isBusy: () => chatBusy || canvasResumeBusy || backendHistoryBusy || workspace.isOperating() || templatesOperating || Boolean(agentControlUi?.getState()?.busy),
     onBusy: (busy) => { templatesOperating = busy; updateSendState(); },
     onOpen: async (result, { isCurrentView }) => {
       // The service already opened the host document. Adopt its metadata and reload
@@ -1458,11 +1461,14 @@ function wireRenderer({ document, client }) {
       return;
     }
     const rect = canvasHost.getBoundingClientRect();
+    // Native views sit above the shell; round inward so they cannot cover its dividers.
+    const x = Math.max(0, Math.ceil(rect.left));
+    const y = Math.max(0, Math.ceil(rect.top));
     client.setCanvasBounds({
-      x: Math.max(0, rect.left),
-      y: Math.max(0, rect.top),
-      width: Math.max(0, rect.width),
-      height: Math.max(0, rect.height),
+      x,
+      y,
+      width: Math.max(0, Math.floor(rect.right) - x),
+      height: Math.max(0, Math.floor(rect.bottom) - y),
     });
   }
 
@@ -1646,8 +1652,6 @@ function wireRenderer({ document, client }) {
     templatesDrawer?.updateBusy();
     document.getElementById('new-canvas-open').disabled = busy;
     document.querySelectorAll('[data-starter], .prompt-suggestion').forEach((button) => { button.disabled = busy || external; });
-    const videoEditorButton = document.getElementById('open-video-editor');
-    if (videoEditorButton) videoEditorButton.disabled = busy || videoEditorOpening;
     undoCanvasButton.disabled = busy || activePreviewKind !== 'document' || !activeUndoAvailable;
     undoCanvasButton.title = activeUndoBlockedReason || 'Undo canvas changes';
     if (activeUndoBlockedReason) undoCanvasButton.setAttribute('aria-description', activeUndoBlockedReason);
@@ -2126,7 +2130,7 @@ function wireRenderer({ document, client }) {
     try {
       const chats = await client.listChats();
       chatHistoryList.replaceChildren(...chats.map((chat) => {
-        const button = createButton(document, '', 'chat-history-row', async () => {
+        const button = createButton(document, '', 'chat-history-row drawer-list-row', async () => {
           if (chatBusy || canvasResumeBusy || backendHistoryBusy || agentControlUi.getState()?.busy) return;
           const snapshotEpoch = ++chatSnapshotEpoch;
           chatBusy = true;
@@ -2575,17 +2579,6 @@ function wireRenderer({ document, client }) {
     finally { button.disabled = false; nativeDialogOpen = false; updateCanvasBounds(); }
   });
   document.getElementById('timeline-chat-clear')?.addEventListener('click', () => setTimelineSelection(null));
-  document.getElementById('open-video-editor')?.addEventListener('click', async () => {
-    if (videoEditorOpening || chatBusy || canvasResumeBusy || backendHistoryBusy || workspace.isOperating() || templatesOperating) return;
-    videoEditorOpening = true; updateSendState();
-    try {
-      const result = await client.openVideoEditor(activeCanvasId ? { projectId: activeCanvasId } : {});
-      if (result.canceled) return;
-      await workspace.openProject(result.projectId || result.id, result.documentPath);
-      setStatus(statusElement, 'Video editor ready. Its HTML, JavaScript and styles are editable under Project files.');
-    } catch (error) { setStatus(statusElement, error.message, true); }
-    finally { videoEditorOpening = false; updateSendState(); }
-  });
   document.getElementById('new-canvas-open').addEventListener('click', () => openNewCanvasDialog('document'));
   document.getElementById('new-canvas-close').addEventListener('click', () => newCanvasDialog.close());
   newCanvasDialog.addEventListener('close', () => { ++newProjectKitRequest; newProjectKitInputs = null; updateCanvasBounds(); });

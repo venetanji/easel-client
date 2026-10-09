@@ -17,6 +17,31 @@ const baseUrl = 'http://gpu.example/v1';
 const entry = { id: 'd'.repeat(32), remoteId: 'video_test', modelId, mediaType: 'video', assets: [] };
 const pendingResult = { content: [], structuredContent: { job: { id: entry.remoteId, status: 'in_progress', estimatedWaitSeconds: 18 } } };
 
+test('audio worker retrieves captured UUIDs, saves original M4A metadata and returns compact references', async () => {
+  const trackId = '22222222-2222-4222-8222-222222222222';
+  const calls = [];
+  const checkpoints = [];
+  const runtime = createMediaJobWorkerRuntime({ mediaAssetStore: { async save(media) {
+    assert.equal(media.name, 'Pixel Haze.m4a');
+    assert.equal(media.duration, 120);
+    assert.equal(media.mimeType, 'audio/mp4');
+    return 'a'.repeat(32);
+  } }, checkpoint: asset => checkpoints.push(asset),
+    mcpFactory: async () => ({ async close() {}, async callTool(name, args) {
+      calls.push(name); assert.equal(args.trackId, trackId);
+      if (name === 'get_audio_track') return { structuredContent: { id: trackId, status: 'complete', title: 'Pixel Haze', duration: 120 } };
+      assert.equal(name, 'download_audio');
+      return { content: [{ type: 'resource', resource: { mimeType: 'audio/mp4', blob: 'YWJj' } }], structuredContent: { track: { song_id: trackId } } };
+    } }),
+  });
+  const result = await runtime.poll({ ...entry, remoteId: trackId, modelId: connectionId + ':suno-music', mediaType: 'audio', prompt: 'A prompt that is not the song title' }, {});
+  assert.deepEqual(calls, ['get_audio_track', 'download_audio']);
+  assert.equal(checkpoints[0].name, 'Pixel Haze.m4a');
+  assert.equal(result.structuredContent.assets[0].duration, 120);
+  assert.equal(JSON.stringify(result).includes('YWJj'), false);
+  await runtime.close();
+});
+
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-job-worker-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

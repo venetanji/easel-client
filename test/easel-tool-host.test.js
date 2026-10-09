@@ -4,7 +4,7 @@ const { createEaselToolHost } = require('../src/easel-tool-host');
 
 const projectId = 'a'.repeat(32);
 const assetId = 'b'.repeat(32);
-const tools = ['generate_image', 'generate_video', 'get_video', 'list_models'].map((name) => ({ name, inputSchema: { type: 'object', additionalProperties: false, properties: { prompt: { type: 'string' }, model: { type: 'string' }, videoId: { type: 'string' } } } }));
+const tools = ['generate_image', 'generate_video', 'get_video', 'list_models', 'generate_music', 'get_audio_generation_status', 'get_audio_track', 'download_audio'].map((name) => ({ name, inputSchema: { type: 'object', additionalProperties: false, properties: { prompt: { type: 'string' }, model: { type: 'string' }, videoId: { type: 'string' }, trackId: { type: 'string' } } } }));
 
 function fixture(overrides = {}) {
   const receipts = [];
@@ -20,10 +20,10 @@ function fixture(overrides = {}) {
   };
   const canvasController = { getCurrentCanvasId: () => projectId, async attachGeneratedAssets(args) { attached.push(args); return { projectId: args.projectId }; } };
   const host = createEaselToolHost({ canvasController,
-    assetStore: { async save(asset) { saved.push(asset); return assetId; } },
+    assetStore: { async save(asset) { saved.push(asset); return assetId; }, async get() { return { id: assetId }; } },
     createMediaClient: async () => mediaClient, getKits: () => ['canvas-2d', 'tone'],
     getOrigin: () => ({ chatId: 'chat', origin: { backend: 'external', chatId: 'chat' }, turnOptions: { option: 'retained' } }),
-    registerMediaJob: async (input) => { receipts.push(input); return { id: 'local-job', ...input }; },
+    registerMediaJob: async (input) => { receipts.push(input); return { id: 'local-job', status: 'queued', remoteId: input.job.id, ...input }; },
     workspace: { list: async () => ({ projects: [] }) }, onEvent: (event) => events.push(event), ...overrides,
   });
   return { host, mediaClient, canvasController, receipts, saved, attached, events, calls, setResponse(value) { response = value; } };
@@ -66,6 +66,138 @@ test('saves and attaches synchronous images once and returns one image observati
   assert.equal(f.receipts.length, 0);
   assert.equal(f.host.isBusy(), false);
   assert.ok(f.events.some((event) => event.type === 'control-settled'));
+});
+
+test('Suno CAPTCHA receipts retain their status without entering the image/video monitor', async () => {
+  const f = fixture();
+  const audio = { attempt_id: '11111111-1111-4111-8111-111111111111', status: 'captcha_required', songs: [] };
+  f.setResponse({ content: [{ type: 'text', text: JSON.stringify(audio) }], structuredContent: audio });
+  const result = await f.host.callTool('generate_music', { model: 'studio:suno-music', prompt: 'chiptune shoegaze' });
+  assert.equal(result.structuredContent.audio.attempt_id, audio.attempt_id);
+  assert.equal(result.structuredContent.audio.status, 'captcha_required');
+  assert.equal(f.receipts.length, 0);
+  assert.equal(f.saved.length, 0);
+  assert.equal(f.calls.length, 1);
+  const receipt = f.events.find(event => event.type === 'audio-generation');
+  assert.equal(receipt.attemptId, audio.attempt_id);
+  assert.equal(receipt.chatId, 'chat');
+  assert.equal(receipt.projectId, projectId);
+});
+
+test('captured Suno tracks are monitored once and keep the original receipt through both result passes', async () => {
+  const f = fixture();
+  const trackId = '22222222-2222-4222-8222-222222222222';
+  const attemptId = '11111111-1111-4111-8111-111111111111';
+  f.setResponse({ content: [], structuredContent: { attempt_id: attemptId, status: 'submitted', songs: [{ id: trackId }] } });
+  const result = await f.host.callTool('generate_music', { model: 'studio:suno-music', prompt: 'chiptune' });
+  assert.equal(f.receipts.length, 1);
+  assert.equal(f.receipts[0].job.id, trackId);
+  assert.equal(f.receipts[0].mediaType, 'audio');
+  assert.equal(f.receipts[0].projectId, projectId);
+  assert.equal(result.structuredContent.audio.attempt_id, attemptId);
+  assert.equal(result.structuredContent.audio.monitored, true);
+  assert.equal(result.structuredContent.monitoredAudioJobs.length, 1);
+  assert.match(result.structuredContent.guidance, /host monitors/);
+  assert.equal(f.events.filter(event => event.type === 'audio-generation').length, 1);
+});
+
+test('external downloads reuse managed audio receipts and completed assets without a second provider call', async () => {
+  const f = fixture();
+  const trackId = '22222222-2222-4222-8222-222222222222';
+  const job = { id: 'f'.repeat(32), remoteId: trackId, modelId: 'studio:suno-music', mediaType: 'audio', projectId, status: 'generating' };
+  f.canvasController.listMediaJobs = async () => ({ jobs: [job] });
+  const pending = await f.host.callTool('download_audio', { model: job.modelId, trackId });
+  assert.equal(pending.structuredContent.audio.monitored, true);
+  assert.equal(f.calls.length, 0);
+  job.status = 'ready'; job.attached = true;
+  job.assets = [{ assetId, mimeType: 'audio/mp4', name: 'Pixel Haze.m4a' }];
+  const ready = await f.host.callTool('download_audio', { model: job.modelId, trackId });
+  assert.equal(ready.structuredContent.cached, true);
+  assert.equal(ready.structuredContent.assets[0].assetId, assetId);
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.saved.length, 0);
+  assert.equal(f.attached.length, 0);
+});
+
+test('managed tracks retain full provider inspection metadata', async () => {
+  const f = fixture();
+  const trackId = '22222222-2222-4222-8222-222222222222';
+  f.canvasController.listMediaJobs = () => assert.fail('Read-only track inspection must reach the provider.');
+  f.setResponse({ content: [], structuredContent: { id: trackId, title: 'Pixel Haze', duration: 120, metadata: { lyrics: 'Original lyrics' } } });
+  const result = await f.host.callTool('get_audio_track', { model: 'studio:suno-music', trackId });
+  assert.equal(result.structuredContent.audio.title, 'Pixel Haze');
+  assert.equal(result.structuredContent.audio.duration, 120);
+  assert.equal(result.structuredContent.audio.metadata.lyrics, 'Original lyrics');
+  assert.equal(f.calls.length, 1);
+});
+
+test('an explicitly requested download restores deleted audio and refreshes its receipt for later reuse', async () => {
+  const trackId = '22222222-2222-4222-8222-222222222222';
+  const stored = new Set();
+  const f = fixture({ assetStore: {
+    async get(id) { if (!stored.has(id)) throw new Error('File deleted'); return { id }; },
+    async save() { stored.add(assetId); return assetId; },
+  } });
+  const job = { id: 'f'.repeat(32), remoteId: trackId, modelId: 'studio:suno-music', mediaType: 'audio', projectId, status: 'ready', assets: [{ assetId: 'c'.repeat(32), mimeType: 'audio/mp4' }] };
+  f.canvasController.listMediaJobs = async () => ({ jobs: [job] });
+  f.canvasController.updateMediaJobAssets = async (id, assets) => { assert.equal(id, job.id); job.assets = assets; };
+  f.setResponse({ structuredContent: { track: { song_id: trackId, title: 'Pixel Haze' } }, content: [{ type: 'resource', resource: { mimeType: 'audio/mp4', blob: 'YWJj' } }] });
+  const restored = await f.host.callTool('download_audio', { model: job.modelId, trackId });
+  assert.equal(restored.structuredContent.assets[0].assetId, assetId);
+  assert.equal(job.assets[0].assetId, assetId);
+  assert.equal(f.calls.length, 1);
+  const reused = await f.host.callTool('download_audio', { model: job.modelId, trackId });
+  assert.equal(reused.structuredContent.cached, true);
+  assert.equal(f.calls.length, 1);
+});
+
+test('disconnecting during Suno submission preserves its eventual receipt and original project', async () => {
+  const f = fixture(); await f.host.listTools();
+  let respond;
+  f.mediaClient.callTool = () => new Promise(resolve => { respond = resolve; });
+  const abort = new AbortController();
+  const call = f.host.callTool('generate_music', { model: 'studio:suno-music', prompt: 'chiptune' }, { signal: abort.signal });
+  const canceled = assert.rejects(call, { name: 'AbortError' });
+  await new Promise(setImmediate); abort.abort(); await canceled;
+  assert.equal(f.host.isBusy(), true);
+  f.canvasController.getCurrentCanvasId = () => 'c'.repeat(32);
+  const attemptId = '11111111-1111-4111-8111-111111111111';
+  respond({ content: [], structuredContent: { attempt_id: attemptId, status: 'submitted', songs: [] } });
+  await f.host.shutdown();
+  const receipt = f.events.find(event => event.type === 'audio-generation');
+  assert.equal(receipt.attemptId, attemptId);
+  assert.equal(receipt.projectId, projectId);
+  assert.equal(f.receipts.length, 0);
+  assert.equal(f.host.isBusy(), false);
+});
+
+test('external audio download saves and attaches once, returns metadata and emits one preview', async () => {
+  const f = fixture();
+  const trackId = '22222222-2222-4222-8222-222222222222';
+  f.setResponse({ content: [{ type: 'resource', resource: { mimeType: 'audio/mp4', blob: 'YWJj' } }],
+    structuredContent: { track: { id: trackId, title: 'Pixel Haze' }, mimeType: 'audio/mp4' } });
+  const result = await f.host.callTool('download_audio', { model: 'studio:suno-music', trackId });
+  assert.equal(result.structuredContent.audio.trackId, trackId);
+  assert.equal(result.structuredContent.assets[0].mimeType, 'audio/mp4');
+  assert.equal(f.saved.length, 1);
+  assert.equal(f.saved[0].name, 'Pixel Haze.m4a');
+  assert.equal(f.attached.length, 1);
+  assert.equal(f.events.filter(event => event.type === 'media').length, 1);
+  assert.equal(JSON.stringify(result).includes('YWJj'), false);
+});
+
+test('failed audio storage preserves the track receipt and reports failed delivery', async () => {
+  const f = fixture({ assetStore: { async save() { throw new Error('Disk full'); } } });
+  const trackId = '22222222-2222-4222-8222-222222222222';
+  f.setResponse({ content: [{ type: 'resource', resource: { mimeType: 'audio/mp4', blob: 'YWJj' } }],
+    structuredContent: { track: { id: trackId }, mimeType: 'audio/mp4' } });
+  const result = await f.host.callTool('download_audio', { model: 'studio:suno-music', trackId });
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent.audio.trackId, trackId);
+  assert.deepEqual(result.structuredContent.assets, []);
+  assert.match(result.structuredContent.saveErrors[0], /Disk full/);
+  assert.equal(f.attached.length, 0);
+  assert.equal(f.events.filter(event => event.type === 'media').length, 0);
 });
 
 test('registers queued video once with the accepted project and origin', async () => {
