@@ -80,8 +80,13 @@ test('new templates in projects pinned to 0.0.7 disable unavailable samples and 
     assert.equal(await page.getByRole('button', { name: `Add ${title} and run` }).isEnabled(), false,
       'running or stopping must not re-enable missing samples');
   }
-  await page.setViewportSize({ width: 360, height: 640 });
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  for (let i = 0; i < 5; i++) {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.waitForFunction(() => document.querySelector('.code-highlight').clientWidth === document.querySelector('.code-editor').clientWidth);
+    await page.setViewportSize({ width: 360, height: 640 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false,
+      'the highlight overlay must not overflow while its resize callback is pending');
+  }
   await page.screenshot({ path: '/tmp/easel-strudel-old-kit-360.png' });
   assert.deepEqual(errors, []); assert.deepEqual(audioErrors, []);
 });
