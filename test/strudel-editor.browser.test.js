@@ -2,15 +2,28 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { chromium } = require('playwright');
 const { createStrudelTemplate } = require('../src/strudel-template');
 const { buildCanvasDocument } = require('../src/canvas-policy');
+const { buildStrudelKit } = require('../scripts/build-canvas-kits');
 const instanceId = 'c'.repeat(32);
 const options = { skip: process.env.EASEL_RUN_BROWSER_TESTS !== '1', timeout: 45_000 };
+let kitBundle;
+
+function browserKit() {
+  if (kitBundle) return kitBundle;
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-strudel-browser-kit-'));
+  try {
+    buildStrudelKit(directory);
+    kitBundle = fs.readFileSync(path.join(directory, 'strudel.js'), 'utf8');
+    return kitBundle;
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+}
 
 async function fixture(t, saved) {
   const source = createStrudelTemplate({ instanceId }).files['index.html'];
-  let html = buildCanvasDocument({ html: source, kits: ['strudel'], kitBundles: { strudel: fs.readFileSync(path.join(__dirname, '../canvas-kits/strudel.js'), 'utf8') } });
+  let html = buildCanvasDocument({ html: source, kits: ['strudel'], kitBundles: { strudel: browserKit() } });
   if (saved) html = html.replace('<script id="easel-runtime-lifecycle">', `<script>window.__easelProjectState=${JSON.stringify({ strudel: { [instanceId]: saved } })};</script><script id="easel-runtime-lifecycle">`);
   const browser = await chromium.launch({ headless: true });
   t.after(async () => { await browser.close(); });
@@ -30,7 +43,7 @@ async function fixture(t, saved) {
   return { page, editor: page.getByRole('textbox', { name: 'Strudel code' }), errors, audioErrors,
     async reloadSource(code, preserved) {
       const updated = source.replace(/const DEFAULT_LIVE_CODE = [^\n]+;/, `const DEFAULT_LIVE_CODE = ${JSON.stringify(code)};`);
-      html = buildCanvasDocument({ html: updated, kits: ['strudel'], kitBundles: { strudel: fs.readFileSync(path.join(__dirname, '../canvas-kits/strudel.js'), 'utf8') } });
+      html = buildCanvasDocument({ html: updated, kits: ['strudel'], kitBundles: { strudel: browserKit() } });
       html = html.replace('<script id="easel-runtime-lifecycle">', `<script>window.__easelPreservedState=${JSON.stringify(preserved)};</script><script id="easel-runtime-lifecycle">`);
       await page.reload();
       await page.waitForFunction(() => window.EaselStrudel && /Ready/.test(document.querySelector('[id$="-status"]').textContent));
