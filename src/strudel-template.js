@@ -9,9 +9,9 @@ const DEFAULT_LIVE_CODE = `stack(
 )`;
 const EXAMPLES = [
   { title: 'Melody', description: 'Four notes on a triangle synth.', code: 'note("c4 e4 g4 b4").s("triangle").gain(.2)' },
-  { title: 'Kick', description: 'A local kick sample on every beat.', code: 's("bd*4").gain(.3)' },
-  { title: 'Snare', description: 'A local snare on the backbeat.', code: 's("~ sd ~ sd").gain(.25)' },
-  { title: 'Hi-hats', description: 'Closed hats with an open hat at the end.', code: 's("hh hh hh hh hh hh hh oh").gain(.15)' },
+  { title: 'Kick', description: 'A local kick sample on every beat.', code: 's("bd*4").gain(.3)', requiresSamples: true },
+  { title: 'Snare', description: 'A local snare on the backbeat.', code: 's("~ sd ~ sd").gain(.25)', requiresSamples: true },
+  { title: 'Hi-hats', description: 'Closed hats with an open hat at the end.', code: 's("hh hh hh hh hh hh hh oh").gain(.15)', requiresSamples: true },
   { title: 'Bass', description: 'A low note that changes each cycle.', code: 'note("<c2 a1 f1 g1>").s("sine").gain(.25)' },
   { title: 'Chords', description: 'Three notes played together.', code: 'note("c4,e4,g4").s("triangle").gain(.1).release(.3)' },
 ];
@@ -27,6 +27,14 @@ function bootStrudelSketch(instanceId) {
   const referencePanel = control('reference'), referenceButton = control('reference-toggle');
   const referenceClose = control('reference-close');
   const examples = Array.from(referencePanel.querySelectorAll?.('[data-example]') || []);
+  // Saved projects retain their kit pin, which may predate the sample registry.
+  const samplesAvailable = typeof window.EaselStrudelSamples?.prepare === 'function';
+  control('samples-unavailable').hidden = samplesAvailable;
+  for (const name of ['sample-sounds', 'sample-reference', 'sample-export']) control(name).hidden = !samplesAvailable;
+  for (const button of examples) if (!samplesAvailable && EXAMPLES[Number(button.dataset.example)]?.requiresSamples) {
+    button.textContent = 'Requires newer kit';
+    button.setAttribute('aria-describedby', `${id}-samples-unavailable`);
+  }
   const bpmInput = control('bpm'), volumeInput = control('volume'), status = control('status');
   const state = { bpm: 100, volume: 0.5, patternVersion: 1, playing: false };
   let context, controller, repl, disposed = false, pending = false, epoch = 0, startingEpoch = -1;
@@ -105,7 +113,7 @@ function bootStrudelSketch(instanceId) {
     volumeInput.value = String(state.volume);
     control('volume-value').textContent = `${Math.round(state.volume * 100)}%`;
     playButton.disabled = disposed || pending;
-    for (const button of examples) button.disabled = disposed || pending;
+    for (const button of examples) button.disabled = disposed || pending || (!samplesAvailable && EXAMPLES[Number(button.dataset.example)]?.requiresSamples);
   }
   function refreshApplyState() {
     needsApply = sourceNeedsApply || restoredCodeNeedsApply || codeEditor.value !== executedBuffer;
@@ -282,7 +290,7 @@ function bootStrudelSketch(instanceId) {
   function addExample(event) {
     if (disposed || pending) return;
     const layer = EXAMPLES[Number(event.currentTarget.dataset.example)]?.code;
-    if (!layer) return;
+    if (!layer || event.currentTarget.disabled) return;
     try {
       const source = window.EaselStrudelScore.appendLayer(codeEditor.value, layer);
       const result = setCode(source);
@@ -426,12 +434,12 @@ function createStrudelTemplate({ instanceId } = {}) {
 .export-controls{display:flex;align-items:center;gap:8px;margin-left:8px;padding-left:16px;border-left:1px solid var(--line);flex-wrap:wrap}.export-controls .setting{margin-left:0}.export-status{margin:0;padding:9px 16px;font-size:12px;line-height:1.5;color:var(--muted);border-bottom:1px solid var(--line);overflow-wrap:anywhere}.export-status[role=alert]{color:#9d3425}@media(max-width:760px){.export-controls{margin-left:0;padding-left:10px}}@media(max-width:420px){.export-controls{order:2;flex-basis:100%;border-left:0;border-top:1px solid var(--line);padding:8px 0 0}.export-controls .setting{order:0}}
 </style></head><body><main><header class="toolbar"><h1>Strudel</h1><button type="button" class="run" id="${id}-play">Run</button><button type="button" id="${id}-stop">Stop</button><label class="setting" for="${id}-bpm">BPM<input id="${id}-bpm" data-easel-managed-state type="number" min="30" max="240" step="1" value="100"></label><label class="setting" for="${id}-volume">Volume<input id="${id}-volume" data-easel-managed-state type="range" min="0" max="1" step="0.01" value="0.5"><output id="${id}-volume-value" for="${id}-volume">50%</output></label><div class="export-controls" role="group" aria-label="WAV export"><label class="setting" for="${id}-cycles">Cycles<input id="${id}-cycles" type="number" min="1" max="16" step="1" value="1"></label><button type="button" id="${id}-export" title="Save the executed pattern as a WAV in Media" disabled>Export WAV</button><button type="button" id="${id}-cancel-export" hidden disabled>Cancel export</button></div><button type="button" class="reference-toggle" id="${id}-reference-toggle" aria-controls="${id}-reference" aria-expanded="true">Reference</button></header><p class="export-status" id="${id}-export-status" role="status" aria-live="polite" hidden>Run code before saving.</p>
 <div class="workspace"><section class="editor-pane" aria-label="Strudel editor"><p class="editor-help" id="${id}-code-help">Ctrl+Enter: run selection or all code &nbsp; / &nbsp; Ctrl+. or Escape: stop</p><div class="code-surface"><pre class="code-highlight" id="${id}-highlight" aria-hidden="true"></pre><textarea class="code-editor" data-easel-managed-state id="${id}-code" aria-label="Strudel code" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" aria-describedby="${id}-code-help"></textarea></div><p class="status" id="${id}-status" role="status" aria-live="polite">Preparing sound…</p></section>
-<aside class="reference" id="${id}-reference" aria-label="References and examples"><div class="reference-heading"><h2>Reference &amp; examples</h2><button class="close" id="${id}-reference-close" type="button" aria-label="Hide reference"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button></div><h3>Add a layer</h3><p>Add &amp; run appends an example to your score and plays it. Your existing layers keep playing.</p>${exampleHtml}
-<h3>Pattern basics</h3><dl><dt>note("c4 e4 g4")</dt><dd>A sequence of pitches.</dd><dt>.s("triangle")</dt><dd>Choose the sound.</dd><dt>.gain(.3)</dt><dd>Set a pattern's loudness.</dd><dt>.fast(2) / .slow(2)</dt><dd>Double or halve the speed.</dd><dt>stack(a, b)</dt><dd>Play patterns together.</dd><dt>$: note("c4")</dt><dd>Give each line its own pattern.</dd><dt>setcpm(30)</dt><dd>30 cycles per minute = 120 BPM.</dd></dl><h3>Mini notation</h3><dl><dt>~ &nbsp; *4 &nbsp; &lt;c4 e4&gt;</dt><dd>Rest, repeat, alternate each cycle.</dd><dt>[c4 e4] &nbsp; c4,e4</dt><dd>Subdivide a beat, play together.</dd></dl><h3>Sounds available here</h3><p><code>sine · triangle · square · sawtooth<br>sbd · supersaw · pulse<br>white · pink · brown</code></p><p>These synths work offline. Local drums: <code>bd</code> kick, <code>sd</code> snare, <code>hh</code> closed hat, <code>oh</code> open hat, <code>cp</code> clap, <code>tom</code> and <code>rim</code>. Use <code>s("bd sd hh")</code>.</p>
-<h3>Your samples</h3><p>Attach a short WAV or MP3 from Media, then name it in your score. Suno one-shots and loops work too.</p><pre class="sample-code">await window.EaselStrudelSamples.add(
+<aside class="reference" id="${id}-reference" aria-label="References and examples"><div class="reference-heading"><h2>Reference &amp; examples</h2><button class="close" id="${id}-reference-close" type="button" aria-label="Hide reference"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button></div><h3>Add a layer</h3><p>Add &amp; run appends an example to your score and plays it. Your existing layers keep playing.</p><p id="${id}-samples-unavailable" hidden>This project uses an older Strudel kit. Synth examples still work. Create a new Strudel project from Templates to use local drums and attached samples.</p>${exampleHtml}
+<h3>Pattern basics</h3><dl><dt>note("c4 e4 g4")</dt><dd>A sequence of pitches.</dd><dt>.s("triangle")</dt><dd>Choose the sound.</dd><dt>.gain(.3)</dt><dd>Set a pattern's loudness.</dd><dt>.fast(2) / .slow(2)</dt><dd>Double or halve the speed.</dd><dt>stack(a, b)</dt><dd>Play patterns together.</dd><dt>$: note("c4")</dt><dd>Give each line its own pattern.</dd><dt>setcpm(30)</dt><dd>30 cycles per minute = 120 BPM.</dd></dl><h3>Mini notation</h3><dl><dt>~ &nbsp; *4 &nbsp; &lt;c4 e4&gt;</dt><dd>Rest, repeat, alternate each cycle.</dd><dt>[c4 e4] &nbsp; c4,e4</dt><dd>Subdivide a beat, play together.</dd></dl><h3>Sounds available here</h3><p><code>sine · triangle · square · sawtooth<br>sbd · supersaw · pulse<br>white · pink · brown</code></p><p>These synths work offline.</p><p id="${id}-sample-sounds">Local drums: <code>bd</code> kick, <code>sd</code> snare, <code>hh</code> closed hat, <code>oh</code> open hat, <code>cp</code> clap, <code>tom</code> and <code>rim</code>. Use <code>s("bd sd hh")</code>.</p>
+<section id="${id}-sample-reference"><h3>Your samples</h3><p>Attach a short WAV or MP3 from Media, then name it in your score. Suno one-shots and loops work too.</p><pre class="sample-code">await window.EaselStrudelSamples.add(
   'suno_snare', 'MEDIA_ASSET_ID'
 )
-s("suno_snare*4").gain(.25)</pre><p>Up to 10 seconds and 4 MiB per sample. Keep the registration line in your score so it works again after reopening. Adding a sample keeps the current audio playing.</p><h3>WAV export</h3><p>Choose Cycles in the top bar, then Export WAV to save the executed pattern to Media. 1–16 cycles, up to 30 seconds. WAV export supports sine, triangle, square, sawtooth, sbd and white, pink or brown noise with note, gain, attack, decay, sustain and release. Local drums and registered samples also export. Other synths, remote banks, effects, sample pitch, speed and slicing are not supported for export.</p></aside></div></main><script id="easel-runtime-strudel-export-policy">
+s("suno_snare*4").gain(.25)</pre><p>Up to 10 seconds and 4 MiB per sample. Keep the registration line in your score so it works again after reopening. Adding a sample keeps the current audio playing.</p></section><h3>WAV export</h3><p>Choose Cycles in the top bar, then Export WAV to save the executed pattern to Media. 1–16 cycles, up to 30 seconds. WAV export supports sine, triangle, square, sawtooth, sbd and white, pink or brown noise with note, gain, attack, decay, sustain and release. <span id="${id}-sample-export">Local drums and registered samples also export.</span> Other synths, remote banks, effects, sample pitch, speed and slicing are not supported for export.</p></aside></div></main><script id="easel-runtime-strudel-export-policy">
 // Plain-data export policy, shared with the host. No executable events cross the bridge.
 ${validateStrudelSnapshot.toString()}
 ${queryStrudelSnapshot.toString()}

@@ -470,7 +470,7 @@
     "Validate license/source materials for the exact transitive dependency tree and Electron/Chromium build in each final artifact.",
     "Provide matching preferred Corresponding Source, revision, lockfiles, modifications and build/install materials via an applicable GPL section 6 route.",
     "Re-run full cross-platform packaged runtime checks; source alignment and archive inspection do not establish release clearance.",
-    "Strudel is integrated in the unreleased template foundation. Retain AGPL-3.0-or-later and all transitive dependency/source obligations; the missing chord-voicings notice, final corresponding-source review and sandboxed renderer runtime proof remain open."
+    "Strudel shipped in 0.0.6/0.0.7. PR #19 has dated native renderer/WAV and cross-platform packaging evidence on 9 October 2026. Retain AGPL-3.0-or-later and all transitive dependency/source obligations; the missing chord-voicings notice and final corresponding-source/artifact review remain open."
   ],
   "prior_grants": "Root package metadata previously declared ISC. No existing grant is revoked by the GPL declaration; third-party terms remain intact.",
   "provenance_evidence": [

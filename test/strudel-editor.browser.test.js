@@ -21,9 +21,21 @@ function browserKit() {
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 }
 
-async function fixture(t, saved) {
+function legacyBrowserKit() {
+  // Rebuild the 0.0.7 entry: the project pin predates EaselStrudelSamples.
+  const { prepareStrudelBundle } = require('../src/strudel-kit');
+  const built = require('esbuild').buildSync({ stdin: {
+    contents: `export * from '@strudel/web';
+import { appendStrudelLayer, highlightStrudel } from './strudel-score.js';
+window.EaselStrudelScore = Object.freeze({ appendLayer: appendStrudelLayer, highlight: highlightStrudel });`,
+    resolveDir: path.resolve(__dirname, '../src'), loader: 'js',
+  }, bundle: true, write: false, format: 'iife', globalName: 'strudel', platform: 'browser', target: ['chrome120'] });
+  return prepareStrudelBundle(built.outputFiles[0].text);
+}
+
+async function fixture(t, saved, kit = browserKit(), documentHtml) {
   const source = createStrudelTemplate({ instanceId }).files['index.html'];
-  let html = buildCanvasDocument({ html: source, kits: ['strudel'], kitBundles: { strudel: browserKit() } });
+  let html = documentHtml || buildCanvasDocument({ html: source, kits: ['strudel'], kitBundles: { strudel: kit } });
   if (saved) html = html.replace('<script id="easel-runtime-lifecycle">', `<script>window.__easelProjectState=${JSON.stringify({ strudel: { [instanceId]: saved } })};</script><script id="easel-runtime-lifecycle">`);
   const browser = await chromium.launch({ headless: true });
   t.after(async () => { await browser.close(); });
@@ -51,6 +63,28 @@ async function fixture(t, saved) {
     },
   };
 }
+
+test('new templates in projects pinned to 0.0.7 disable unavailable samples and retain synth playback', options, async t => {
+  const { page, editor, errors, audioErrors } = await fixture(t, undefined, legacyBrowserKit());
+  assert.equal(await page.evaluate(() => typeof window.EaselStrudelSamples), 'undefined');
+  for (const title of ['Kick', 'Snare', 'Hi-hats']) {
+    assert.equal(await page.getByRole('button', { name: `Add ${title} and run` }).isEnabled(), false,
+      `${title} must not offer to play a missing sample`);
+  }
+  assert.equal(await page.getByText(/older Strudel kit/).isVisible(), true);
+  assert.equal(await page.getByRole('heading', { name: 'Your samples', exact: true }).isVisible(), false);
+  await page.getByRole('button', { name: 'Add Melody and run' }).click();
+  await hasSignal(page);
+  await editor.press('Escape');
+  for (const title of ['Kick', 'Snare', 'Hi-hats']) {
+    assert.equal(await page.getByRole('button', { name: `Add ${title} and run` }).isEnabled(), false,
+      'running or stopping must not re-enable missing samples');
+  }
+  await page.setViewportSize({ width: 360, height: 640 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: '/tmp/easel-strudel-old-kit-360.png' });
+  assert.deepEqual(errors, []); assert.deepEqual(audioErrors, []);
+});
 
 async function hasSignal(page) {
   await page.waitForFunction(() => strudel.getIsStarted() === true && strudel.getSuperdoughAudioController().output.destinationGain?.gain.value > 0);
@@ -322,4 +356,35 @@ test('sample identity and export remain stable on a 44.1 kHz playback device', o
   const result = await renderer.evaluate(nativeRenderScript(captured.snapshot, assets));
   assert.ok(Buffer.from(result.wavBase64, 'base64').length > 44);
   await page.evaluate(() => strudel.getAudioContext().close());
+});
+
+test('saved projects restore attached sample registrations from persisted score and media bytes', options, async t => {
+  const { createCanvasStore } = require('../src/canvas-store');
+  const { createCanvasMediaStore } = require('../src/canvas-media-store');
+  const { createSourceArchiveFixture } = require('./helpers/canvas-kit-source');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-strudel-saved-sample-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const kit = browserKit();
+  const media = createCanvasMediaStore({ userDataPath: root });
+  const data = require('../assets/strudel-drums/bank.json').samples.find(sample => sample.name === 'sd').data;
+  const assetId = await media.save({ data, mimeType: 'audio/wav', name: 'My snare.wav' });
+  const store = createCanvasStore({ userDataPath: root, kitBundles: { strudel: kit }, assetStore: media,
+    readKitSourceArchive: () => createSourceArchiveFixture(kit) });
+  const documentPath = `sketches/${instanceId}/index.html`;
+  const project = store.createTemplateDocument({ title: 'Saved samples', path: documentPath,
+    html: createStrudelTemplate({ instanceId }).files['index.html'], kits: ['strudel'] });
+  await store.attachAsset(project.id, { assetId });
+  const code = `await window.EaselStrudelSamples.add('my_snare', '${assetId}')\ns("my_snare*4").gain(.25)`;
+  store.saveProjectState(project.id, { state: { strudel: { [instanceId]: { code, bpm: 120, volume: .3 } } } });
+  // Reopen without an installed kit: playback must use the retained project pin.
+  const reopened = createCanvasStore({ userDataPath: root, assetStore: media });
+  const { page, editor, errors, audioErrors } = await fixture(t, undefined, kit, reopened.getDocument(project.id, documentPath).html);
+  assert.equal(await editor.inputValue(), code);
+  assert.equal(await page.evaluate(() => strudel.getIsStarted() === true), false);
+  assert.equal(await page.evaluate(id => EaselCanvas.assets.getUrl(id), assetId), 'data:audio/wav;base64,' + data);
+  await editor.press('Control+Enter');
+  await hasSignal(page);
+  assert.equal(await page.evaluate(() => EaselStrudelSamples.get('my_snare').assetId), assetId);
+  await editor.press('Escape');
+  assert.deepEqual(errors, []); assert.deepEqual(audioErrors, []);
 });

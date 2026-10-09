@@ -49,7 +49,7 @@ function createFakeViewDependencies() {
   return { state, WebContentsView, session };
 }
 
-test('attaching an audio sample refreshes its runtime URL without replacing the document or requiring reload', async t => {
+for (const fragment of ['', '#section']) test(`attaching an audio sample refreshes its runtime URL without reload${fragment ? ' after fragment navigation' : ''}`, async t => {
   const fake = createFakeViewDependencies();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-live-sample-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -61,6 +61,13 @@ test('attaching an audio sample refreshes its runtime URL without replacing the 
   const canvas = await createCanvasView({ WebContentsView: fake.WebContentsView, sessionFactory: async () => ({ session: fake.session }), canvasStore: store });
   await canvas.present({ title: 'Live samples', html: '<main>Score</main>', assets: [] });
   const url = fake.state.url, generation = canvas.getContract().runtimeGeneration;
+  const realm = { window: {}, location: { href: url + fragment }, Object, Promise };
+  if (fragment) fake.state.events['did-start-navigation']({ url: realm.location.href, isSameDocument: true, isMainFrame: true });
+  fake.state.commandHandler = (method, params) => {
+    if (method === 'Runtime.evaluate' && params.expression.includes('const added=')) {
+      return { result: { value: vm.runInNewContext(params.expression, realm) } };
+    }
+  };
   const result = await canvas.attachCanvasAssets({ assetIds: [assetId], validate: false });
   assert.equal(result.runtimeAssetsUpdated, true);
   assert.equal(canvas.getContract().sourcePendingReload, false);
@@ -68,12 +75,12 @@ test('attaching an audio sample refreshes its runtime URL without replacing the 
   assert.equal(fake.state.url, url);
   const command = fake.state.commands.find(command => command.params?.expression.includes('const added='));
   assert.ok(command);
-  const realm = { window: {}, location: { href: url }, Object, Promise };
-  vm.runInNewContext(command.params.expression, realm);
   assert.equal(realm.window.__easelProjectAssets[assetId].url, 'data:audio/wav;base64,' + data);
-  const switched = { window: {}, location: { href: 'easel-canvas://different-project' }, Object, Promise };
-  assert.throws(() => vm.runInNewContext(command.params.expression, switched), /canvas changed/i);
-  assert.equal(switched.window.__easelProjectAssets, undefined);
+  for (const href of ['easel-canvas://different-project#section', url.replace(/generation=\d+/, 'generation=999') + fragment, url + '&other=1' + fragment]) {
+    const switched = { window: {}, location: { href }, Object, Promise };
+    assert.throws(() => vm.runInNewContext(command.params.expression, switched), /canvas changed/i);
+    assert.equal(switched.window.__easelProjectAssets, undefined);
+  }
   canvas.destroy();
 });
 

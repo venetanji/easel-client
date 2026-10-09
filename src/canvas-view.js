@@ -286,7 +286,7 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
       assets[id] = { ...metadata, url: `data:${asset.mimeType};base64,${data}` };
     }
     check();
-    const installed = await evaluate(`(() => {if(location.href!==${JSON.stringify(url)})throw new Error('The canvas changed before attached media could be installed.');const added=${JSON.stringify(assets).replace(/</g, '\\u003c')};window.__easelProjectAssets=Object.freeze({...window.__easelProjectAssets,...Object.fromEntries(Object.entries(added).map(([id,asset])=>[id,Object.freeze(asset)]))});window.__easelProjectAssetsReady=Promise.resolve(window.__easelProjectAssets);return true;})()`);
+    const installed = await evaluate(`(() => {if(location.href.split('#')[0]!==${JSON.stringify(url.split('#')[0])})throw new Error('The canvas changed before attached media could be installed.');const added=${JSON.stringify(assets).replace(/</g, '\\u003c')};window.__easelProjectAssets=Object.freeze({...window.__easelProjectAssets,...Object.fromEntries(Object.entries(added).map(([id,asset])=>[id,Object.freeze(asset)]))});window.__easelProjectAssetsReady=Promise.resolve(window.__easelProjectAssets);return true;})()`);
     check();
     if (installed !== 'true') throw new Error('The attached media resolver did not confirm its update. Reload the project.');
     return { runtimeAssetsUpdated: true };

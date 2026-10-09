@@ -231,6 +231,13 @@ The missing `chord-voicings` notice and final source review remain caveats.
 
 ## Verification
 
+The current REPL, bundled drums and attached-sample evidence is recorded in the
+[9 October 2026 compatibility update](strudel-compatibility.md#repl-and-percussion-evidence---9-october-2026).
+PR #19 passed the native Strudel/WAV probe and Windows, macOS and Linux packaging.
+Browser tests additionally cover uninterrupted live edits, local worklet effects,
+sample playback/export, 44.1 kHz device normalization and saved-project sample
+restoration. The earlier native-only evidence below remains a dated baseline.
+
 [Test run 37306231481](https://github.com/venetanji/easel-client/actions/runs/37306231481)
 passed the disposable native kit, editable starter and production WAV fixture at
 `b3cb58a` on 5 October 2026, on Linux x64 / Electron 44.4.5 / Chromium
