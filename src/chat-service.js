@@ -3,7 +3,10 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { buildUserContent, handleMcpResult, runAgentTurn } = require('./agent');
 const { createLiteLLMClient } = require('./litellm-client');
-const { createMediaMcpClient } = require('./media-mcp-client');
+const { createMediaMcpClient, AUDIO_GENERATION_TOOLS, AUDIO_TOOLS } = require('./media-mcp-client');
+const { registerAudioTrackJobs, managedAudioTrackResult, enrichAudioDownload } = require('./audio-track-jobs');
+const { mediaJobSummary } = require('./media-job-store');
+const { generatedMediaName, isGenericGeneratedName } = require('./media-names');
 const { validateChatMessage } = require('./ipc-contract');
 const { canvasInputMatchesScope, canvasInputSummary, formatCanvasInputMessage, inputId } = require('./canvas-input');
 const { validateApprovedMediaModel } = require('./canvas-input-store');
@@ -146,6 +149,7 @@ function createChatService({
     if (!canvasController) return canvasController;
     return {
       ...canvasController,
+      listAudioGenerations: (args) => canvasController.listAudioGenerations?.(args, { chatId: turnChatId }),
       ...Object.fromEntries(Object.values(TIMELINE_METHODS).map((method) => [method, (args) => {
         args = bindTimelineToolTarget(args, turnOptions.timelineSelection, canvasController.assertTimelineSelectionOrigin);
         if (typeof canvasController?.[method] !== 'function') throw new Error('Timeline editing is unavailable.');
@@ -252,14 +256,29 @@ function createChatService({
       const mcp = {
         listTools: (...args) => rawMcp.listTools(...args),
         close: () => rawMcp.close(),
-        callTool: (name, args, options) => {
-          if (trackJob && ['generate_video', 'generate_image', 'edit_image', 'create_image_variation'].includes(name)) {
+        callTool: async (name, args, options) => {
+          let managedAudioJob;
+          if (name === 'download_audio') {
+            managedAudioJob = mediaJobStore?.list({ raw: true }).find(entry => entry.mediaType === 'audio' && entry.remoteId === args.trackId && entry.modelId === args.model && !['cancelled', 'failed'].includes(entry.status));
+            if (managedAudioJob) {
+              const reused = await managedAudioTrackResult(managedAudioJob, mediaAssetStore);
+              if (reused) return reused;
+            }
+          }
+          if (AUDIO_GENERATION_TOOLS.has(name) || name === 'download_audio' || (trackJob && ['generate_video', 'generate_image', 'edit_image', 'create_image_variation'].includes(name))) {
             const submittedProjectId = canvasController?.getCurrentCanvasId?.() || '';
             // Stop ends the agent turn; shutdown still waits for an accepted receipt to be saved.
             const submission = (async () => {
               const submissionMcp = await mcpFactory(launchOptions);
               try {
-                const result = await submissionMcp.callTool(name, args);
+                let result = await submissionMcp.callTool(name, args);
+                if (name === 'download_audio') result = await enrichAudioDownload(result, args, submissionMcp);
+                if (AUDIO_GENERATION_TOOLS.has(name)) {
+                  result = await registerAudioTrackJobs(result, { model: args.model, prompt: args.prompt, projectId: submittedProjectId }, trackJob);
+                  if (signal.aborted && !shuttingDown) for (const tracked of result.structuredContent?.monitoredAudioJobs || []) {
+                    if (tracked.id) mediaJobStore?.update(tracked.id, { autoResume: false });
+                  }
+                }
                 if (!result.isError && result.structuredContent?.job) {
                   const tracked = await trackJob({ job: result.structuredContent.job,
                     modelId: result.structuredContent.job.modelId || args.model, mediaType: name === 'generate_video' ? 'video' : 'image',
@@ -268,9 +287,16 @@ function createChatService({
                 }
                 else if (!result.isError) {
                   const saved = JSON.parse(await handleMcpResult(result, mediaAssetStore, (event) => {
-                    if (chatId === turnChatId && !shuttingDown) onEvent?.(event);
-                  }, { generated: true, projectId: submittedProjectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets }));
-                  return { content: (result.content || []).filter((item) => item.type === 'text'), structuredContent: saved };
+                    if (event.type === 'audio-generation' || (chatId === turnChatId && !shuttingDown)) onEvent?.({ ...event, chatId: turnChatId });
+                  }, { generated: !AUDIO_GENERATION_TOOLS.has(name), projectId: submittedProjectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets,
+                    ...(AUDIO_TOOLS.has(name) ? { audioContext: { toolName: name, modelId: args.model, trackId: args.trackId } } : {}) }));
+                  if (managedAudioJob && saved.assets?.length) {
+                    try {
+                      const updated = mediaJobStore.update(managedAudioJob.id, { assets: saved.assets });
+                      onEvent?.({ type: 'media-job', job: mediaJobSummary(updated) });
+                    } catch { /* A removed receipt must not prevent an explicit download. */ }
+                  }
+                  return { content: AUDIO_TOOLS.has(name) ? [] : (result.content || []).filter((item) => item.type === 'text'), structuredContent: saved };
                 }
                 return result;
               } finally { await submissionMcp.close(); }
@@ -283,8 +309,8 @@ function createChatService({
           const remoteId = name === 'get_video' ? args.videoId : name === 'get_image_job' ? args.jobId : '';
           const saved = remoteId && mediaJobStore?.list({ raw: true }).find((entry) => entry.remoteId === remoteId && entry.modelId === args.model);
           if (!saved) return rawMcp.callTool(name, args, options);
-          const job = { id: saved.remoteId, modelId: saved.modelId, status: saved.status === 'ready' ? 'completed' : saved.status === 'failed' ? 'failed' : 'in_progress', progress: saved.progress, ...(saved.error ? { error: saved.error } : {}) };
-          return Promise.resolve({ content: [{ type: 'text', text: 'This job is managed by the persistent host monitor. Do not resubmit or poll it in the agent turn.' }], structuredContent: { job, ...(saved.status === 'ready' ? { assets: saved.assets } : {}) } });
+          const job = { id: saved.remoteId, modelId: saved.modelId, status: saved.status === 'ready' ? 'completed' : ['failed', 'cancelled'].includes(saved.status) ? saved.status : 'in_progress', progress: saved.progress, ...(saved.error ? { error: saved.error } : {}) };
+          return Promise.resolve({ content: [{ type: 'text', text: saved.status === 'cancelled' ? 'Job tracking was canceled. The receipt is saved, and the host no longer polls it.' : 'This job is managed by the persistent host monitor. Do not resubmit or poll it in the agent turn.' }], structuredContent: { job, ...(saved.status === 'ready' ? { assets: saved.assets } : {}) } });
         },
       };
       let result;
@@ -640,6 +666,15 @@ function createChatService({
     const currentId = chatId;
     const currentTitle = chatTitle;
     const currentHistory = [...history];
+    const audioTracks = new Map();
+    for (const message of currentHistory) {
+      if (message.role !== 'tool' || typeof message.content !== 'string') continue;
+      try {
+        const audio = JSON.parse(message.content).audio;
+        const track = audio?.track || audio;
+        if (audio?.modelId && audio.trackId && typeof track?.title === 'string' && track.title.trim()) audioTracks.set(`${audio.modelId}:${audio.trackId}`, track);
+      } catch { /* Ordinary tool output may not contain audio metadata. */ }
+    }
     const images = new Map();
     const media = [];
     const seenMedia = new Set();
@@ -675,7 +710,14 @@ function createChatService({
         const references = [...(Array.isArray(result.assets) ? result.assets : []), ...(result.assetId ? [{ assetId: result.assetId }] : [])];
         for (const asset of references) {
           if (!/^(?:[a-f0-9]{32}|[a-f0-9]{64})$/.test(asset.assetId || '') || images.has(asset.assetId)) continue;
-          const metadata = /^image\//.test(asset.mimeType) ? null : await mediaAssetStore.getMetadata?.(asset.assetId);
+          let metadata = /^image\//.test(asset.mimeType) ? null : await mediaAssetStore.getMetadata?.(asset.assetId);
+          const track = result.audio && audioTracks.get(`${result.audio.modelId}:${result.audio.trackId}`);
+          if (metadata?.mimeType?.startsWith('audio/') && track && isGenericGeneratedName(metadata.name) && typeof mediaAssetStore.updateMetadata === 'function') {
+            try {
+              metadata = await mediaAssetStore.updateMetadata(asset.assetId, { name: generatedMediaName(track.title, metadata.mimeType),
+                ...(Number.isFinite(track.duration) && track.duration > 0 && track.duration <= 3600 ? { duration: track.duration } : {}) }, { onlyGenericName: true });
+            } catch { /* A metadata repair must not hide playable saved audio. */ }
+          }
           if (metadata && /^(video|audio)\//.test(metadata.mimeType)) {
             if (seenMedia.has(asset.assetId)) continue;
             seenMedia.add(asset.assetId);

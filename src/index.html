@@ -23,6 +23,7 @@
         --coral: #b84e38;
         --gold: #ad7930;
         --display: Georgia, "Iowan Old Style", serif;
+        --activity-rail-width: 80px;
         --panel-header-height: 49px;
       }
       * { box-sizing: border-box; }
@@ -36,7 +37,7 @@
       * { scrollbar-color: #aab8ac transparent; scrollbar-width: thin; }
       *::-webkit-scrollbar { width: 9px; height: 9px; }
       *::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 8px; background: #aab8ac; background-clip: padding-box; }
-      .studio { --left-column-width: 360px; width: 100%; height: 100%; min-width: 0; min-height: 0; display: grid; grid-template-columns: 68px minmax(280px, var(--left-column-width)) 1px minmax(300px, 1fr); grid-template-rows: 48px minmax(0, 1fr); }
+      .studio { --left-column-width: 360px; width: 100%; height: 100%; min-width: 0; min-height: 0; display: grid; grid-template-columns: var(--activity-rail-width) minmax(280px, var(--left-column-width)) 1px minmax(300px, 1fr); grid-template-rows: 48px minmax(0, 1fr); }
       .topbar { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; gap: 20px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--paper); }
       .brand { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 0 0 auto; }
       .brand-mark { width: 26px; height: 26px; display: block; flex-shrink: 0; color: var(--green); }
@@ -59,25 +60,26 @@
       .active-count { min-width: 19px; min-height: 19px; display: inline-grid; place-items: center; border-radius: 6px; padding: 0 5px; color: var(--green-deep); background: var(--green-wash); font-size: 11px; font-variant-numeric: tabular-nums; }
       .activity-bar { grid-column: 1; grid-row: 2; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 7px 4px; border-right: 1px solid var(--line); background: var(--paper-deep); }
       .activity-spacer { flex: 1; }
-      .activity-button { position: relative; width: 34px; height: 36px; display: grid; place-items: center; border: 0; border-radius: 5px; color: var(--muted); background: transparent; }
+      .activity-button { position: relative; width: 72px; height: 50px; display: grid; place-items: center; align-content: center; gap: 3px; border: 0; border-radius: 5px; padding: 6px; color: var(--muted); background: transparent; }
       .activity-button:hover, .activity-button:focus-visible { color: var(--green-deep); background: var(--green-wash); }
-      .activity-button[aria-pressed="true"] { color: var(--green-deep); background: var(--green-wash); }
+      .activity-button[aria-pressed="true"] { color: var(--green-deep); background: var(--green-wash); font-weight: 700; box-shadow: inset 0 0 0 1px #aabdab; }
       .activity-button[aria-pressed="true"]::after { position: absolute; left: -4px; width: 2px; height: 20px; background: var(--green); content: ""; }
       .activity-button svg { width: 19px; height: 19px; }
-      #nav-templates { width: 60px; height: 50px; align-content: center; gap: 3px; }
-      .activity-label { font-size: 10px; font-weight: 650; line-height: 1.2; }
-      #nav-templates[aria-pressed="true"] { font-weight: 700; box-shadow: inset 0 0 0 1px #aabdab; }
+      .activity-label { font-size: 11px; font-weight: 650; line-height: 1.2; }
       .chat-unread { position: absolute; top: 0; right: -1px; min-width: 17px; height: 17px; display: grid; place-items: center; border-radius: 9px; padding: 0 4px; color: white; background: var(--coral); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; pointer-events: none; }
       .media-generating { position: absolute; bottom: 0; right: 0; width: 15px; height: 15px; display: grid; place-items: center; border-radius: 50%; color: var(--green); background: var(--paper-deep); pointer-events: none; }
       .media-generating::after { width: 9px; height: 9px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: media-job-turn 1s linear infinite; content: ""; }
-      .studio[data-sidebar="closed"] { grid-template-columns: 68px 0 0 minmax(0, 1fr); }
+      .studio[data-sidebar="closed"] { grid-template-columns: var(--activity-rail-width) 0 0 minmax(0, 1fr); }
       .studio[data-sidebar="closed"] .left-column, .studio[data-sidebar="closed"] .workbench-splitter { display: none; }
       .left-column { position: relative; grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
       .workbench-splitter { position: relative; z-index: 5; grid-column: 3; grid-row: 2; width: 9px; margin-left: -4px; cursor: col-resize; touch-action: none; }
       .workbench-splitter::before { position: absolute; inset: 0 4px; background: var(--line); content: ""; transition: background-color 120ms ease; }
       .workbench-splitter:hover::before, .workbench-splitter:focus-visible::before, .workbench-splitter.is-dragging::before { background: var(--green); }
       .panel { min-width: 0; min-height: 0; background: var(--paper); }
-      .library, .media-drawer, .templates-drawer { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; overflow: hidden; background: var(--paper); animation: drawer-reveal 180ms cubic-bezier(.16, 1, .3, 1); }
+      .library, .media-drawer, .templates-drawer { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; overflow: hidden; background: var(--paper); }
+      .library > .library-panel-content, .media-tab-panel > .library-panel-content, .templates-content, .chat-history-list { animation: drawer-content-reveal 140ms cubic-bezier(.16, 1, .3, 1); }
+      /* Keep drafts mounted while hiding chat behind the active drawer. */
+      .conversation[inert] { visibility: hidden; }
       .section-head { min-height: var(--panel-header-height); display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
       .section-head h2 { flex: 0 0 auto; }
       .library-panel-content { min-height: 0; display: flex; flex: 1; flex-direction: column; overflow: auto; }
@@ -92,7 +94,14 @@
       h2 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: -.01em; }
       .library-content { padding: 12px; }
       .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 16px 10px; align-content: start; }
-      .canvas-list { display: grid; align-content: start; }
+      .canvas-list { display: grid; align-content: start; margin-inline: -8px; }
+      .drawer-list-row { display: block; width: 100%; min-height: 42px; border: 1px solid transparent; border-radius: 6px; padding: 10px 8px; color: var(--ink); background: transparent; text-align: left; font-size: 12px; font-weight: 600; line-height: 1.45; }
+      button.drawer-list-row:hover:not(:disabled), .drawer-list-row[aria-current="true"], .drawer-list-row[aria-pressed="true"] { border-color: var(--line); color: var(--green-deep); background: var(--green-wash); }
+      .drawer-list-row strong { display: block; font-size: 12px; font-weight: 600; line-height: 1.45; }
+      .drawer-list-row small, .drawer-list-row time, .drawer-list-description { display: block; color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.5; }
+      .drawer-list-row small, .drawer-list-row time { margin-top: 4px; }
+      .drawer-list-copy { flex: 1; min-width: 0; display: grid; gap: 4px; overflow-wrap: anywhere; }
+      .drawer-list-chevron { width: 14px; height: 14px; flex: 0 0 auto; color: var(--muted); }
       .empty-library { margin: 8px 4px; color: #56665d; font-size: 12px; line-height: 1.5; }
       .runtime-intro { margin: 2px 2px 11px; }
       .runtime-intro h3 { margin: 0; color: #2d4136; font: 600 17px/1.1 var(--display); }
@@ -111,20 +120,20 @@
       .kit-availability strong { color: #2e4438; font-size: 12px; }
       .kit-availability small { margin-top: 4px; color: #5e6c63; font-size: 12px; line-height: 1.4; }
       .kit-status { min-height: 18px; margin: 10px 19px 16px; color: var(--muted); font-size: 12px; }
-      .templates-content { min-height: 0; overflow: auto; padding: 4px 16px 20px; }
-      .templates-intro, .templates-status { margin: 12px 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .templates-content { min-height: 0; overflow: auto; padding: 4px 4px 20px; }
+      .templates-intro, .templates-status { margin: 12px 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
       .templates-status:empty { display: none; }
       .templates-status[data-error="true"] { color: var(--coral); }
-      .template-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 3px 8px; padding: 13px 0; border-bottom: 1px solid var(--line); }
-      .template-entry h3, .template-choice { margin: 0; color: var(--ink); font-size: 13px; font-weight: 650; text-align: left; }
-      .template-choice { min-height: 30px; border: 0; border-radius: 5px; padding: 4px 6px; margin: -4px -6px; background: transparent; }
-      .template-choice:hover, .template-choice[aria-pressed="true"] { color: var(--green); background: var(--green-wash); }
-      .template-state { color: var(--muted); font-size: 11px; }
-      .template-entry p { grid-column: 1 / -1; margin: 3px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
-      .template-detail { margin-top: 22px; color: var(--ink); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+      .template-entry { display: flex; align-items: center; gap: 12px; }
+      .template-entry + .template-entry { margin-top: 2px; }
+      .template-state { color: var(--muted); font-size: 11px; font-weight: 400; }
+      .template-detail { margin: 22px 8px 0; color: var(--ink); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+      .template-back { display: flex; width: fit-content; margin-bottom: 16px; }
+      .template-back svg { width: 14px; height: 14px; flex: 0 0 auto; }
       .template-detail-title { margin: 0 0 10px; font: 600 20px/1.2 var(--display); }
       .template-technical, .template-planned { margin-top: 18px; }
       .template-technical summary, .template-planned summary { min-height: 32px; padding-block: 7px; color: var(--green); cursor: pointer; font-size: 12px; font-weight: 600; }
+      .template-planned summary { padding-inline: 8px; }
       .template-technical summary:focus-visible, .template-planned summary:focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
       .template-detail h4 { margin: 16px 0 4px; font-size: 12px; }
       .template-detail p { margin: 7px 0; }
@@ -134,7 +143,7 @@
       .template-unavailable { color: var(--coral); }
       .template-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
       .template-actions .button { max-width: 100%; white-space: normal; text-align: left; }
-      .template-recovery { margin: 12px 0 18px; padding-bottom: 16px; border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+      .template-recovery { margin: 12px 8px 18px; padding-bottom: 16px; border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
       .template-recovery h3 { margin: 0 0 5px; font-size: 13px; }
       .template-recovery p { margin: 0 0 10px; }
       .conversation { width: 100%; display: flex; flex-direction: column; overflow: hidden; }
@@ -143,17 +152,14 @@
       .conversation-title { display: grid; gap: 3px; min-width: 0; }
       .conversation-actions { flex-shrink: 0; }
       .chat-history { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; min-height: 0; background: var(--paper); }
-      .chat-history .section-head h2 { font: 600 20px/1.15 var(--display); letter-spacing: -.02em; }
-      .chat-history-list { flex: 1; min-height: 0; overflow: auto; padding: 8px 12px; }
-      .chat-history-row { display: block; width: 100%; min-height: 66px; border: 0; border-radius: 6px; padding: 11px 10px; color: var(--ink); background: transparent; text-align: left; }
+      .chat-history-list { flex: 1; min-height: 0; overflow: auto; padding: 8px 4px; }
       .chat-history-row + .chat-history-row { margin-top: 2px; }
-      .chat-history-row strong { display: block; overflow: hidden; font-size: 12px; font-weight: 600; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
-      .chat-history-row time { display: block; margin-top: 5px; font-variant-numeric: tabular-nums; }
-      .chat-history-row:hover:not(:disabled), .chat-history-list [aria-current="true"] { color: var(--green); background: var(--green-wash); }
+      .chat-history-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .chat-history-row time { font-variant-numeric: tabular-nums; }
       .chat-history-list time, #chat-history-status { color: var(--muted); font-size: 11px; }
-      #chat-history-status { margin: 12px 20px 0; line-height: 1.5; }
+      #chat-history-status { margin: 12px 12px 0; line-height: 1.5; }
       #chat-history-status:empty { display: none; }
-      .chat-history-note { flex: 0 0 auto; margin: 0; border-top: 1px solid var(--line); padding: 12px 20px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+      .chat-history-note { flex: 0 0 auto; margin: 0; border-top: 1px solid var(--line); padding: 12px; color: var(--muted); font-size: 11px; line-height: 1.5; }
       .conversation-content { min-height: 0; display: flex; flex: 1; flex-direction: column; overflow: hidden; }
       #messages { flex: 1; min-height: 0; overflow: auto; padding: 14px 12px; display: flex; flex-direction: column; align-items: stretch; gap: 16px; }
       .message { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; font-size: 12px; }
@@ -260,8 +266,8 @@
       #send[data-action="stop"]:hover:not(:disabled) { color: #7c2d20; background: #ead3c8; }
       .canvas-panel { grid-column: 4; grid-row: 2; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--paper); }
       .canvas-tabs { min-height: var(--panel-header-height); flex: 0 0 auto; display: flex; align-items: stretch; overflow-x: auto; padding: 0; border-bottom: 1px solid var(--line); background: var(--paper); }
-      .canvas-tab-list { display: flex; align-items: stretch; gap: 4px; flex: 0 0 auto; }
-      .canvas-tab { min-width: 0; max-width: 240px; flex: 0 0 auto; display: flex; align-items: stretch; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; }
+      .canvas-tab-list { display: flex; align-items: stretch; gap: 0; flex: 0 0 auto; }
+      .canvas-tab { min-width: 0; max-width: 240px; flex: 0 0 auto; display: flex; align-items: stretch; border-right: 1px solid var(--line); border-bottom: 2px solid transparent; color: var(--muted); background: transparent; }
       .canvas-tab[data-active="true"] { border-bottom-color: var(--green); color: var(--green-deep); }
       .canvas-tab-select { min-width: 0; display: flex; align-items: center; gap: 7px; border: 0; padding: 9px 8px; color: inherit; background: transparent; font-size: 12px; font-weight: 600; }
       .canvas-tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -411,7 +417,7 @@
       .model-catalog-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 16px 19px 0; }
       .button.danger { color: #9d3727; }
       label.field { display: grid; gap: 6px; color: #405249; font-size: 12px; line-height: 1.5; font-weight: 700; }
-      input[type=text], input[type=url], input[type=password], .field textarea { width: 100%; min-height: 36px; border: 1px solid #cbd3cb; border-radius: 7px; padding: 8px 10px; color: var(--ink); background: white; font-size: 12px; }
+      input[type=text], input[type=search], input[type=url], input[type=password], .field textarea { width: 100%; min-height: 36px; border: 1px solid #cbd3cb; border-radius: 7px; padding: 8px 10px; color: var(--ink); background: white; font-size: 12px; }
       input[type=password] { font-family: "Segoe UI", sans-serif; }
       .check { display: flex; align-items: center; gap: 7px; color: #46584e; font-size: 12px; }
       .check input, .skill-enabled input { width: 15px; height: 15px; margin: 0; accent-color: var(--green); }
@@ -482,9 +488,8 @@
       .delete-control svg { display: block; width: 17px; height: 17px; }
       .delete-control:hover:not(:disabled) { color: #943b2a; background: #f6e9e2; }
       .delete-control:active:not(:disabled) { background: #eddbd1; }
-      .project-document { display: block; width: 100%; min-height: 42px; border: 0; border-radius: 4px; padding: 6px 8px; color: var(--ink); background: transparent; text-align: left; overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
-      .project-document small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; font-weight: 400; }
-      .project-document[aria-current="true"], .project-document:hover:not(:disabled), .project-source-file:hover:not(:disabled) { color: var(--green-deep); background: var(--green-wash); }
+      .project-document, .project-source-file { overflow-wrap: anywhere; }
+      #project-source-files { margin-inline: -8px; }
       .project-files-details { margin: 14px 0 0; color: var(--muted); font-size: 12px; }
       .project-files-details summary { cursor: pointer; padding: 5px 0; }
       .project-kits { flex: 0 0 auto; border-top: 1px solid var(--line); }
@@ -494,7 +499,6 @@
       .project-kit-option small, #project-kit-status { color: var(--muted); font-size: 11px; line-height: 1.5; }
       #project-kit-status { margin: 8px 0 0; }
       #project-kit-status[data-error="true"] { color: #9d3727; }
-      .project-source-file { display: block; width: 100%; min-height: 30px; border: 0; border-radius: 4px; padding: 5px 8px; color: var(--muted); background: transparent; text-align: left; overflow-wrap: anywhere; font-size: 11px; }
       .project-media-item { min-width: 0; }
       .project-media-item[draggable="true"], .project-media-item[draggable="true"] .project-thumbnail { cursor: grab; }
       .project-media-item[data-dragging="true"] { opacity: .55; cursor: grabbing; }
@@ -513,6 +517,23 @@
       .media-job-status { font-size: 12px; font-weight: 500; }
       .media-job-detail, .media-job-error { margin: 4px 0; color: var(--muted); font-size: 11px; line-height: 1.5; font-variant-numeric: tabular-nums; }
       .media-job-error { color: var(--ink); }
+      .media-drawer-head { padding-block: 0; }
+      .media-drawer-tabs { display: flex; align-self: stretch; gap: 16px; min-width: 0; }
+      .media-drawer-tabs button { display: flex; align-items: center; justify-content: center; gap: 7px; min-width: 52px; min-height: calc(var(--panel-header-height) - 1px); border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 0 2px; color: var(--muted); background: transparent; font-size: 13px; font-weight: 700; cursor: pointer; }
+      .media-drawer-tabs button:hover { color: var(--green); background: var(--green-wash); }
+      .media-drawer-tabs button[aria-selected="true"] { border-bottom-color: var(--green); color: var(--green); }
+      .media-drawer-tabs button:focus-visible { outline-offset: -4px; }
+      .media-tab-panel { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+      .media-jobs-intro { margin: 0; padding: 12px 14px; color: var(--muted); font-size: 11px; line-height: 1.5; border-bottom: 1px solid var(--line); }
+      .media-jobs-list { display: grid; gap: 10px; padding: 14px; }
+      .media-jobs-list .media-job { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+      .media-jobs-list .media-job-preview { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 8px; width: auto; min-height: 24px; aspect-ratio: auto; padding: 0 26px 6px 0; background: transparent; overflow: visible; }
+      .media-jobs-list .project-thumbnail-placeholder { width: 17px; height: 17px; }
+      .media-jobs-list .media-job-cog { top: 0; right: 0; width: 17px; height: 17px; }
+      .media-jobs-list .project-media-name { font-size: 13px; font-weight: 500; }
+      .media-job-id { display: block; overflow-wrap: anywhere; margin: 7px 0; color: var(--muted); font-size: 10px; line-height: 1.5; user-select: text; }
+      .media-job-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+      .media-job-actions .button { min-height: 30px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 5px; font-size: 11px; }
       .media-job-progress { width: 80%; height: 3px; border: 0; accent-color: var(--green); }
       .media-job-progress::-webkit-progress-bar { background: var(--line); }
       .media-job-progress::-webkit-progress-value { background: var(--green); }
@@ -527,13 +548,13 @@
       .project-media-actions .button:hover:not(:disabled) { color: var(--green); background: transparent; text-decoration: underline; text-underline-offset: 3px; }
       .media-filter-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); }
       .media-filter-controls input { grid-column: 1 / -1; min-width: 0; }
+      .media-filter-controls input::placeholder { color: var(--muted); opacity: 1; }
       .media-filter-controls select { width: 100%; min-width: 0; }
       .media-filter-controls label { font-size: 11px; color: var(--muted); display: grid; gap: 4px; }
       .media-filter-controls p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
       .media-filter-controls #media-filters-reset { justify-self: start; }
       .timeline-chat-context { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; background: var(--green-wash); font-size: 12px; color: var(--green-deep); }
       .timeline-chat-context[hidden] { display: none; }
-      #open-video-editor { flex: 0 0 auto; margin: 4px 6px; }
       .image-viewer { position: absolute; inset: 0; display: flex; flex-direction: column; min-height: 0; background: var(--paper-deep); }
       .image-viewer-stage { display: flex; align-items: center; justify-content: center; flex: 1; min-height: 0; overflow: auto; padding: 16px; }
       .image-viewer-stage img { display: block; width: 100%; height: 100%; object-fit: contain; }
@@ -544,27 +565,27 @@
       .image-viewer-footer { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; border-top: 1px solid var(--line); padding: 5px 12px; color: var(--muted); background: var(--paper); font-size: 12px; font-variant-numeric: tabular-nums; }
       .canvas-tab:hover { background: var(--green-wash); }
       .project-files-details summary:focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
-      @keyframes drawer-reveal { from { clip-path: inset(0 95% 0 0); } to { clip-path: inset(0); } }
+      @keyframes drawer-content-reveal { from { opacity: .7; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
       @media (max-width: 850px) {
         html, body { height: auto; min-height: 100%; overflow: auto; }
-        .studio { height: auto; min-height: 100vh; grid-template-columns: minmax(0, 1fr); grid-template-rows: 48px 42px auto minmax(62vh, 1fr); }
+        .studio { height: auto; min-height: 100vh; grid-template-columns: minmax(0, 1fr); grid-template-rows: 48px 54px auto minmax(62vh, 1fr); }
         .topbar { grid-column: 1; gap: 12px; }
         .activity-bar { grid-column: 1; grid-row: 2; flex-direction: row; padding: 2px 8px; border-right: 0; border-bottom: 1px solid var(--line); }
-        .activity-spacer { flex: 1; }
-        #nav-templates { width: 90px; height: 36px; grid-auto-flow: column; gap: 5px; }
-        .activity-label { font-size: 11px; }
+        .activity-spacer { display: none; }
+        .activity-button { width: auto; min-width: 0; flex: 1; }
         .activity-button[aria-pressed="true"]::after { right: auto; top: auto; bottom: -2px; left: calc(50% - 10px); width: 20px; height: 2px; }
         .left-column { grid-column: 1; grid-row: 3; height: min(580px, 60vh); height: min(580px, 60dvh); }
         .workbench-splitter { display: none; }
         .canvas-panel { grid-column: 1; grid-row: 4; min-height: 470px; }
-        .studio[data-sidebar="closed"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 42px minmax(0, 1fr); }
+        .studio[data-sidebar="open"] .canvas-panel { border-top: 1px solid var(--line); }
+        .studio[data-sidebar="closed"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 54px minmax(0, 1fr); }
         .studio[data-sidebar="closed"] .canvas-panel { grid-column: 1; grid-row: 3; min-height: 520px; }
         .settings-shell { grid-template-columns: 140px minmax(0, 1fr); }
       }
       @media (max-width: 620px) {
         .canvas-files-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: 120px minmax(0, 1fr); }
         .canvas-files-list { border-right: 0; border-bottom: 1px solid var(--line); }
-        .studio { grid-template-rows: auto 40px auto minmax(58vh, 1fr); }
+        .studio { grid-template-rows: auto 54px auto minmax(58vh, 1fr); }
         .topbar { flex-wrap: wrap; gap: 8px 12px; padding-block: 8px; }
         .brand h1 { font-size: 17px; }
         .project-switcher { order: 3; flex-basis: 100%; }
@@ -604,16 +625,20 @@
       <nav class="activity-bar" aria-label="Activity bar">
         <button id="nav-chat" class="activity-button" type="button" aria-label="Show conversation" title="Conversation" aria-pressed="true" aria-controls="conversation-panel">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3v-15a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h7"/></svg>
+          <span class="activity-label">Chat</span>
           <span id="chat-unread" class="chat-unread" aria-hidden="true" hidden></span>
         </button>
         <button id="chat-history-open" class="activity-button" type="button" aria-label="Show chat history" title="Chat history" aria-pressed="false" aria-expanded="false" aria-controls="chat-history-panel">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 10a8.5 8.5 0 1 1 1 7M3.5 5v5H8"/><path d="M12 7v5l3 2"/></svg>
+          <span class="activity-label">History</span>
         </button>
         <button id="nav-explorer" class="activity-button" type="button" aria-label="Show project files" title="Project files" aria-pressed="false" aria-expanded="false" aria-controls="project-drawer">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10.8a1.2 1.2 0 0 1-1.2 1.2H4.7a1.2 1.2 0 0 1-1.2-1.2V6.5Z"/><path d="M3.5 10.5h17"/></svg>
+          <span class="activity-label">Files</span>
         </button>
         <button id="nav-media" class="activity-button" type="button" aria-label="Show media" title="Media" aria-pressed="false" aria-expanded="false" aria-controls="media-drawer">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3.5h15.5v15M3.5 6.5h14v14h-14Z"/><path d="m4 17 4.5-4.5 3.5 3.5 2-2 3.5 3.5"/><circle cx="8" cy="10.5" r="1.3"/></svg>
+          <span class="activity-label">Media</span>
           <span id="media-unread" class="chat-unread" aria-hidden="true" hidden></span>
           <span id="media-generating" class="media-generating" aria-hidden="true" hidden></span>
         </button>
@@ -624,6 +649,7 @@
         <span class="activity-spacer"></span>
         <button id="settings-open" class="activity-button" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-pressed="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 3-.5 2.4-1.7 1-2.3-.8-2.5 4.3 1.8 1.6v2L2.5 15 5 19.3l2.3-.8 1.7 1 .5 2.5h5l.5-2.5 1.7-1 2.3.8 2.5-4.3-1.8-1.5v-2l1.8-1.6L19 5.6l-2.3.8-1.7-1-.5-2.4Z"/><circle cx="12" cy="12.5" r="3.2"/></svg>
+          <span class="activity-label">Settings</span>
         </button>
       </nav>
       <section class="left-column" aria-label="Chat, project files, media, and templates">
@@ -645,8 +671,15 @@
             <section id="templates-detail" class="template-detail" aria-labelledby="template-detail-title" hidden></section>
           </div>
         </section>
-        <section id="media-drawer" class="panel media-drawer" aria-labelledby="media-drawer-title" hidden>
-          <div class="section-head"><h2 id="media-drawer-title">Media</h2><button id="media-collapse" class="fold-button" type="button" aria-label="Close media" title="Close drawer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+        <section id="media-drawer" class="panel media-drawer" aria-label="Media and jobs" hidden>
+          <div class="section-head media-drawer-head">
+            <div class="media-drawer-tabs" role="tablist" aria-label="Media views">
+              <button id="media-tab-assets" type="button" role="tab" aria-controls="media-assets-panel" aria-selected="true">Media</button>
+              <button id="media-tab-jobs" type="button" role="tab" aria-controls="media-jobs-panel" aria-selected="false" tabindex="-1">Jobs <span id="media-jobs-count" class="drawer-count" hidden>0</span></button>
+            </div>
+            <button id="media-collapse" class="fold-button" type="button" aria-label="Close media" title="Close drawer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          </div>
+          <div id="media-assets-panel" class="media-tab-panel" role="tabpanel" aria-labelledby="media-tab-assets">
           <div class="media-filter-controls" aria-label="Media search and sorting">
             <input id="media-search" type="search" aria-label="Search media" placeholder="Search name, type, or ID" />
             <label>Type<select id="media-type-filter" aria-label="Filter media type"><option value="all">All types</option><option value="image">Images</option><option value="video">Videos</option><option value="audio">Audio</option></select></label>
@@ -658,6 +691,14 @@
           <div class="library-panel-content">
             <section class="library-content project-media-section" id="media-content" aria-labelledby="project-media-title"><div class="drawer-section-head"><h3 id="project-media-title">In this project <span id="project-image-count" class="drawer-count">0</span></h3></div><div id="media-list" class="media-grid" aria-label="Media in this project"></div><p id="media-empty" class="empty-library">Generated media appears here automatically.</p></section>
             <section class="library-content project-media-section" aria-labelledby="all-media-title"><div class="drawer-section-head"><h3 id="all-media-title">All media <span id="all-media-count" class="drawer-count">0</span></h3></div><div id="all-media-list" class="media-grid" aria-label="All saved media"></div><p id="all-media-empty" class="empty-library">Generated media and captures will be saved here, ready to use in any project.</p></section>
+          </div>
+          </div>
+          <div id="media-jobs-panel" class="media-tab-panel" role="tabpanel" aria-labelledby="media-tab-jobs" hidden>
+            <p class="media-jobs-intro">Generation progress across your projects. Completed output is saved in Media.</p>
+            <div class="library-panel-content">
+              <div id="media-jobs-list" class="media-jobs-list" aria-label="Generation jobs"></div>
+              <p id="media-jobs-empty" class="empty-library">No generation jobs yet. New jobs will appear here with their progress.</p>
+            </div>
           </div>
         </section>
         <section id="chat-history-panel" class="panel chat-history" aria-labelledby="chat-history-title" hidden>
@@ -711,7 +752,7 @@
       <div id="workbench-splitter" class="workbench-splitter" role="separator" aria-label="Resize sidebar and canvas panels" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="55" aria-valuenow="36" tabindex="0"></div>
       <section class="panel canvas-panel" aria-label="HTML canvas workspace" tabindex="-1">
         <h2 id="canvas-title" hidden>Canvas</h2>
-        <div class="canvas-tabs"><div id="open-canvas-tabs" class="canvas-tab-list" role="group" aria-label="Open project files and images"></div><button id="open-video-editor" class="button quiet small" type="button" title="Open the editable video editor template">Video editor</button><button id="new-canvas-open" class="canvas-tab-add" type="button" aria-label="New HTML canvas" title="New HTML canvas"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button></div>
+        <div class="canvas-tabs"><div id="open-canvas-tabs" class="canvas-tab-list" role="group" aria-label="Open project files and images"></div><button id="new-canvas-open" class="canvas-tab-add" type="button" aria-label="New HTML canvas" title="New HTML canvas"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button></div>
         <div id="canvas-host" class="canvas-host">
           <div id="canvas-empty" class="canvas-empty" aria-labelledby="canvas-start-title">
             <div class="canvas-start-heading"><h3 id="canvas-start-title">Your next idea goes here</h3><p>Describe what you want to make. We can shape it together.</p></div>

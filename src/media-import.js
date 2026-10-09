@@ -5,7 +5,7 @@ const MAX_IMPORT_FILES = 20;
 const MAX_IMPORT_BYTES = 32 * 1024 * 1024;
 const MIME_TYPES = Object.freeze({
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
-  '.mp4': 'video/mp4', '.webm': 'video/webm', '.wav': 'audio/wav', '.mp3': 'audio/mpeg',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4',
 });
 
 class ImportError extends Error {}
@@ -81,7 +81,7 @@ async function importMediaFiles({ filenames, imageStore, mediaStore, fileSystem 
     try {
       if (typeof filename !== 'string' || !path.isAbsolute(filename) || filename.includes('\0')) throw new ImportError('Choose a local media file using the import dialog.');
       const mimeType = MIME_TYPES[path.extname(filename).toLowerCase()];
-      if (!mimeType) throw new ImportError('Supported formats are PNG, JPEG, WebP, MP4, WebM, WAV, and MP3.');
+      if (!mimeType) throw new ImportError('Supported formats are PNG, JPEG, WebP, MP4, WebM, WAV, MP3, and M4A.');
       const bytes = await readSelectedFile(filename, fileSystem);
       const store = mimeType.startsWith('image/') ? imageStore : mediaStore;
       if (mimeType.startsWith('image/')) {

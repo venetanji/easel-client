@@ -1,5 +1,7 @@
 const { bindTimelineToolTarget, TIMELINE_TOOLS, TIMELINE_METHODS } = require('./video-timeline-tools');
-const { ALLOWED_MEDIA_TOOLS } = require('./media-mcp-client');
+const { ALLOWED_MEDIA_TOOLS, AUDIO_GENERATION_TOOLS, AUDIO_TOOLS } = require('./media-mcp-client');
+const { registerAudioTrackJobs, enrichAudioDownload } = require('./audio-track-jobs');
+const { generatedMediaName } = require('./media-names');
 const { PROJECT_CANVAS_TOOLS, SOURCE_CANVAS_TOOLS } = require('./canvas-tools');
 const { CANVAS_INPUT_TOOLS } = require('./canvas-input-tools');
 const { TEMPLATE_METHODS, TEMPLATE_TOOLS, templateCatalogResult } = require('./template-tools');
@@ -12,7 +14,7 @@ const MAX_TOOL_CALLS = 12;
 const MAX_CANVAS_HTML_BYTES = 1_048_576;
 const MAX_CANVAS_ASSETS = 8;
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
-const SAVED_MEDIA_TYPES = new Set([...IMAGE_TYPES, 'video/mp4', 'video/webm', 'audio/wav', 'audio/mpeg']);
+const SAVED_MEDIA_TYPES = new Set([...IMAGE_TYPES, 'video/mp4', 'video/webm', 'audio/wav', 'audio/mpeg', 'audio/mp4']);
 const ALLOWED_RUNTIME_KITS = new Set(['canvas-2d', 'html-deck', 'three', 'phaser', 'matter', 'tone', 'p5', 'strudel']);
 const PROJECT_CANVAS_METHODS = Object.freeze({
   list_canvas_documents: 'listCanvasDocuments',
@@ -361,7 +363,7 @@ async function resolveCanvasAssets(assetStore, assets = [], signal) {
   return output;
 }
 
-async function handleMcpResult(result, mediaAssetStore, onEvent, { generated = false, projectId = '', kits = [], attachGeneratedAssets } = {}) {
+async function handleMcpResult(result, mediaAssetStore, onEvent, { generated = false, projectId = '', kits = [], attachGeneratedAssets, audioContext } = {}) {
   if (result?.isError) {
     const detail = (result.content || []).filter((item) => item.type === 'text' && typeof item.text === 'string').map((item) => item.text).join('\n').slice(0, 2000);
     const error = new Error(detail || 'Media MCP tool failed.');
@@ -374,8 +376,15 @@ async function handleMcpResult(result, mediaAssetStore, onEvent, { generated = f
   const text = Array.isArray(result?.structuredContent?.text) ? result.structuredContent.text.filter((value) => typeof value === 'string') : [];
   const assets = Array.isArray(result?.structuredContent?.assets) ? result.structuredContent.assets : [];
   const savedMedia = [];
-  const saveErrors = [];
+  const saveErrors = Array.isArray(result?.structuredContent?.saveErrors) ? [...result.structuredContent.saveErrors] : [];
   const job = result?.structuredContent?.job;
+  const { monitoredAudioJobs, monitoringErrors, ...receipt } = result?.structuredContent || {};
+  const audio = result?.structuredContent?.audio || (audioContext ? { ...receipt, modelId: audioContext.modelId,
+    monitored: Boolean(monitoredAudioJobs?.some(job => ['queued', 'generating', 'downloading'].includes(job.status))), ...(audioContext.trackId ? { trackId: audioContext.trackId } : {}) } : undefined);
+  if (audioContext && (AUDIO_GENERATION_TOOLS.has(audioContext.toolName) || audioContext.toolName === 'get_audio_generation_status') && !result?.structuredContent?.audio) {
+    onEvent?.({ type: 'audio-generation', toolName: audioContext.toolName, projectId, modelId: audioContext.modelId, attemptId: audio?.attempt_id,
+      status: audio?.status, trackIds: (Array.isArray(audio?.songs) ? audio.songs : []).map((song) => song.id).filter((id) => typeof id === 'string') });
+  }
   for (const item of result?.content || []) {
     if (item.type === 'text' && typeof item.text === 'string') {
       let metadata;
@@ -385,11 +394,18 @@ async function handleMcpResult(result, mediaAssetStore, onEvent, { generated = f
     }
     const media = ['image', 'audio'].includes(item.type) ? { data: item.data, mimeType: item.mimeType }
       : item.type === 'resource' ? { data: item.resource?.blob, mimeType: item.resource?.mimeType } : null;
+    if (media) media.mimeType = { 'audio/x-m4a': 'audio/mp4', 'audio/x-wav': 'audio/wav' }[media.mimeType] || media.mimeType;
+    if (media && typeof media.data === 'string' && !SAVED_MEDIA_TYPES.has(media.mimeType)) {
+      const error = `Returned encoding ${media.mimeType} cannot be saved in Studio. Keep the track ID; do not generate a replacement.`;
+      saveErrors.push(error);
+      onEvent?.({ type: 'error', message: error });
+    }
     if (media && typeof media.data === 'string' && SAVED_MEDIA_TYPES.has(media.mimeType)) {
       try {
         const image = IMAGE_TYPES.has(media.mimeType);
-        const name = image ? undefined : `Generated ${media.mimeType.startsWith('video/') ? 'video' : 'audio'}.${{ 'video/mp4': 'mp4', 'video/webm': 'webm', 'audio/wav': 'wav', 'audio/mpeg': 'mp3' }[media.mimeType]}`;
-        const metadata = { ...(name ? { name } : {}), ...(job?.seconds ? { duration: job.seconds } : {}) };
+        const name = image ? undefined : generatedMediaName(audio?.track?.title, media.mimeType);
+        const duration = job?.seconds || audio?.track?.duration;
+        const metadata = { ...(name ? { name } : {}), ...(Number.isFinite(duration) && duration > 0 && duration <= 3600 ? { duration } : {}) };
         const assetId = await mediaAssetStore.save({ ...media, ...metadata });
         const asset = { assetId, mimeType: media.mimeType, ...metadata };
         assets.push(asset);
@@ -408,7 +424,28 @@ async function handleMcpResult(result, mediaAssetStore, onEvent, { generated = f
   for (const media of savedMedia) {
     onEvent?.({ type: IMAGE_TYPES.has(media.mimeType) ? 'image' : 'media', ...media, generated, projectId: attachment?.projectId || projectId, projectTitle: attachment?.projectTitle, attachedToProject: Boolean(attachment?.ok), ...(attachment?.error ? { attachmentError: attachment.error } : {}) });
   }
-  return JSON.stringify({ text, assets, ...(job ? { job } : {}), ...(job?.status === 'failed' || job?.status === 'cancelled' ? { ok: false, error: job.error || `Video job ${job.id} ${job.status}.`, code: 'VIDEO_JOB_FAILED' } : {}), ...(attachment ? { projectAttachment: attachment } : {}), ...(saveErrors.length ? { saveErrors, guidance: 'Some returned media could not be saved locally. Preserve successful asset IDs and video job IDs; resolve the storage error before generating replacements.' } : {}) });
+  return JSON.stringify({ text, assets, ...(audio ? { audio, guidance: audio.monitored
+    ? 'The host monitors captured Suno track UUIDs, saves completed audio across restarts, and notifies the original chat. End the turn; do not poll, download, or resubmit these tracks.'
+    : monitoredAudioJobs?.some(job => job.status === 'ready') ? 'This track is already saved in Media. Reuse its saved asset ID; do not download or generate another copy.'
+    : monitoredAudioJobs?.some(job => job.status === 'cancelled') ? 'Tracking was canceled. Preserve the track UUID; the host no longer polls or downloads it.'
+    : 'Preserve this Suno receipt. Without monitored track IDs, a later get_audio_generation_status/get_audio_track check is needed; download_audio saves completed tracks to Media/chat. Never promise monitoring for an uncaptured attempt or resubmit automatically.' } : {}),
+    ...(monitoredAudioJobs ? { monitoredAudioJobs } : {}), ...(monitoringErrors?.length ? { monitoringErrors, guidance: 'Some track IDs could not be monitored. Preserve this receipt and resolve the storage error; do not regenerate.' } : {}),
+    ...(result?.structuredContent?.cached ? { cached: true } : {}),
+    ...(job ? { job } : {}), ...(job?.status === 'failed' || job?.status === 'cancelled' ? { ok: false, error: job.error || `Video job ${job.id} ${job.status}.`, code: 'VIDEO_JOB_FAILED' } : {}), ...(attachment ? { projectAttachment: attachment } : {}), ...(saveErrors.length ? { saveErrors, ...(!assets.length ? { ok: false, code: 'MEDIA_SAVE_FAILED', error: saveErrors.join('; ') } : {}), guidance: 'Some returned media could not be saved locally. Preserve asset, job and track IDs; resolve the storage error before generating replacements.' } : {}) });
+}
+
+async function cachedAudioResult(messages, args, mediaAssetStore) {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'tool' || typeof message.content !== 'string') continue;
+    let result;
+    try { result = JSON.parse(message.content); } catch { continue; }
+    if (result.audio?.trackId !== args.trackId || result.audio?.modelId !== args.model || !result.assets?.length) continue;
+    try {
+      for (const asset of result.assets) await mediaAssetStore.get(asset.assetId);
+      return JSON.stringify({ audio: result.audio, assets: result.assets, cached: true, message: 'This track is already saved in the library. Use attach_canvas_assets to attach it to another project.' });
+    } catch { return null; }
+  }
+  return null;
 }
 
 async function cachedVideoResult(messages, args, mediaAssetStore) {
@@ -503,6 +540,9 @@ async function executeEaselTool(name, args, {
   } else if (name === 'inspect_canvas') {
     if (!canvasController) throw new Error('Canvas controls are unavailable.');
     content = await canvasController.inspect();
+  } else if (name === 'list_audio_generations') {
+    if (typeof canvasController?.listAudioGenerations !== 'function') throw new Error('Saved Suno receipts are unavailable.');
+    content = JSON.stringify({ ok: true, ...await canvasController.listAudioGenerations(args, context) });
   } else if (name === 'list_media_jobs' || name === 'forget_media_job') {
     const method = name === 'list_media_jobs' ? 'listMediaJobs' : 'forgetMediaJob';
     if (typeof canvasController?.[method] !== 'function') throw new Error('Media job monitor is unavailable.');
@@ -574,9 +614,19 @@ async function executeEaselTool(name, args, {
       if (typeof canvasController?.readMediaAsset === 'function') return canvasController.readMediaAsset(reference);
       return assetStore.get(reference.assetId);
     }, signal);
-    content = name === 'get_video' ? await cachedVideoResult(messages, args, mediaAssetStore) : null;
+    content = name === 'get_video' ? await cachedVideoResult(messages, args, mediaAssetStore)
+      : name === 'download_audio' ? await cachedAudioResult(messages, args, mediaAssetStore) : null;
     if (!content) {
       const result = await awaitAbortable(mcp.callTool(name, wireArgs, { signal }).then(async (result) => {
+        if (name === 'download_audio') result = await enrichAudioDownload(result, args, mcp);
+        if (AUDIO_GENERATION_TOOLS.has(name)) result = await registerAudioTrackJobs(result, { model: args.model, prompt: args.prompt, projectId }, registerMediaJob);
+        else if (name === 'get_audio_generation_status' && !result.isError && typeof canvasController?.listAudioGenerations === 'function') {
+          const receipt = result.structuredContent?.audio || result.structuredContent;
+          const saved = await canvasController.listAudioGenerations({}, context);
+          const original = saved?.generations?.find(entry => entry.attemptId === receipt?.attempt_id && entry.modelId === args.model);
+          if (original) result = await registerAudioTrackJobs(result, { model: args.model, projectId: original.projectId || '', prompt: '' }, registerMediaJob);
+        }
+        awaitingMediaJob = result.structuredContent?.monitoredAudioJobs?.find(job => ['queued', 'generating', 'downloading'].includes(job.status));
         if (!result.isError && result.structuredContent?.job && typeof registerMediaJob === 'function') {
           const job = result.structuredContent.job;
           const hasOutput = result.content?.some((item) => ['image', 'audio', 'resource'].includes(item.type)) || result.structuredContent.assets?.length;
@@ -594,7 +644,8 @@ async function executeEaselTool(name, args, {
           ? JSON.stringify({ modelId: result.structuredContent.modelId, capabilities: result.structuredContent.capabilities })
           : name === 'list_video_loras' && !result.isError && Array.isArray(result.structuredContent?.loras)
             ? JSON.stringify({ modelId: result.structuredContent.modelId, loras: result.structuredContent.loras })
-            : await handleMcpResult(result, mediaAssetStore, onEvent, { generated: MEDIA_OUTPUT_TOOLS.has(name), projectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets });
+            : await handleMcpResult(result, mediaAssetStore, onEvent, { generated: MEDIA_OUTPUT_TOOLS.has(name), projectId, kits, attachGeneratedAssets: canvasController?.attachGeneratedAssets,
+              ...(AUDIO_TOOLS.has(name) ? { audioContext: { toolName: name, modelId: args.model, trackId: args.trackId } } : {}) });
       if (awaitingMediaJob) {
         const fields = ['id', 'remoteId', 'modelId', 'mediaType', 'projectId', 'status', 'estimatedWaitSeconds', 'estimatedCompletionAt'];
         const monitoredJob = Object.fromEntries(fields.filter((field) => awaitingMediaJob[field] !== undefined).map((field) => [field, awaitingMediaJob[field]]));

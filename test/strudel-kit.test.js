@@ -84,7 +84,7 @@ test('bundle_preserves_notices', () => {
     assert.ok(fs.existsSync(path.join(sourceRoot, 'easel/packages/media-mcp/package.json')), 'npm ci needs the declared workspace manifest');
     const manifest = JSON.parse(fs.readFileSync(path.join(sourceRoot, 'manifest.json'), 'utf8'));
     assert.equal(manifest.packages.find((p) => p.name === '@strudel/web').version, '1.3.0');
-    assert.equal(manifest.build.entryPoint, 'node_modules/@strudel/web/web.mjs');
+    assert.equal(manifest.build.entryPoint, 'src/strudel-kit-entry.mjs');
     assert.ok(manifest.inputs.every((input) => input.sha256 && fs.existsSync(path.join(sourceRoot, input.sourcePath))));
     assert.ok(manifest.packages.some((p) => p.name === 'source-map'), 'include bundled optional dependencies');
     const progression = manifest.packages.find((p) => p.name === '@tonaljs/progression');
@@ -95,6 +95,30 @@ test('bundle_preserves_notices', () => {
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('scratchpad loads embedded worklets through local blob URLs and releases them', async () => {
+  const calls = [], blobs = [], revoked = [];
+  class AudioWorklet {
+    async addModule(url, options) { calls.push({ url, options }); if (options?.fail) throw new Error('worklet rejected'); }
+  }
+  const context = { window: { AudioWorklet, strudel: { initAudioOnFirstClick() {} } },
+    document: { documentElement: { dataset: { easelStrudelRepl: 'v1' } } },
+    atob, Uint8Array, Blob, URL: { createObjectURL(blob) { blobs.push(blob); return 'blob:local/' + blobs.length; }, revokeObjectURL(url) { revoked.push(url); } } };
+  vm.runInNewContext(adapter().prepareStrudelBundle('window.loaded = true;'), context);
+  const worklet = new AudioWorklet();
+  const source = 'registerProcessor("example", class {});';
+  const embedded = 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
+  await worklet.addModule(embedded, { credentials: 'omit' });
+  assert.equal(calls[0].url, 'blob:local/1');
+  assert.equal(calls[0].options.credentials, 'omit');
+  assert.equal(await blobs[0].text(), source);
+  assert.deepEqual(revoked, ['blob:local/1']);
+  await assert.rejects(worklet.addModule(embedded, { fail: true }), /worklet rejected/);
+  assert.deepEqual(revoked, ['blob:local/1', 'blob:local/2']);
+  await worklet.addModule('blob:already-local');
+  assert.equal(calls[2].url, 'blob:already-local');
+  assert.equal(blobs.length, 2);
 });
 
 test('default_policy_stays_restrictive_while_strudel_advertises_live_repl', () => {

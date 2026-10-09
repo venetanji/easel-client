@@ -39,7 +39,7 @@ function harness({ id = ID, preserved = {}, saved = {}, resumeGate, startGate, i
   const html = files[entry];
   const elements = new Map();
   const listeners = new Map();
-  for (const match of html.matchAll(/id="([^"]+)"/g)) elements.set(match[1], { value: '', textContent: '', disabled: false, hidden: false, attributes: {},
+  for (const match of html.matchAll(/id="([^"]+)"/g)) elements.set(match[1], { value: '', textContent: '', disabled: false, hidden: false, attributes: {}, style: {},
     setAttribute(key, value) { this.attributes[key] = value; }, addEventListener(type, fn) { this[type] = fn; }, removeEventListener(type) { delete this[type]; }, dispatch(type, event = {}) { this[type]?.({ target: this, ...event }); } });
   const counts = { init: 0, starts: 0, activeSchedulers: 0, activeAudioContexts: 1, closes: 0, hush: 0, resets: 0, patterns: 0, resumes: 0 };
   // AudioParam automation does not update its current-value slot until a
@@ -68,7 +68,7 @@ function harness({ id = ID, preserved = {}, saved = {}, resumeGate, startGate, i
     async initAudio(value) { assert.equal(value.disableWorklets, false); if (audioError && !audioFailed) { audioFailed = true; throw new Error('Audio unavailable'); } },
     hush() { counts.hush++; repl.stop(); }, note() { counts.patterns++; if (patternError) throw new Error('Invalid pattern'); return pattern; }, stack(...patterns) { return patterns[0] || pattern; } };
   let reloaded = false;
-  const window = { strudel, EaselHost: exportHost, __easelProjectState: saved, location: { reload() { reloaded = true; } },
+  const window = { strudel, EaselStrudelScore: { highlight: require('../src/strudel-score').highlightStrudel }, EaselHost: exportHost, __easelProjectState: saved, location: { reload() { reloaded = true; } },
     EaselCanvas: { registerApp(value) { app = value; if (preserved[value.id]) value.restoreState(preserved[value.id]); } },
     addEventListener(type, fn) { listeners.set('window:' + type, fn); }, removeEventListener(type) { listeners.delete('window:' + type); } };
   const sandbox = { window, strudel, crypto: require('node:crypto').webcrypto, TextEncoder, document: { getElementById: (key) => elements.get(key),
@@ -81,7 +81,7 @@ function harness({ id = ID, preserved = {}, saved = {}, resumeGate, startGate, i
     input(name, value) { element(name).value = value; element(name).input(); } };
 }
 
-test('starts_silent', async () => { const h = harness(); await flush(); assert.equal(h.app().getState().playing, false); assert.equal(h.counts.starts, 0); assert.equal(h.counts.resumes, 0); assert.equal(h.controller.output.destinationGain.gain.value, 0); assert.match(h.element('status').textContent, /ready.*play/i); });
+test('starts_silent', async () => { const h = harness(); await flush(); assert.equal(h.app().getState().playing, false); assert.equal(h.counts.starts, 0); assert.equal(h.counts.resumes, 0); assert.equal(h.controller.output.destinationGain.gain.value, 0); assert.match(h.element('status').textContent, /ready.*run/i); });
 test('keyboard_play_is_gesture', async () => { const h = harness(); await flush(); await h.play(); assert.equal(h.counts.starts, 1); assert.equal(h.counts.resumes, 1); assert.equal(h.repl.scheduler.cps, 100 / 240); assert.match(h.element('status').textContent, /playing/i); h.stop(); await h.element('play').click({ isTrusted: false }); assert.equal(h.counts.starts, 1); });
 test('stop_clears_tails', async () => { const h = harness(); await flush(); await h.play(); h.stop(); assert.equal(h.counts.activeSchedulers, 0); assert.equal(h.controller.output.destinationGain.gain.value, 0); assert.equal(h.app().getState().playing, false); const resets = h.counts.resets; await h.play(); assert.equal(h.counts.resets, resets + 1, 'restart disconnects the old voice graph before unmuting'); });
 test('reload_does_not_autoplay', async () => { const first = harness(); await flush(); await first.play(); first.input('bpm', '156'); first.input('volume', '0.2'); const state = first.app().getState(); await first.app().dispose(); const h = harness({ preserved: { [first.app().id]: { ...state, playing: true } } }); await flush(); assert.equal(h.app().getState().bpm, 156); assert.equal(h.app().getState().volume, 0.2); assert.equal(h.counts.starts, 0); assert.equal(h.app().getState().playing, false); });
@@ -101,14 +101,14 @@ test('dispose_during_scheduler_start_closes_once_and_never_restarts', async () =
 test('duplicate_play_does_not_duplicate_context_or_scheduler', async () => { const resumeGate = deferred(); const h = harness({ resumeGate }); await flush(); const first = h.play(), second = h.play(); resumeGate.resolve(); await Promise.all([first, second]); assert.equal(h.counts.init, 1); assert.equal(h.counts.resumes, 1); assert.equal(h.counts.activeSchedulers, 1); });
 test('audio_error_is_visible_and_retry_requires_new_gesture', async () => { const h = harness({ audioError: true }); await flush(); await h.play(); assert.match(h.element('status').textContent, /Audio unavailable/); assert.match(h.element('play').textContent, /retry/i); assert.equal(h.counts.activeSchedulers, 0); await h.play(); assert.equal(h.counts.activeSchedulers, 1); assert.equal(h.counts.init, 1); });
 test('initialization_error_offers_silent_reload_retry', async () => { const h = harness({ initError: true }); await flush(); assert.match(h.element('status').textContent, /Initialization failed/); await h.play(); assert.equal(h.reloaded(), true); assert.equal(h.counts.starts, 0); });
-test('pattern_change_stops_playback_and_invalidates_the_snapshot', async () => { const h = harness(); await flush(); await h.play(); h.window.EaselStrudel.patternChanged(); assert.equal(h.counts.activeSchedulers, 0); assert.match(h.element('status').textContent, /pattern.*play/i); assert.equal(h.app().getState().patternVersion, 2); assert.throws(() => h.window.EaselStrudel.snapshotPattern(), /not ready/i); });
-test('pattern_snapshot_keeps_volume_separate_from_event_gain', async () => { const h = harness(); await flush(); h.input('volume', '0.2'); const { params, pattern } = h.window.EaselStrudel.snapshotPattern(); assert.equal(params.volume, 0.2); assert.equal(params.bpm, 100); assert.equal(pattern, h.repl.pattern); assert.equal(params.playing, undefined); assert.ok(Object.isFrozen(params)); assert.equal(h.counts.starts, 0); });
-test('factory_is_editable_local_source_and_rejects_invalid_identity', () => { const create = factory(); const result = create({ instanceId: ID }); assert.deepEqual(Object.keys(result.files), ['index.html']); assert.equal(result.entry, 'index.html'); assert.match(result.files[result.entry], /function createPattern\(\)/); assert.match(result.files[result.entry], /Escape/); assert.match(result.files[result.entry], /meta name=\"easel-strudel-repl\" content=\"v1\"/);
+test('pattern_change_stops_playback_and_invalidates_the_snapshot', async () => { const h = harness(); await flush(); await h.play(); h.window.EaselStrudel.patternChanged(); assert.equal(h.counts.activeSchedulers, 0); assert.match(h.element('status').textContent, /pattern.*run/i); assert.equal(h.app().getState().patternVersion, 3); assert.throws(() => h.window.EaselStrudel.snapshotPattern(), /not ready/i); });
+test('pattern_snapshot_keeps_volume_separate_from_event_gain', async () => { const h = harness(); await flush(); await h.window.EaselStrudel.evaluate(h.element('code').value); h.input('volume', '0.2'); const { params, pattern } = h.window.EaselStrudel.snapshotPattern(); assert.equal(params.volume, 0.2); assert.equal(params.bpm, 100); assert.equal(pattern, h.repl.pattern); assert.equal(params.playing, undefined); assert.ok(Object.isFrozen(params)); assert.equal(h.counts.starts, 0); });
+test('factory_is_editable_local_source_and_rejects_invalid_identity', () => { const create = factory(); const result = create({ instanceId: ID }); assert.deepEqual(Object.keys(result.files), ['index.html']); assert.equal(result.entry, 'index.html'); assert.match(result.files[result.entry], /const DEFAULT_LIVE_CODE =/); assert.match(result.files[result.entry], /Escape/); assert.match(result.files[result.entry], /meta name=\"easel-strudel-repl\" content=\"v1\"/);
   assert.match(result.files[result.entry], /repl\.evaluate\(source, false\)/);
   assert.doesNotMatch(result.files[result.entry], /https?:\/\//); assert.throws(() => create({ instanceId: '<script>' }), /instance/i); });
-test('snapshot_reuses_prepared_pattern_until_explicit_pattern_change', async () => { const h = harness(); await flush(); const first = h.window.EaselStrudel.snapshotPattern(); h.input('volume', '0.1'); h.input('bpm', '120'); const second = h.window.EaselStrudel.snapshotPattern(); assert.equal(first.pattern, second.pattern); assert.equal(h.evalCalls.length, 0); assert.equal(second.params.bpm, 120); assert.equal(second.params.volume, 0.1); await h.play(); assert.equal(h.evalCalls.length, 0); h.window.EaselStrudel.patternChanged(); assert.throws(() => h.window.EaselStrudel.snapshotPattern(), /not ready/i); await h.window.EaselStrudel.evaluate('note("d4").s("triangle")'); assert.equal(h.evalCalls.length, 1); });
+test('snapshot_reuses_prepared_pattern_until_explicit_pattern_change', async () => { const h = harness(); await flush(); await h.window.EaselStrudel.evaluate(h.element('code').value); const first = h.window.EaselStrudel.snapshotPattern(); h.input('volume', '0.1'); h.input('bpm', '120'); const second = h.window.EaselStrudel.snapshotPattern(); assert.equal(first.pattern, second.pattern); assert.equal(h.evalCalls.length, 1); assert.equal(second.params.bpm, 120); assert.equal(second.params.volume, 0.1); await h.play(); assert.equal(h.evalCalls.length, 2); h.window.EaselStrudel.patternChanged(); assert.throws(() => h.window.EaselStrudel.snapshotPattern(), /not ready/i); await h.window.EaselStrudel.evaluate('note("d4").s("triangle")'); assert.equal(h.evalCalls.length, 3); });
 test('dispose_during_initialization_closes_context_and_keeps_late_ready_silent', async () => { const initGate = deferred(); const h = harness({ initGate }); await h.app().dispose(); initGate.resolve(); await flush(); assert.equal(h.counts.activeSchedulers, 0); assert.equal(h.counts.activeAudioContexts, 0); assert.equal(h.counts.closes, 1); assert.equal(h.element('play').disabled, true); assert.equal(h.window.EaselStrudel, undefined); });
-test('restore_state_ignores_nonfinite_values_and_never_trusts_playback_or_source_version', async () => { const h = harness(); await flush(); await h.play(); h.app().restoreState({ bpm: Infinity, volume: NaN, patternVersion: 999, playing: true }); assert.equal(h.app().getState().bpm, 100); assert.equal(h.app().getState().volume, 0.5); assert.equal(h.app().getState().patternVersion, 1); assert.equal(h.counts.activeSchedulers, 0); assert.equal(h.controller.output.destinationGain.gain.value, 0); });
+test('restore_state_ignores_nonfinite_values_and_never_trusts_playback_or_source_version', async () => { const h = harness(); await flush(); await h.play(); h.app().restoreState({ bpm: Infinity, volume: NaN, patternVersion: 999, playing: true }); assert.equal(h.app().getState().bpm, 100); assert.equal(h.app().getState().volume, 0.5); assert.equal(h.app().getState().patternVersion, 2); assert.equal(h.counts.activeSchedulers, 0); assert.equal(h.controller.output.destinationGain.gain.value, 0); });
 
 
 test('pinned_cyclist_first_tick_error_invalidates_pending_start_and_clears_clock', async () => {
@@ -120,7 +120,7 @@ test('pinned_cyclist_first_tick_error_invalidates_pending_start_and_clears_clock
   assert.equal(h.controller.output.destinationGain.gain.value, 0);
   assert.match(h.element('status').textContent, /\[cyclist\] error: First tick query failed/);
   assert.equal(h.element('status').attributes.role, 'alert');
-  assert.equal(h.element('play').textContent, 'Retry Play');
+  assert.equal(h.element('play').textContent, 'Retry Run');
   assert.equal(h.element('play').disabled, false);
   await h.element('play').click({ isTrusted: false });
   assert.equal(h.counts.starts, 1, 'an untrusted retry cannot restart');
@@ -140,7 +140,7 @@ test('pinned_getTrigger_error_after_playback_stops_mutes_and_offers_bounded_retr
   assert.equal(h.controller.output.destinationGain.gain.value, 0);
   assert.match(h.element('status').textContent, /\[getTrigger\] error: missing-synth/);
   assert.ok(h.element('status').textContent.length < 320);
-  assert.equal(h.element('play').textContent, 'Retry Play');
+  assert.equal(h.element('play').textContent, 'Retry Run');
   assert.equal(h.element('play').disabled, false);
   await h.element('play').click({ isTrusted: false });
   assert.equal(h.counts.starts, 1);
@@ -198,7 +198,7 @@ function exportHarness(options = {}) {
 }
 async function waitExportRequest(h) { for (let i = 0; i < 50 && !h.request(); i++) await new Promise(resolve => setTimeout(resolve, 1)); assert.ok(h.request()); }
 test('export_freezes_source_parameters_and_events_before_any_await', async () => {
-  const h = exportHarness(); await flush(); h.loaded(); h.input('bpm', '120'); h.input('volume', '0.5'); h.element('cycles').value = '1';
+  const h = exportHarness(); await flush(); await h.window.EaselStrudel.evaluate(h.element('code').value); h.loaded(); h.input('bpm', '120'); h.input('volume', '0.5'); h.element('cycles').value = '1';
   assert.equal(h.element('export').disabled, false);
   const exporting = h.window.EaselStrudel.exportLoop();
   h.input('bpm', '240'); h.input('volume', '1'); h.events[0].value.gain = 0.9;
@@ -207,7 +207,7 @@ test('export_freezes_source_parameters_and_events_before_any_await', async () =>
   h.gate.resolve(); await exporting; assert.match(h.element('export-status').textContent, /saved.*Media/i);
 });
 test('export_cancel_is_save_only_and_duplicate_clicks_do_not_duplicate_request', async () => {
-  const h = exportHarness(); await flush(); h.loaded(); h.element('cycles').value = '1';
+  const h = exportHarness(); await flush(); await h.window.EaselStrudel.evaluate(h.element('code').value); h.loaded(); h.element('cycles').value = '1';
   const a = h.window.EaselStrudel.exportLoop(), b = h.window.EaselStrudel.exportLoop(); await waitExportRequest(h);
   await h.window.EaselStrudel.cancelExport(); assert.equal(h.calls.filter(call => call.action === 'export').length, 1); assert.equal(h.calls.filter(call => call.action === 'cancel').length, 1); assert.equal(h.element('export').disabled, true);
   h.gate.resolve(); await Promise.all([a,b]); assert.match(h.element('export-status').textContent, /saved.*Media/i); assert.equal(h.element('cancel-export').disabled, true);
@@ -215,10 +215,10 @@ test('export_cancel_is_save_only_and_duplicate_clicks_do_not_duplicate_request',
 test('export_gated_standalone_and_unsupported_patterns_show_clear_errors', async () => {
   const standalone = harness(); await flush(); assert.equal(standalone.element('export').disabled, true); assert.match(standalone.element('export-status').textContent, /Easel|runtime/i);
   const h = exportHarness(); await flush(); h.loaded({ exportReady: false, reason: 'WAV runtime gate pending' }); assert.equal(h.element('export').disabled, true); assert.match(h.element('export-status').textContent, /pending/i);
-  h.loaded(); h.element('cycles').value = '1'; h.events[0].value.room = 0.5; await h.window.EaselStrudel.exportLoop(); assert.match(h.element('export-status').textContent, /Unsupported/); assert.equal(h.calls.length, 0);
+  await h.window.EaselStrudel.evaluate(h.element('code').value); h.loaded(); h.element('cycles').value = '1'; h.events[0].value.room = 0.5; await h.window.EaselStrudel.exportLoop(); assert.match(h.element('export-status').textContent, /Unsupported/); assert.equal(h.calls.length, 0);
 });
 test('dispose_cancels_export_and_ignores_late_ui_completion', async () => {
-  const h = exportHarness(); await flush(); h.loaded(); h.element('cycles').value = '1'; const p = h.window.EaselStrudel.exportLoop(); await waitExportRequest(h);
+  const h = exportHarness(); await flush(); await h.window.EaselStrudel.evaluate(h.element('code').value); h.loaded(); h.element('cycles').value = '1'; const p = h.window.EaselStrudel.exportLoop(); await waitExportRequest(h);
   await h.app().dispose(); const before = h.element('export-status').textContent; h.gate.resolve(); await p; assert.equal(h.calls.filter(call => call.action === 'cancel').length, 1); assert.equal(h.element('export-status').textContent, before); assert.equal(h.element('export').disabled, true);
 });
 
@@ -226,12 +226,12 @@ test('live_eval_replaces_the_running_pattern_without_restarting_or_autoplaying',
   const h = harness(); await flush(); await h.play();
   const result = await h.window.EaselStrudel.evaluate('stack(s("bd*2"), note("c3 e3").s("triangle"))');
   assert.equal(result.ok, true);
-  assert.equal(h.evalCalls.length, 1);
-  assert.equal(h.evalCalls[0].autoplay, false);
-  assert.match(h.evalCalls[0].code, /stack\(s/);
+  assert.equal(h.evalCalls.length, 2);
+  assert.equal(h.evalCalls[1].autoplay, false);
+  assert.match(h.evalCalls[1].code, /stack\(s/);
   assert.equal(h.counts.starts, 1, 'evaluation swaps the pattern on the existing scheduler');
   assert.equal(h.repl.scheduler.started, true);
-  assert.match(h.element('status').textContent, /updated live/i);
+  assert.match(h.element('status').textContent, /code updated/i);
 });
 
 test('failed_live_eval_keeps_last_good_pattern_running', async () => {
@@ -252,18 +252,17 @@ test('live_eval_rejects_oversized_source_before_calling_the_repl', async () => {
   assert.match(h.element('status').textContent, /8 KiB/);
 });
 
-test('edited_code_buffer_gates_restart_and_wav_export_until_pushed', async () => {
-  const h = exportHarness(); await flush(); h.loaded(); await h.play();
-  const activeCode = h.window.EaselStrudel.getState().code;
+test('edited_code_buffer_keeps_run_available_and_gates_export_until_executed', async () => {
+  const h = exportHarness(); await flush(); await h.window.EaselStrudel.evaluate(h.element('code').value); h.loaded(); await h.play();
   const draft = 'note("d4 f4").s("triangle")';
   h.element('code').value = draft;
   h.element('code').dispatch('input');
   assert.equal(h.repl.scheduler.started, true, 'editing does not cut off the last good pattern');
-  assert.equal(h.element('play').disabled, true, 'a stale pattern cannot be restarted behind an unapplied draft');
+  assert.equal(h.element('play').disabled, false, 'Run must be able to execute the draft directly');
   assert.equal(h.element('export').disabled, true, 'WAV export cannot silently capture a pattern different from the editor');
-  assert.equal(h.window.EaselStrudel.getState().code, activeCode);
+  assert.equal(h.window.EaselStrudel.getState().code, draft, 'preserved state must include unexecuted edits');
   h.stop();
-  assert.equal(h.element('play').disabled, true);
+  assert.equal(h.element('play').disabled, false);
   assert.equal(h.element('export').disabled, true);
   const applied = await h.window.EaselStrudel.evaluate(draft);
   assert.equal(applied.ok, true);
@@ -271,20 +270,18 @@ test('edited_code_buffer_gates_restart_and_wav_export_until_pushed', async () =>
   assert.equal(h.element('export').disabled, false);
 });
 
-test('restored_custom_code_waits_for_push_and_user_play_gesture', async () => {
+test('restored_custom_code_runs_on_a_single_user_gesture', async () => {
   const savedCode = 'note("d4").s("triangle")';
   const h = harness({ saved: { strudel: { [ID]: { code: savedCode, bpm: 140, volume: 0.25 } } } });
   await flush();
   assert.equal(h.evalCalls.length, 0, 'saved user code is not executed on reload');
   assert.equal(h.element('code').value, savedCode);
-  assert.equal(h.element('play').disabled, true, 'starter sound cannot play under a different, unapplied editor buffer');
+  assert.equal(h.element('play').disabled, false, 'Run compiles the restored code instead of playing the starter');
   assert.equal(h.element('export').disabled, true, 'WAV export is gated while the displayed code is unapplied');
   await h.play();
-  assert.equal(h.counts.starts, 0);
-  const applied = await h.window.EaselStrudel.evaluate(savedCode);
-  assert.equal(applied.ok, true);
+  assert.equal(h.counts.starts, 1);
+  assert.equal(h.evalCalls[0].code, savedCode);
   assert.equal(h.element('play').disabled, false);
   assert.equal(h.window.EaselStrudel.getState().code, savedCode);
-  await h.play();
   assert.equal(h.counts.starts, 1);
 });

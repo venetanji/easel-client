@@ -24,7 +24,7 @@ function buildStrudelKit(destination = outputPath) {
   const strudelRoot = packageRoot('@strudel/web');
   const metadata = JSON.parse(fs.readFileSync(path.join(strudelRoot, 'package.json'), 'utf8'));
   if (metadata.version !== '1.3.0') throw new Error('The Strudel kit requires @strudel/web 1.3.0.');
-  const build = { entryPoints: ['node_modules/@strudel/web/web.mjs'], bundle: true, write: false,
+  const build = { entryPoints: ['src/strudel-kit-entry.mjs'], bundle: true, write: false,
     minify: false, format: 'iife', globalName: 'strudel', platform: 'browser', target: ['chrome120'],
     legalComments: 'inline', metafile: true, absWorkingDir: root };
   const built = esbuild.buildSync(build);
@@ -77,8 +77,8 @@ function buildStrudelKit(destination = outputPath) {
     const fullPath = path.join(root, filename);
     let directory = path.dirname(fullPath);
     while (!fs.existsSync(path.join(directory, 'package.json')) && directory !== root) directory = path.dirname(directory);
-    collect(directory);
-    return { path: filename, sourcePath: filename.replace(/^node_modules\//, 'packages/'),
+    if (directory !== root) collect(directory);
+    return { path: filename, sourcePath: filename.startsWith('node_modules/') ? filename.replace(/^node_modules\//, 'packages/') : `easel/${filename}`,
       sha256: crypto.createHash('sha256').update(fs.readFileSync(fullPath)).digest('hex') };
   });
   const notice = '/*! Strudel 1.3.0; AGPL-3.0-or-later. Built locally from the published web.mjs entry.\n' +
@@ -91,7 +91,7 @@ function buildStrudelKit(destination = outputPath) {
   fs.writeFileSync(path.join(destination, 'strudel.js'), bundle);
   for (const filename of ['package.json', 'package-lock.json', 'packages/media-mcp/package.json',
     'LICENSE', 'NOTICE', 'packages/media-mcp/LICENSE', 'packages/media-mcp/NOTICE', 'licenses/creative-skills-MIT.txt',
-    'scripts/build-canvas-kits.js', 'src/strudel-kit.js', 'src/canvas-kits.js', 'src/project-zip.js']) {
+    'scripts/build-canvas-kits.js', 'src/strudel-kit.js', 'src/strudel-kit-entry.mjs', 'src/strudel-score.js', 'src/canvas-kits.js', 'src/project-zip.js']) {
     const target = path.join(sourceRoot, 'easel', filename);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(path.join(root, filename), target);

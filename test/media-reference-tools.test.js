@@ -2,6 +2,19 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { mediaToolSchema, resolveMediaToolArguments } = require('../src/media-reference-tools');
 
+test('Studio audio tools require an exact model ID even when standalone MCP advertises a default', () => {
+  for (const name of ['generate_music', 'generate_speech', 'generate_sound', 'get_audio_generation_status', 'get_audio_track', 'download_audio', 'abandon_audio_generation']) {
+    const schema = mediaToolSchema({ name, inputSchema: { type: 'object', properties: {
+      model: { type: 'string', enum: ['studio:suno-music'], default: 'studio:suno-music' },
+      outputDirectory: { type: 'string' },
+    } } });
+    assert.ok((schema.required || []).includes('model'), name);
+    assert.equal(schema.properties.model.default, undefined, name);
+    assert.deepEqual(schema.properties.model.enum, ['studio:suno-music']);
+    if (name === 'download_audio') assert.equal(schema.properties.outputDirectory, undefined);
+  }
+});
+
 test('video references are optional and nullable, without placeholder IDs', () => {
   const schema = mediaToolSchema({ name: 'generate_video', inputSchema: {
     type: 'object', required: ['model', 'prompt'], properties: { model: { type: 'string' }, prompt: { type: 'string' }, inputReference: { type: 'object' } },

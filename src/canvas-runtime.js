@@ -324,9 +324,10 @@ function installCanvasRuntime(installAudio) {
       try { state.apps[app.id] = app.getState(); } catch (error) { recordError(error.message, 'state'); }
     }
     const controls = [...document.querySelectorAll('input[id], input[name], select[id], select[name], textarea[id], textarea[name]')];
+    // App-owned controls restore through registerApp, without a second raw-value overwrite.
     for (const control of controls) {
       if (state.controls.length >= 64) break;
-      if (['password', 'file'].includes(control.type)) continue;
+      if (['password', 'file'].includes(control.type) || control.hasAttribute?.('data-easel-managed-state')) continue;
       const group = controls.filter((item) => item.tagName === control.tagName && item.type === control.type && item.name === control.name);
       state.controls.push({ id: control.id, name: control.name, tag: control.tagName, type: control.type, groupIndex: group.indexOf(control), value: control.value, checked: control.checked, selected: control.multiple ? [...control.selectedOptions].map((option) => option.value) : undefined });
     }
@@ -344,7 +345,7 @@ function installCanvasRuntime(installAudio) {
       const control = previous.id ? document.getElementById(previous.id) : ['radio', 'checkbox'].includes(previous.type)
         ? (indexed?.value === previous.value ? indexed : group.find((item) => item.value === previous.value))
         : indexed;
-      if (!control || !/^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName) || ['password', 'file'].includes(control.type)) continue;
+      if (!control || !/^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName) || ['password', 'file'].includes(control.type) || control.hasAttribute?.('data-easel-managed-state')) continue;
       if (control.tagName !== previous.tag || control.type !== previous.type) continue;
       control.value = previous.value;
       if (typeof previous.checked === 'boolean') control.checked = previous.checked;

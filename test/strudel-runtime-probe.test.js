@@ -123,7 +123,7 @@ test('diagnostic_snapshot_is_bounded_and_keeps_input_audio_and_strudel_errors', 
 test('template_fixture_runs_the_editable_starter_and_managed_lifecycle', () => {
   assert.equal(typeof runtime.templateFixtureHtml, 'function');
   const html = runtime.templateFixtureHtml('window.strudel = {};');
-  assert.match(html, /function createPattern\(\)/);
+  assert.match(html, /const DEFAULT_LIVE_CODE =/);
   assert.match(html, /bootStrudelSketch/);
   assert.match(html, /snapshotPattern/);
   assert.match(html, /EaselCanvas\.cleanup\(\)/);
@@ -186,7 +186,7 @@ test('wav_fixture_decodes_saved_pcm_and_keeps_live_context_identity', () => {
   assert.equal(typeof runtime.decodeExportWav, 'function', 'the single fixture must decode real exported WAV bytes');
   const html = runtime.templateFixtureHtml('window.strudel={};', { exportEnabled: true });
   assert.match(html, /installExportFixtureHost/);
-  assert.match(html, /<bb2 ~ bb2 bb2>/);
+  assert.match(html, /<~ bb2 ~ bb2>/);
   const source = fs.readFileSync(require('node:path').join(__dirname, '../scripts/probe-strudel-runtime.cjs'), 'utf8');
   assert.match(source, /createStrudelExportRenderer/);
   assert.match(source, /createStrudelExportController/);

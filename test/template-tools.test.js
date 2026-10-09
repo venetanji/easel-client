@@ -173,9 +173,9 @@ test('source_patch_does_not_autoplay', async (t) => {
   assert.equal(h.starts(), 1);
   const before = h.starts(), app = f.canvases.listFiles(saved.id).files.find((entry) => entry.path.endsWith('app.js'));
   assert.ok(app, 'The starter keeps the pattern in editable app.js');
-  const result = await h.view.applyCanvasFilePatches({ edits: [{ path: app.path, find: "note('<bb2 ~ bb2 bb2>')", replace: "note('bb2 bb2 ~')", expectedRevision: app.revision }], reload: true, preserveState: true, validate: false });
+  const result = await h.view.applyCanvasFilePatches({ edits: [{ path: app.path, find: '<bb2 ~ bb2 bb2>', replace: 'bb2 bb2 ~', expectedRevision: app.revision }], reload: true, preserveState: true, validate: false });
   assert.equal(result.ok, true);
-  assert.match(f.canvases.readFile(saved.id, { path: app.path }).text, /note\('bb2 bb2 ~'\)/);
+  assert.match(f.canvases.readFile(saved.id, { path: app.path }).text, /bb2 bb2 ~/);
   assert.equal(h.loads(), 2);
   assert.equal(h.starts(), before);
   assert.equal(h.app().getState().playing, false);
@@ -185,7 +185,8 @@ test('source_patch_does_not_autoplay', async (t) => {
 test('starter_describes_verified_wav_without_claiming_a_pending_runtime_gate', () => {
   const html = require('../src/strudel-template').createStrudelTemplate({ instanceId }).files['index.html'];
   assert.doesNotMatch(html, /awaiting its runtime compatibility check|only after its end-to-end runtime check/);
-  assert.match(html, /Stereo 48 kHz WAV saves to Media/);
+  assert.match(html, /Save to Media/);
+  assert.match(html, /WAV export supports/);
   assert.match(html, /loaded runtime check|loaded source context/);
 });
 

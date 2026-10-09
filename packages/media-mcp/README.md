@@ -69,9 +69,13 @@ agent -> local mcporter/MCP stdio process -> Easel HTTP API -> media backend
 
 Music, speech, sound, image and video tools all call the existing Easel API.
 The new adapters provide typed controls, receipt tracking, safe retrieval and
-host-compatible output. These additions target standalone MCP hosts such as
-OpenClaw. Electron retains its existing tool allowlist and asset bridge; adding
-audio playback/ingestion to its UI is not part of this release.
+host-compatible output. Standalone MCP hosts such as OpenClaw can save files
+with `outputDirectory`. Studio exposes configured Suno tools and imports WAV,
+MP3 and M4A downloads into its library, project and chat preview. Its agent
+schema omits `outputDirectory` so downloads use the desktop asset bridge.
+Suno receipts survive stopped submissions. Studio monitors captured song UUIDs
+through exact-track retrieval and downloads completed audio. The shared-browser
+attempt is not a queue job; uncaptured attempts and CAPTCHA need a later manual check.
 
 A client connected to Headscale can also call an authorized private API endpoint
 directly without MCP. Private access still requires working routing, the expected
@@ -146,7 +150,7 @@ With this configuration, media tools require the exact `id` returned by `list_mo
 
 In Easel client, accepted jobs are stored under `media-jobs` before ending the agent turn. The host polls about every five seconds, with backoff up to one minute on retrieval errors, and resumes polling on app restart. It retrieves using the original endpoint, model and current credentials; changing/removing that endpoint retains the ID but blocks retrieval. A disabled model does not prevent downloading its accepted jobs. Downloaded asset references are checkpointed before project attachment, so an attachment retry does not download another copy.
 
-Generating cards appear in the original project's media and All media. `/v1/videos/queue/{video_id}` supplies optional queue position and estimated completion time; `get_video({includeQueue:true})` requests those diagnostics and falls back to normal status if unavailable. Estimates are supplied by the service and may be absent or change. Deleting a card requires confirmation, stops monitoring and forgets its monitor ID; it does not cancel the server job or delete downloaded files. Recovery requires the remote job ID.
+The Media drawer's Jobs tab shows pending and recent completed jobs separately from saved media. `/v1/videos/queue/{video_id}` supplies optional queue position and estimated completion time; `get_video({includeQueue:true})` requests those diagnostics and falls back to normal status if unavailable. Estimates may be absent or change. Cancel tracking requires confirmation, stops local polling/downloads, and retains the receipt across restarts; it does not cancel accepted provider generation or refund credits. Removing a terminal job forgets its monitor ID and keeps downloaded files.
 
 Completion queues a durable notification for the originating conversation. The idle original conversation resumes automatically only while its original project and Agent endpoint/model are selected. Otherwise it receives the completion in its next turn. Stop ends/pause agent continuation but accepted jobs keep polling. Interrupted continuations are not automatically replayed on restart, since previous tool effects may have occurred.
 

@@ -438,7 +438,7 @@ test('strudel_factory_receives_host_identity_and_atomic_single_entry_is_extracte
   assert.equal(factoryId, created.instanceId);
   const after = JSON.parse(f.source());
   for (const [name, content] of Object.entries(before.files)) assert.equal(after.files[name], content);
-  assert.match(after.files[`sketches/${created.instanceId}/app.js`], /function createPattern\(\)/);
+  assert.match(after.files[`sketches/${created.instanceId}/app.js`], /const DEFAULT_LIVE_CODE =/);
   assert.match(after.files[created.documentPath], /Strudel sound/);
   assert.equal(f.instances.list(f.projectId).length, 1);
 });

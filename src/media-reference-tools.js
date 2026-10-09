@@ -1,8 +1,13 @@
+const { AUDIO_TOOLS } = require('./media-mcp-client');
 const ASSET_ID = { type: 'string', pattern: '^(?!0+$)(?:[a-f0-9]{32}|[a-f0-9]{64})$' };
 const PROJECT_ID = { type: 'string', pattern: '^[a-f0-9]{32}$', description: 'Optional project containing digest asset IDs. Omit for shared library assets or the active project.' };
 const IMAGE_OUTPUT_TOOLS = new Set(['generate_image', 'edit_image', 'create_image_variation']);
-const MEDIA_OUTPUT_TOOLS = new Set([...IMAGE_OUTPUT_TOOLS, 'get_video', 'get_image_job']);
+const MEDIA_OUTPUT_TOOLS = new Set([...IMAGE_OUTPUT_TOOLS, 'get_video', 'get_image_job', 'download_audio']);
 const MEDIA_REFERENCE_TOOLS = Object.freeze([
+  { type: 'function', function: {
+    name: 'list_audio_generations', description: 'Read recent locally saved Suno receipts for this conversation, including stopped submissions and captured track UUIDs. This does not generate, poll or monitor a queue. Use the original model and attempt IDs; inspect/download captured tracks after shared-browser takeover.',
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+  } },
   { type: 'function', function: {
     name: 'list_media_jobs', description: 'List saved media jobs and queue estimates. The host polls pending jobs across app restarts and notifies this conversation when ready. Do not spend the tool budget polling.',
     parameters: { type: 'object', additionalProperties: false, properties: {} },
@@ -34,6 +39,17 @@ const MEDIA_REFERENCE_TOOLS = Object.freeze([
 
 function mediaToolSchema(tool) {
   const schema = tool.inputSchema || { type: 'object', properties: {}, additionalProperties: false };
+  if (AUDIO_TOOLS.has(tool.name)) {
+    const properties = { ...schema.properties };
+    if (properties.model) {
+      const { default: defaultModel, ...model } = properties.model;
+      properties.model = model;
+    }
+    // A receipt must retain the endpoint route even if the shared browser changes.
+    const required = [...new Set([...(schema.required || []), 'model'])];
+    if (tool.name === 'download_audio') delete properties.outputDirectory;
+    return { ...schema, properties, required: required.filter((key) => key !== 'outputDirectory'), additionalProperties: false };
+  }
   if (!['edit_image', 'create_image_variation', 'generate_video'].includes(tool.name)) return schema;
   const properties = { ...schema.properties, projectId: { ...PROJECT_ID, type: ['string', 'null'] } };
   const required = (schema.required || []).filter((key) => !['images', 'mask', 'image', 'inputReference', 'loraReference'].includes(key));

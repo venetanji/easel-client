@@ -93,3 +93,14 @@ test('template co-creation keeps specific permission, adaptive questions and sil
 test('Tone gesture instructions are scoped to Tone rather than replacing the Strudel kit', () => {
   assert.match(COMMON_INSTRUCTIONS, /For Tone, enable its kit/);
 });
+
+test('Suno guidance follows exposed tools and preserves the shared-browser attempt', () => {
+  assert.doesNotMatch(COMMON_INSTRUCTIONS, /No audio generation/);
+  assert.match(COMMON_INSTRUCTIONS, /exposed tool/);
+  assert.match(COMMON_INSTRUCTIONS, /generate_music/);
+  assert.match(COMMON_INSTRUCTIONS, /get_audio_generation_status/);
+  assert.match(COMMON_INSTRUCTIONS, /shared.browser/);
+  assert.match(COMMON_INSTRUCTIONS, /CAPTCHA.*manual/);
+  assert.match(COMMON_INSTRUCTIONS, /never.*resubmit.*abandon/i);
+  assert.match(COMMON_INSTRUCTIONS, /Image\/video.*monitors/);
+});

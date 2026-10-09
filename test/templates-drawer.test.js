@@ -35,6 +35,7 @@ function fixture() {
   nodes.get('templates-drawer').append(...[...nodes.entries()].filter(([id]) => id !== 'templates-drawer').map(([, node]) => node));
   document.getElementById = (id) => nodes.get(id);
   document.createElement = element;
+  document.createElementNS = (_namespace, tag) => element(tag);
   let projectId = '';
   let busy = false;
   const calls = { create: [], open: [], onOpen: [], prompt: [], status: [], busy: [], send: [], generate: [], audio: [], settings: [] };
@@ -404,7 +405,22 @@ test('planned templates are grouped in a collapsed non-actionable disclosure', a
   assert.match(planned.children[0].textContent, /Coming later \(5\)/);
   assert.match(planned.textContent, /Presentations.*Games.*Image editor.*SVG editor.*Voxel soundscape/);
   assert.equal(planned.querySelectorAll('button').length, 0);
-  assert.equal(list.children.filter(node => node.className === 'template-entry').length, 2);
+  assert.equal(list.children.filter(node => node.className?.split(' ').includes('template-entry')).length, 2);
+});
+
+test('each current template is one selectable row including its description and navigation hint', async () => {
+  const f = fixture(); await f.drawer.refresh(); f.drawer.setOpen(true);
+  const list = f.nodes.get('templates-list');
+  const rows = list.children.filter(node => node.dataset.templateId);
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every(row => row.tagName === 'button'));
+  assert.ok(rows.every(row => row.querySelector('.drawer-list-description') && row.querySelector('svg')));
+  assert.ok(rows.every(row => row.getAttribute('aria-label')));
+  assert.doesNotMatch(list.textContent, /Ready/);
+  await rows[0].click();
+  assert.equal(f.nodes.get('templates-detail').hidden, false);
+  await f.button('templates-detail', 'All templates').click();
+  assert.equal(f.document.activeElement.dataset.templateId, rows[0].dataset.templateId);
 });
 
 test('Templates has a persistent visible label in the activity rail', () => {

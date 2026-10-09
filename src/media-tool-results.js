@@ -1,6 +1,6 @@
 function producedMediaAssets(result, toolName) {
   // Browsing the library must not attach every inspected asset to a conversation.
-  if (toolName && !/(?:^|__)(?:image_generation|generate_image|edit_image|create_image_variation|generate_video|get_video|get_image_job|capture_live_canvas|record_canvas_video)$/.test(toolName)) return [];
+  if (toolName && !/(?:^|__)(?:image_generation|generate_image|edit_image|create_image_variation|generate_video|get_video|get_image_job|download_audio|capture_live_canvas|record_canvas_video)$/.test(toolName)) return [];
   if (!result || result.isError || result.ok === false) return [];
   const payloads = [result, result.structuredContent];
   for (const block of Array.isArray(result.content) ? result.content : []) {

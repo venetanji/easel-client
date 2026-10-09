@@ -5,6 +5,7 @@ const { createAssetStore } = require('./asset-store');
 const { createCanvasMediaStore } = require('./canvas-media-store');
 const { handleMcpResult } = require('./agent');
 const { generatedMediaName } = require('./media-names');
+const { retrieveAudioTrackJob } = require('./audio-track-jobs');
 
 function createMediaJobWorkerRuntime({ userDataPath, mcpFactory = createMediaMcpClient, mediaAssetStore, checkpoint, isRemoved = () => false }) {
   const images = mediaAssetStore ? undefined : createAssetStore({ userDataPath });
@@ -35,7 +36,7 @@ function createMediaJobWorkerRuntime({ userDataPath, mcpFactory = createMediaMcp
     try {
       const tool = entry.mediaType === 'video' ? 'get_video' : 'get_image_job';
       const args = entry.mediaType === 'video' ? { model: entry.modelId, videoId: entry.remoteId, includeQueue: true } : { model: entry.modelId, jobId: entry.remoteId };
-      result = await client.callTool(tool, args);
+      result = entry.mediaType === 'audio' ? await retrieveAudioTrackJob(client, entry, { checkActive: checkRemoved }) : await client.callTool(tool, args);
     } catch (error) {
       connections.delete(key);
       await client.close().catch(() => {});
@@ -57,7 +58,7 @@ function createMediaJobWorkerRuntime({ userDataPath, mcpFactory = createMediaMcp
         try {
           checkRemoved();
           const existing = entry.assets[index++];
-          const name = existing?.name || generatedMediaName(entry.prompt || entry.name, media.mimeType, index - 1) || media.name;
+          const name = existing?.name || (entry.mediaType === 'audio' && media.name ? media.name : generatedMediaName(entry.prompt || entry.name, media.mimeType, index - 1)) || media.name;
           names.push(name);
           if (existing) { await assets.get(existing.assetId); return existing.assetId; }
           const assetId = await assets.save({ ...media, ...(name ? { name } : {}) });

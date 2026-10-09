@@ -41,7 +41,7 @@ function fixture() {
     'image-viewer-image', 'media-viewer-video', 'media-viewer-audio', 'image-viewer-info', 'image-size-toggle', 'media-empty',
     'project-image-count', 'canvases-empty', 'project-rename', 'project-delete', 'project-source-files', 'image-use-chat', 'image-download', 'library-collapse',
     'project-new', 'drawer-new-document', 'export-current',
-    'media-unread', 'project-kit-list', 'project-kit-status',
+    'media-unread', 'media-generating', 'media-tab-assets', 'media-tab-jobs', 'media-assets-panel', 'media-jobs-panel', 'media-jobs-list', 'media-jobs-empty', 'media-jobs-count', 'project-kit-list', 'project-kit-status',
     'media-search', 'media-type-filter', 'media-sort', 'media-filters-reset',
   ];
   const nodes = new Map(ids.map((id) => [id, element('div', id)]));
@@ -228,28 +228,32 @@ test('deletion invalidates an unfinished media preview before it can reopen the 
   assert.equal(state.nodes.get('image-viewer').hidden, true);
 });
 
-test('pending media appears as a generating card with estimate and confirmed removal', async () => {
+test('pending generations appear only in Jobs, with estimates and confirmed cancellation', async () => {
   const state = fixture();
   const job = { id: 'f'.repeat(32), remoteId: 'video_queued', status: 'generating', providerStatus: 'in_progress', mediaType: 'video', progress: 30, queuePosition: 1, estimatedWaitSeconds: 80 };
   state.projectAssets.push({ id: job.id, name: 'A cat in sunlight', mimeType: 'video/mp4', kind: 'job', job });
   let approved = false;
-  state.client.deleteMediaJob = async (id) => {
+  state.client.cancelMediaJob = async (id) => {
     assert.equal(id, job.id);
-    if (!approved) return { deleted: false, canceled: true };
-    state.projectAssets.splice(1, 1);
-    return { deleted: true };
+    if (!approved) return { canceled: false };
+    job.status = 'cancelled';
+    return { canceled: true, job };
   };
   await state.workspace.openProject(state.projectId);
-  const list = state.nodes.get('media-list');
-  const card = list.children[1];
+  const list = state.nodes.get('media-jobs-list');
+  const card = list.children[0];
+  assert.equal(state.nodes.get('media-list').children.length, 1);
   assert.match(card.textContent, /Generating/);
   assert.match(card.textContent, /About 2 min/);
   assert.equal(card.querySelectorAll('.project-media-actions').length, 0);
-  await card.querySelector('.delete-control').listeners.click();
-  assert.equal(list.children.length, 2);
+  assert.equal(card.querySelector('.delete-control').hidden, true);
+  await card.querySelector('.media-job-cancel').listeners.click();
+  assert.match(card.textContent, /Generating/);
   approved = true;
-  await card.querySelector('.delete-control').listeners.click();
+  await card.querySelector('.media-job-cancel').listeners.click();
   assert.equal(list.children.length, 1);
+  assert.match(list.children[0].textContent, /Tracking canceled/);
+  assert.equal(state.nodes.get('media-generating').hidden, true);
 });
 
 test('project files and media have distinct drawers with exclusive rail selection', () => {
@@ -421,6 +425,22 @@ test('All media adds a reference to the project with one click and shows an atta
   assert.equal(updated.querySelectorAll('button').some((entry) => entry.getAttribute('aria-label') === 'Use in chat'), true);
 });
 
+test('M4A previews and downloads stay available while incompatible audio chat actions remain disabled', async () => {
+  const state = fixture();
+  Object.assign(state.asset, { mimeType: 'audio/mp4', name: 'Pixel Haze.m4a' });
+  await state.workspace.openProject(state.projectId);
+  const use = state.nodes.get('media-list').children[0].querySelectorAll('button').find(button => button.attributes['aria-label'] === 'Use in chat');
+  assert.equal(use.disabled, true);
+  assert.match(use.title, /WAV or MP3/);
+  state.busy(true); state.workspace.updateBusy();
+  state.busy(false); state.workspace.updateBusy();
+  assert.equal(use.disabled, true);
+  await state.workspace.previewMedia({ projectId: state.projectId, scope: 'project', asset: state.asset, previewHidden: true });
+  assert.equal(state.nodes.get('media-viewer-audio').hidden, false);
+  assert.equal(state.nodes.get('image-use-chat').disabled, true);
+  assert.equal(state.nodes.get('image-download').disabled, false);
+});
+
 test('shared library media cannot be deleted and a missing project disables Add to project', async () => {
   const state = fixture();
   state.asset.referenceCount = 2;
@@ -444,15 +464,14 @@ test('shared library media cannot be deleted and a missing project disables Add 
   assert.equal(empty.nodes.get('all-media-list').children[0].querySelector('.project-thumbnail').disabled, false);
 });
 
-test('poll updates change only job status in both media sections without IPC or focus loss', async () => {
+test('poll updates change job status without reloading media or losing focus', async () => {
   const state = fixture();
   const job = { id: 'f'.repeat(32), remoteId: 'video_queued', status: 'generating', providerStatus: 'in_progress', mediaType: 'video', progress: 20, queuePosition: 1, estimatedWaitSeconds: 80 };
   const asset = { id: job.id, name: 'Sunlit cat', mimeType: 'video/mp4', kind: 'job', job };
   state.projectAssets.push(asset);
   state.libraryAssets.push(asset);
   await state.workspace.openProject(state.projectId);
-  const projectJob = state.nodes.get('media-list').children[1];
-  const libraryJob = state.nodes.get('all-media-list').children[1];
+  const projectJob = state.nodes.get('media-jobs-list').children[0];
   const readyCard = state.nodes.get('all-media-list').children[0];
   const download = readyCard.querySelector('.project-media-actions').children.at(-1);
   download.focus();
@@ -460,19 +479,17 @@ test('poll updates change only job status in both media sections without IPC or 
   state.client.getProjectAssets = async () => { throw new Error('Polling must not reload project thumbnails.'); };
   state.client.listAssets = async () => { throw new Error('Polling must not reload library thumbnails.'); };
   assert.equal(state.workspace.updateMediaJob({ ...job, progress: 65, estimatedWaitSeconds: 25 }), true);
-  assert.equal(state.nodes.get('media-list').children[1], projectJob);
-  assert.equal(state.nodes.get('all-media-list').children[1], libraryJob);
+  assert.equal(state.nodes.get('media-jobs-list').children[0], projectJob);
   assert.equal(projectJob.querySelector('.delete-control'), jobTrash);
   assert.equal(projectJob.querySelector('.media-job-progress').value, 65);
-  assert.equal(libraryJob.querySelector('.media-job-progress').value, 65);
   assert.match(projectJob.querySelector('.media-job-detail').textContent, /About 25 seconds/);
   assert.equal(readyCard.querySelector('.project-media-actions').children.at(-1), download);
   assert.equal(download.focused, true);
   assert.equal(download.disabled, false);
   assert.equal(readyCard.querySelector('.media-job-cog'), null);
   assert.equal(projectJob.querySelector('.media-job-cog').attributes['aria-hidden'], 'true');
-  assert.equal(state.workspace.updateMediaJob({ ...job, status: 'ready' }), false);
-  assert.equal(state.workspace.updateMediaJob({ ...job, id: 'e'.repeat(32) }), false);
+  assert.equal(state.workspace.updateMediaJob({ ...job, status: 'ready' }), true);
+  assert.equal(state.workspace.updateMediaJob({ ...job, id: 'e'.repeat(32) }), true);
   assert.equal(state.workspace.updateMediaJob({ ...job, status: 'failed', error: 'Service failed.' }), true);
   assert.equal(projectJob.querySelector('.media-job-cog').attributes.hidden, '');
 });
@@ -660,7 +677,7 @@ test('reset clears media search, type, and sort while filters survive refresh an
   assert.equal(state.nodes.get('all-media-empty').hidden, true);
 });
 
-test('generation jobs match type and prompt search while polling preserves matching card identity', async () => {
+test('Jobs tab stays independent of media filters and preserves cards while progress updates', async () => {
   const state = fixture();
   const job = { id: 'f'.repeat(32), status: 'generating', mediaType: 'video', prompt: 'Lighthouse at sunset', createdAt: 10, updatedAt: 50 };
   const asset = { id: job.id, name: 'Lighthouse', mimeType: 'video/mp4', kind: 'job', updatedAt: 50, job };
@@ -668,17 +685,46 @@ test('generation jobs match type and prompt search while polling preserves match
   await state.workspace.openProject(state.projectId);
   mediaControl(state, 'media-type-filter', 'video');
   mediaControl(state, 'media-search', 'SUNSET');
-  assert.deepEqual(mediaIds(state), [job.id]);
-  const card = state.nodes.get('all-media-list').children[0];
+  assert.deepEqual(mediaIds(state), []);
+  const card = state.nodes.get('media-jobs-list').children[0];
   assert.equal(state.workspace.updateMediaJob({ ...job, progress: 60 }), true);
-  assert.equal(state.nodes.get('all-media-list').children[0], card);
+  assert.equal(state.nodes.get('media-jobs-list').children[0], card);
   assert.equal(card.querySelector('.media-job-progress').value, 60);
   mediaControl(state, 'media-type-filter', 'image');
   assert.deepEqual(mediaIds(state), []);
   assert.equal(state.workspace.updateMediaJob({ ...job, progress: 70 }), true);
   assert.match(state.nodes.get('nav-media').attributes['aria-label'], /1 media job in progress/);
   mediaControl(state, 'media-type-filter', 'video');
-  assert.equal(state.nodes.get('all-media-list').children[0].querySelector('.media-job-progress').value, 70);
+  assert.equal(state.nodes.get('media-jobs-list').children[0].querySelector('.media-job-progress').value, 70);
+});
+
+test('Media and Jobs tabs support keyboard navigation and keep the active view across refresh', async () => {
+  const state = fixture();
+  state.client.listMediaJobs = async () => [{ id: 'f'.repeat(32), name: 'Pixel Haze', remoteId: 'track-uuid', mediaType: 'audio', status: 'queued', assets: [] }];
+  await state.workspace.openProject(state.projectId);
+  const media = state.nodes.get('media-tab-assets');
+  const jobs = state.nodes.get('media-tab-jobs');
+  assert.equal(media.attributes['aria-selected'], 'true');
+  assert.equal(state.nodes.get('media-jobs-count').textContent, '1');
+  assert.equal(state.nodes.get('media-generating').hidden, false);
+  jobs.listeners.click();
+  assert.equal(jobs.attributes['aria-selected'], 'true');
+  assert.equal(state.nodes.get('media-assets-panel').hidden, true);
+  assert.equal(state.nodes.get('media-jobs-panel').hidden, false);
+  await state.workspace.refreshAssets();
+  assert.equal(jobs.attributes['aria-selected'], 'true');
+  jobs.listeners.keydown({ key: 'ArrowLeft', preventDefault() {} });
+  assert.equal(media.attributes['aria-selected'], 'true');
+  assert.equal(media.focused, true);
+  media.listeners.keydown({ key: 'End', preventDefault() {} });
+  assert.equal(jobs.attributes['aria-selected'], 'true');
+  state.workspace.updateMediaJob({ id: 'f'.repeat(32), status: 'ready', assets: [{ assetId: state.assetId }] });
+  const card = state.nodes.get('media-jobs-list').children[0];
+  assert.match(card.textContent, /Ready/);
+  assert.equal(card.querySelector('.media-job-view').hidden, false);
+  assert.equal(card.querySelector('.media-job-cancel').hidden, true);
+  assert.equal(state.nodes.get('media-generating').hidden, true);
+  assert.equal(state.nodes.get('media-jobs-count').hidden, true);
 });
 
 test('project media search includes subsequent pages and deduplicates generation jobs', async () => {
@@ -694,10 +740,11 @@ test('project media search includes subsequent pages and deduplicates generation
   };
   await state.workspace.openProject(state.projectId);
   assert.deepEqual(pages, [[state.projectId, {}], [state.projectId, { offset: 1, limit: 200 }]]);
-  assert.deepEqual(mediaIds(state, 'media-list'), [pending.id, state.assetId, later.id]);
+  assert.deepEqual(mediaIds(state, 'media-list'), [state.assetId, later.id]);
+  assert.equal(state.nodes.get('media-jobs-list').children.length, 1);
   mediaControl(state, 'media-search', 'Older');
   assert.deepEqual(mediaIds(state, 'media-list'), [later.id]);
-  assert.equal(state.nodes.get('project-image-count').textContent, '1 / 3');
+  assert.equal(state.nodes.get('project-image-count').textContent, '1 / 2');
 });
 
 test('a superseded project media page cannot replace a newer refresh', async () => {

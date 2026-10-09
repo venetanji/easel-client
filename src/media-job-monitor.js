@@ -4,6 +4,7 @@ const { createMediaMcpClient } = require('./media-mcp-client');
 const { defaultMcpLaunchOptions } = require('./chat-service');
 const { createMediaJobWorkerClient } = require('./media-job-worker-client');
 const { generatedMediaName } = require('./media-names');
+const { retrieveAudioTrackJob } = require('./audio-track-jobs');
 
 function createMediaJobMonitor({ store, settingsStore, mediaAssetStore, attachAssets, enrichAssets, onEvent, onReady,
   runtime = {}, mcpFactory = createMediaMcpClient, workerFactory = createMediaJobWorkerClient, now = Date.now, intervalMs = 5000 }) {
@@ -37,13 +38,14 @@ function createMediaJobMonitor({ store, settingsStore, mediaAssetStore, attachAs
       async save(media) {
         if (saveFailure) throw saveFailure;
         try {
+          if (removed.has(entry.id)) throw new Error('Tracking stopped before output could be saved.');
           const current = store.get(entry.id);
           const existing = current.assets[index++];
           if (existing) { await mediaAssetStore.get(existing.assetId); return existing.assetId; }
-          const name = generatedMediaName(entry.prompt || entry.name, media.mimeType, index - 1);
+          const name = entry.mediaType === 'audio' && media.name ? media.name : generatedMediaName(entry.prompt || entry.name, media.mimeType, index - 1);
           const assetId = await mediaAssetStore.save({ ...media, ...(name ? { name } : {}) });
           if (removed.has(entry.id)) return assetId;
-          store.update(entry.id, { downloadComplete: false, assets: [...store.get(entry.id).assets, { assetId, mimeType: media.mimeType, ...(name || media.name ? { name: name || media.name } : {}) }] });
+          store.update(entry.id, { downloadComplete: false, assets: [...store.get(entry.id).assets, { assetId, mimeType: media.mimeType, ...(name || media.name ? { name: name || media.name } : {}), ...(media.duration ? { duration: media.duration } : {}) }] });
           return assetId;
         } catch (error) { saveFailure = error; throw error; }
       },
@@ -68,7 +70,9 @@ function createMediaJobMonitor({ store, settingsStore, mediaAssetStore, attachAs
       }
     }
     if (entry.projectId && !entry.attached) {
-      const attachment = await attachAssets?.(entry.projectId, entry.assets.map((asset) => asset.assetId));
+      const attachment = await attachAssets?.(entry.projectId, entry.assets.map((asset) => asset.assetId), { beforeCommit: () => {
+        if (removed.has(entry.id) || TERMINAL.has(store.get(entry.id).status)) throw new Error('Tracking stopped before project attachment.');
+      } });
       if (removed.has(entry.id)) return;
       entry = store.update(entry.id, { attached: true, ...(attachment?.projectDeleted ? { projectId: '', notification: 'interrupted' } : {}) });
     }
@@ -77,7 +81,7 @@ function createMediaJobMonitor({ store, settingsStore, mediaAssetStore, attachAs
     await onReady?.(mediaJobSummary(entry));
   }
   async function poll(entry) {
-    if (removed.has(entry.id)) return;
+    if (removed.has(entry.id) || TERMINAL.has(store.get(entry.id).status)) return;
     let mcp;
     try {
       if (entry.assets.length && entry.downloadComplete !== false) return await finishDownload(entry);
@@ -95,7 +99,9 @@ function createMediaJobMonitor({ store, settingsStore, mediaAssetStore, attachAs
         mcp = await mcpFactory(launchOptions);
         const tool = entry.mediaType === 'video' ? 'get_video' : 'get_image_job';
         const args = entry.mediaType === 'video' ? { model: entry.modelId, videoId: entry.remoteId, includeQueue: true } : { model: entry.modelId, jobId: entry.remoteId };
-        result = await mcp.callTool(tool, args);
+        result = entry.mediaType === 'audio' ? await retrieveAudioTrackJob(mcp, entry, { checkActive: () => {
+          if (removed.has(entry.id)) throw new Error('Audio job tracking stopped.');
+        } }) : await mcp.callTool(tool, args);
       }
       if (removed.has(entry.id)) return;
       if (result.isError) throw new Error((result.content || []).filter((item) => item.type === 'text').map((item) => item.text).join('\n') || 'Media job status could not be retrieved.');
@@ -144,8 +150,24 @@ function createMediaJobMonitor({ store, settingsStore, mediaAssetStore, attachAs
     await closing?.close().catch(() => {});
   }
   function forget(id) { const result = store.remove(id); removed.add(id); worker?.forget?.(id); onEvent?.({ type: 'media-job-removed', jobId: id }); return result; }
+  function cancel(id) {
+    const entry = store.get(id);
+    if (TERMINAL.has(entry.status)) throw new Error('Only a pending job can be canceled.');
+    const canceled = store.update(id, { status: 'cancelled', notification: 'cancelled', autoResume: false, error: '', completedAt: now() });
+    removed.add(id);
+    worker?.forget?.(id);
+    emit(canceled);
+    return mediaJobSummary(canceled);
+  }
   function retry(id) { const entry = store.get(id); if (TERMINAL.has(entry.status)) throw new Error('Only a pending job can retry retrieval.'); const next = store.update(id, { nextPollAt: 0, error: '', attempts: 0 }); emit(next); return mediaJobSummary(next); }
-  return { track, start, stop, tick, forget, retry, list: store.list };
+  function updateAssets(id, assets) {
+    const entry = store.get(id);
+    if (entry.status !== 'ready') throw new Error('Only completed jobs can replace their saved output references.');
+    const updated = store.update(id, { assets });
+    emit(updated);
+    return mediaJobSummary(updated);
+  }
+  return { track, start, stop, tick, forget, cancel, retry, updateAssets, list: store.list };
 }
 
 module.exports = { createMediaJobMonitor };
