@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
 const { buildCanvasDocument, CSP } = require('../src/canvas-policy');
@@ -309,6 +310,7 @@ async function proveProductionWavExport({ BrowserWindow, session, open, until, r
   const { createStrudelExportController } = require('../src/strudel-export-controller');
   const { createStrudelExportBridge, assertStrudelScope } = require('../src/strudel-export-bridge');
   const { validateStrudelWav } = require('../src/strudel-export-policy');
+  const { captureStrudelSamples } = require('../src/strudel-sample-assets');
   const userDataPath = path.join(directory, 'wav-media-proof');
   const media = createCanvasMediaStore({ userDataPath });
   const bundle = fs.readFileSync(path.join(root, 'canvas-kits/strudel.js'), 'utf8');
@@ -332,7 +334,8 @@ async function proveProductionWavExport({ BrowserWindow, session, open, until, r
   const controller = createStrudelExportController({ render: renderer.renderStrudelSnapshot, saveMedia: media.save, findExport: media.findExport,
     isAttached: async (projectId, assetId) => store.getProject(projectId).manifest.assets.some(asset => asset.id === assetId),
     attach: (projectId, assetIds, beforeCommit) => store.attachAssets(projectId, { assetIds }, { beforeCommit }),
-    assertScope: captured => assertStrudelScope(captured, scopeOptions), captureDependency: captured => store.getProjectKitSource(captured.projectId, 'strudel') });
+    assertScope: captured => assertStrudelScope(captured, scopeOptions), captureDependency: captured => store.getProjectKitSource(captured.projectId, 'strudel'),
+    captureSamples: (captured, snapshot) => captureStrudelSamples(store, captured.projectId, snapshot) });
   const bridge = createStrudelExportBridge({ ...scopeOptions, controller, exportReady: true });
   const sound = await open('export.html');
   await until(sound, state => state.ready, 'wav-template-ready');
@@ -370,12 +373,12 @@ async function proveProductionWavExport({ BrowserWindow, session, open, until, r
   // Query actual pinned patterns without a scheduler/audio context. The same
   // production bridge/controller/renderer saves and decodes these plain scores.
   const { validateStrudelSnapshot, queryStrudelSnapshot } = require('../src/strudel-export-policy');
-  const queryScore = async expression => {
-    const result = await decoderWindow.webContents.executeJavaScript(`(() => {
+  const queryScore = async (expression, realm = decoderWindow) => {
+    const result = await realm.webContents.executeJavaScript(`(() => {
       try {
         const validateStrudelSnapshot = ${validateStrudelSnapshot.toString()};
         const queryStrudelSnapshot = ${queryStrudelSnapshot.toString()};
-        return { snapshot: queryStrudelSnapshot(${expression}, { bpm: 120, volume: 1 }, 1, '${'d'.repeat(64)}', strudel) };
+        return { snapshot: queryStrudelSnapshot(${expression}, { bpm: 120, volume: 1 }, 1, '${'d'.repeat(64)}', strudel, window.EaselStrudelSamples) };
       } catch (error) { return { error: String(error.message || error) }; }
     })()`);
     if (result.error) throw new Error(`Native export query ${expression} failed: ${result.error}`);
@@ -427,6 +430,33 @@ async function proveProductionWavExport({ BrowserWindow, session, open, until, r
   assertNativeLongNoteEvidence(longResult, longSnapshot.events.length);
   stage('wav-native-defaults-and-long-score-proven');
 
+  // AAC decoding is unavailable in Playwright Chromium. Exercise the exact
+  // Electron kit, live REPL and production Media/export path with original M4A.
+  const m4aBytes = fs.readFileSync(path.join(root, 'test/fixtures/strudel-samples/snare.m4a'));
+  const m4aData = m4aBytes.toString('base64');
+  const m4aId = await media.save({ data: m4aData, mimeType: 'audio/mp4', name: 'Suno-format snare.m4a' });
+  await store.attachAssets(project.id, { assetIds: [m4aId] });
+  await sound.webContents.executeJavaScript(`window.__easelProjectAssets = Object.freeze({ '${m4aId}': { url: 'data:audio/mp4;base64,${m4aData}' } }); void 0;`);
+  const m4aCode = `await window.EaselStrudelSamples.add('suno_hat', '${m4aId}')\ns("suno_hat*4").gain(.3)`;
+  await pushStrudelCode(sound, m4aCode);
+  const registered = await sound.webContents.executeJavaScript("EaselStrudelSamples.get('suno_hat')");
+  check(registered.assetId === m4aId && registered.digest === crypto.createHash('sha256').update(m4aBytes).digest('hex') && registered.durationSeconds === 0.25, 'M4A lost its original asset, content hash or decoded duration.');
+  await sound.webContents.executeJavaScript(`probe.peaks = []; probe.m4aStartedAt = strudel.getAudioContext().currentTime; document.getElementById('strudel-${instanceId}-volume').value = '0.5'; document.getElementById('strudel-${instanceId}-volume').dispatchEvent(new Event('input')); void 0;`);
+  await until(sound, state => state.schedulerStarted && state.audioTime >= state.m4aStartedAt + OLD_VOICE_BOUND_SECONDS && state.peaks.slice(-10).some(value => value > 0.001), 'm4a-live-signal');
+  const m4aSnapshot = await queryScore("strudel.s('suno_hat').fast(4).gain(.3)", sound);
+  const m4aRequest = { action: 'export', input: { exportId: 'attached-m4a', expectedSourceRevision: context.sourceRevision, snapshot: m4aSnapshot } };
+  const m4aReceipt = await bridge.handle(m4aRequest);
+  check(m4aReceipt.attachmentStatus === 'attached', 'M4A score export did not attach its WAV.');
+  const m4aWav = await media.get(m4aReceipt.assetId);
+  const m4aTiming = validateStrudelWav(Buffer.from(m4aWav.data, 'base64'), m4aSnapshot);
+  const m4aResult = await decoderWindow.webContents.executeJavaScript(`(${decodeExportWav.toString()})(${JSON.stringify(m4aWav.data)},${JSON.stringify(m4aSnapshot)})`);
+  check(m4aResult.frames === m4aTiming.frames && m4aResult.frames === 120000 && m4aResult.eventPeaks.every(peaks => peaks.every(peak => peak > 0.001)), 'M4A WAV export lost an onset or changed format/timing.');
+  const reopenedM4a = await createCanvasMediaStore({ userDataPath }).getPlaybackSource(m4aReceipt.assetId);
+  check(fs.readFileSync(reopenedM4a.filename).equals(Buffer.from(m4aWav.data, 'base64')), 'M4A score saved/reopened WAV bytes differ.');
+  check((await bridge.handle(m4aRequest)).assetId === m4aReceipt.assetId, 'M4A export retry duplicated the WAV.');
+  await pushStrudelCode(sound, "note('~ c4 ~ g4').s('sine')");
+  stage('m4a-live-and-wav-export-proven');
+
   await sound.webContents.executeJavaScript(`probe.liveContextIdentity = strudel.getAudioContext() === __exportLiveIdentity.context && strudel.getSuperdoughAudioController() === __exportLiveIdentity.controller && strudel.getAudioContext().state === 'running' && strudel.getAudioContext().currentTime > __exportLiveIdentity.time && strudel.getIsStarted(); probe.peaks = []; document.getElementById('strudel-${instanceId}-volume').value = '0.5'; document.getElementById('strudel-${instanceId}-volume').dispatchEvent(new Event('input')); void 0;`);
   const alive = await until(sound, state => state.liveContextIdentity && state.peaks.length >= 10 && state.peaks.slice(-10).every(value => value > 0.001), 'wav-live-context-survived');
   check(alive.activeAudioContexts === 1, 'Export created a live audio context in the authored realm.');
@@ -442,7 +472,9 @@ async function proveProductionWavExport({ BrowserWindow, session, open, until, r
   check(navigation.url === sameUrl && navigation.isMainFrame === true && navigation.isSameDocument === false, 'Native same-URL reload did not emit a top-level replacement event.');
 
   return { decoded: decoded.map(({ eventPeaks, quietPeaks, ...summary }) => ({ ...summary, eventPeaks, quietPeaks })), volumeRatio, liveContextIdentity: true,
-    sustainedLiveSamples: 10, sameUrlNavigationEvent: true, savedReopenedBytes: true, nativeDefaultProofs: synthProofs, percussionProofs, nativeSustainRatio, longScore: { events: longSnapshot.events.length, latePeaks: longResult.latePeaks, duration: longResult.duration }, durableAssets: receipts.map(receipt => receipt.assetId), idempotentRetries: true, pinnedKitDigest: store.getProjectKitSource(project.id, 'strudel').digest };
+    sustainedLiveSamples: 10, sameUrlNavigationEvent: true, savedReopenedBytes: true, nativeDefaultProofs: synthProofs, percussionProofs, nativeSustainRatio, longScore: { events: longSnapshot.events.length, latePeaks: longResult.latePeaks, duration: longResult.duration },
+    m4aSample: { ...registered, frames: m4aResult.frames, eventPeaks: m4aResult.eventPeaks, liveSignal: true, savedReopenedBytes: true, idempotentRetry: true },
+    durableAssets: receipts.map(receipt => receipt.assetId), idempotentRetries: true, pinnedKitDigest: store.getProjectKitSource(project.id, 'strudel').digest };
 }
 
 function templateFixtureHtml(bundle, { instanceId = 'c'.repeat(32), preserved, saved, edited = false, exportEnabled = false, replEnabled = true } = {}) {

@@ -33,9 +33,18 @@ that asset to the intended project. In the complete saved score include
 `await window.EaselStrudelSamples.add('suno_snare', 'REAL_ATTACHED_ASSET_ID')`
 before `s("suno_snare")`. Use single quotes for the plain registration strings;
 Strudel transforms double-quoted strings into patterns. Do not invent asset IDs. Samples must be mono/stereo
-WAV or MP3, at most 10 seconds and 4 MiB; full songs usually need trimming.
+WAV, MP3 or M4A, at most 10 seconds and 4 MiB; full songs usually need trimming.
 Inspect `EaselStrudelSamples.list()` to discover registered names. Built-in
 names are reserved. Older project-pinned kits may lack this registry.
+
+Suno M4A (`audio/mp4`) works directly when the registry's `supportedFormats`
+includes `m4a`; do not ask for conversion or generate it again. Duration limits
+use decoded audio, so request at most 9 seconds to leave room for AAC padding.
+An older registry without this capability still supports only WAV/MP3. On a
+user-requested kit refresh, read `list_canvas_files` and collect every name from
+`manifest.kits` (`kit.name`). Pass that complete list to `update_canvas_project` with
+`reload:true,preserveState:true`. This refreshes installed pins, retaining source,
+attachments and editor text. Reload stops playback; the user presses Run again.
 
 Adding a sample and `EaselStrudel.evaluate(completeScore)` preserve the live
 context and scheduler. Keep registration lines in durable score source so

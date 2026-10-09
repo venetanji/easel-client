@@ -12,7 +12,7 @@ function captureStrudelSamples(store, projectId, snapshot) {
       continue;
     }
     const asset = store.getAsset(projectId, sample.assetId);
-    if (!/^audio\/(?:wav|x-wav|mpeg|mp3)$/.test(asset.mimeType) || typeof asset.data !== 'string' || asset.data.length > Math.ceil(4 * 1048576 / 3) * 4 || !isMediaBase64(asset.data)) throw new Error('Export samples must be attached WAV or MP3 audio up to 4 MiB.');
+    if (!/^audio\/(?:wav|x-wav|mpeg|mp3|mp4|x-m4a)$/.test(asset.mimeType) || typeof asset.data !== 'string' || asset.data.length > Math.ceil(4 * 1048576 / 3) * 4 || !isMediaBase64(asset.data)) throw new Error('Export samples must be attached WAV, MP3 or M4A audio up to 4 MiB.');
     const bytes = Buffer.from(asset.data, 'base64');
     const digest = crypto.createHash('sha256').update(bytes).digest('hex');
     if (!bytes.length || bytes.length > 4 * 1048576 || digest !== sample.digest) throw new Error('Sample content changed or its digest is invalid. Register it again before exporting.');

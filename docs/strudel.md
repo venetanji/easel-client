@@ -74,10 +74,21 @@ Use single quotes for the plain name and asset ID; Strudel interprets double
 quotes as patterns. Use lowercase names with underscores, at most 48 characters. Built-in names
 are reserved; choose a new name for generated alternatives.
 
-Samples must be WAV or MP3, mono or stereo, at most 10 seconds and 4 MiB each.
+Samples must be WAV, MP3 or M4A, mono or stereo, at most 10 seconds and 4 MiB each.
+Suno M4A (`audio/mp4`, also `audio/x-m4a`) decodes directly in Studio's Electron
+runtime for playback and WAV export. The duration limit applies to decoded
+audio; ask Suno for at most 9 seconds to leave room for AAC padding.
 Use `generate_sound` for short one-shots or loops; full generated songs usually
 need trimming first. Check attacks, duration and loop boundaries. Generation
 does not automatically trim, normalize, tune or register audio.
+
+Existing projects retain their kit pin. Check
+`window.EaselStrudelSamples?.supportedFormats?.includes('m4a')` before using M4A on an
+older project. To refresh on the user's request, read `list_canvas_files` and
+collect every `kit.name` from `manifest.kits`, then pass that complete list to `update_canvas_project`
+with `reload:true,preserveState:true`. This takes installed bundles while
+preserving authored source, attached media and editor text. Playback stops at
+reload and stays silent until the user presses Run.
 
 ## Local sounds and effects
 

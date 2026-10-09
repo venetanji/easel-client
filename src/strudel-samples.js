@@ -29,9 +29,9 @@ function createStrudelSamples(native, bank, getAssets) {
     if (!assets) throw new Error('Attach audio to this project in Media before adding a sample.');
     await assets.ready;
     const url = assets.getUrl(assetId);
-    if (!/^data:audio\/(?:wav|x-wav|mpeg|mp3);base64,/.test(url) || url.length > Math.ceil(4 * 1048576 / 3) * 4 + 64) throw new Error('Use a WAV or MP3 sample up to 4 MiB.');
+    if (!/^data:audio\/(?:wav|x-wav|mpeg|mp3|mp4|x-m4a);base64,/.test(url) || url.length > Math.ceil(4 * 1048576 / 3) * 4 + 64) throw new Error('Use a WAV, MP3 or M4A sample up to 4 MiB.');
     const bytes = Uint8Array.from(atob(url.slice(url.indexOf(',') + 1)), character => character.charCodeAt(0));
-    if (!bytes.length || bytes.length > 4 * 1048576) throw new Error('Use a WAV or MP3 sample up to 4 MiB.');
+    if (!bytes.length || bytes.length > 4 * 1048576) throw new Error('Use a WAV, MP3 or M4A sample up to 4 MiB.');
     const hash = await crypto.subtle.digest('SHA-256', bytes);
     const digest = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
     if (entries.get(name)?.digest === digest && entries.get(name)?.assetId === assetId) return describe(entries.get(name));
@@ -50,7 +50,7 @@ function createStrudelSamples(native, bank, getAssets) {
     entries.set(name, Object.freeze({ name, label: name, assetId, digest, durationSeconds, url }));
     return describe(entries.get(name));
   }
-  return Object.freeze({ prepare, add, get: name => describe(entries.get(name)),
+  return Object.freeze({ supportedFormats: Object.freeze(['wav', 'mp3', 'm4a']), prepare, add, get: name => describe(entries.get(name)),
     list: () => Array.from(entries, ([name, entry]) => ({ name, label: entry.label, ...describe(entry) })) });
 }
 module.exports = { createStrudelSamples };

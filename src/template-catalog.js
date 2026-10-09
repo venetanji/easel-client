@@ -15,7 +15,7 @@ const ENTRIES = [
     purpose: 'Write and audition live Strudel patterns in an offline scratchpad.',
     requiredKits: ['strudel'], actions: ['create-project', 'add-to-current-project'],
     outputs: ['Editable HTML with synths, local drums and attached samples', 'Bounded stereo WAV loop saved to Media'],
-    limitations: ['Creation requires the installed Strudel kit. Existing projects retain their pinned kit; create a new Strudel project for the latest local sample bank.', 'Remote samples/network are blocked. Attached WAV/MP3 samples must be mono/stereo, at most 10 seconds and 4 MiB; WAV export accepts at most 16 sample names and 8 MiB of sample bytes.', 'WAV export: 1–16 cycles, at most 30 seconds including a 0.5-second release tail.', 'Stereo 48 kHz PCM16 WAV below 6 MiB; effects and sample pitch/speed/slicing cannot export.'],
+    limitations: ['Creation requires the installed Strudel kit. Existing projects retain their pinned kit; create a new Strudel project for the latest local sample bank.', 'Remote samples/network are blocked. Attached WAV/MP3/M4A samples must be mono/stereo, at most 10 seconds and 4 MiB; WAV export accepts at most 16 sample names and 8 MiB of sample bytes.', 'WAV export: 1–16 cycles, at most 30 seconds including a 0.5-second release tail.', 'Stereo 48 kHz PCM16 WAV below 6 MiB; effects and sample pitch/speed/slicing cannot export.'],
     questions: ['Do you want to begin with a rhythm or a melody?', 'Should it feel calm, playful or tense?'],
     availability: { available: false, reason: 'Creation requires the installed Strudel kit.' },
   },

@@ -40,7 +40,7 @@ samples run without a network connection.
   The probe also mutes the managed output gain, then verifies silence and restart.
 - The pinned kit includes seven original local drums (`bd`, `sd`, `hh`, `oh`,
   `cp`, `tom`, `rim`). `EaselStrudelSamples.add(name, assetId)` registers attached
-  short WAV/MP3 samples, including Suno output, without restarting live audio.
+  short WAV/MP3/M4A samples, including Suno output, without restarting live audio.
   Registration arguments use single quotes because the Strudel transpiler turns
   double-quoted literals into Patterns. Remote `samples('github:...')` remains
   blocked by CSP. Live Strudel code can
@@ -143,7 +143,7 @@ Authored event values support `note`, `s`, `gain`, `attack`, `decay`, `sustain`,
 
 - Sine/sin, triangle/tri, square/sqr, sawtooth/saw
 - Native `sbd` kick and `white`, `pink`, `brown` noise; no sample packs are needed
-- Bundled drums and registered attached WAV/MP3 samples, without sample pitch,
+- Bundled drums and registered attached WAV/MP3/M4A samples, without sample pitch,
   speed or slicing. Up to 16 names and 8 MiB of attached sample bytes per export;
   each sample is mono/stereo, at most 10 seconds and 4 MiB. Content hashes and
   fixed-rate decoded durations identify the captured samples. Sample voice

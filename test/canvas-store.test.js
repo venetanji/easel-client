@@ -571,6 +571,31 @@ test('project kit edits check revisions, availability and idempotence without ch
   assert.equal(store.getProjectKits(created.id).projectRevision, changed.projectRevision);
 });
 
+test('refreshing the current kit list upgrades an old Strudel pin and preserves source, media and saved state', async (t) => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-strudel-kit-refresh-'));
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
+  const oldKit = 'window.strudel = { old: true };';
+  const newKit = 'window.strudel = { m4a: true };';
+  const { createCanvasMediaStore } = require('../src/canvas-media-store');
+  const media = createCanvasMediaStore({ userDataPath });
+  const oldStore = createCanvasStore({ userDataPath, kitBundles: { strudel: oldKit }, assetStore: media });
+  const project = oldStore.save({ title: 'Saved score', kits: ['canvas-2d', 'strudel'],
+    html: '<main>My score</main><script>const score = "suno_hat";</script>' });
+  const assetId = await media.save({ data: fs.readFileSync(path.join(__dirname, 'fixtures/strudel-samples/snare.m4a')).toString('base64'), mimeType: 'audio/mp4', name: 'Hat.m4a' });
+  await oldStore.attachAssets(project.id, { assetIds: [assetId] });
+  oldStore.saveProjectState(project.id, { state: { strudel: { score: 'saved editor text' } } });
+  const before = oldStore.getProject(project.id);
+  const store = createCanvasStore({ userDataPath, kitBundles: { strudel: newKit }, assetStore: media });
+  assert.equal(store.getProjectKitSource(project.id, 'strudel').source, oldKit, 'installing a new bundle alone must keep the saved pin');
+  store.updateManifest(project.id, { kits: store.listFiles(project.id).manifest.kits.map(kit => kit.name) });
+  assert.equal(store.getProjectKitSource(project.id, 'strudel').source, newKit);
+  const after = store.getProject(project.id);
+  assert.deepEqual(after.files, before.files);
+  assert.deepEqual(after.manifest.assets, before.manifest.assets);
+  assert.deepEqual(store.readProjectState(project.id).state, { strudel: { score: 'saved editor text' } });
+  assert.deepEqual(after.manifest.kits.map(kit => kit.name), ['canvas-2d', 'strudel']);
+});
+
 test('managed kit recognition preserves ordinary scripts, comments, quoted attributes and templates', () => {
   const { managedKitScripts, stripManagedKitScripts } = require('../src/canvas-project');
   const html = '<!-- <script data-easel-canvas-kit="tone">example</script> -->'

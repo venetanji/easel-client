@@ -276,6 +276,7 @@ test('authored code wins over old controls on preserved reload and cannot export
 
 test('local drums and attached samples play, register live and render offline from captured bytes', options, async t => {
   const { page, editor, errors, audioErrors } = await fixture(t);
+  assert.equal(await page.locator(`#strudel-${instanceId}-sample-formats`).textContent(), 'WAV, MP3 or M4A');
   const { nativeRenderScript } = require('../src/strudel-export-renderer');
   const { validateStrudelWav } = require('../src/strudel-export-policy');
   const bank = require('../assets/strudel-drums/bank.json');
