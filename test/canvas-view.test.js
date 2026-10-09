@@ -23,6 +23,7 @@ function createFakeViewDependencies() {
       if (method === 'Runtime.evaluate' && params.expression.includes('return clone.outerHTML')) {
         return { result: { value: '<html><head><title>Saved</title></head><body><h1>snapshot</h1></body></html>' } };
       }
+      if (method === 'Runtime.evaluate' && params.expression.includes('const added=')) return { result: { value: true } };
       return method === 'Runtime.evaluate' ? { result: { value: state.evaluateValue } } : {};
     },
   };
@@ -47,6 +48,41 @@ function createFakeViewDependencies() {
   };
   return { state, WebContentsView, session };
 }
+
+for (const fragment of ['', '#section']) test(`attaching an audio sample refreshes its runtime URL without reload${fragment ? ' after fragment navigation' : ''}`, async t => {
+  const fake = createFakeViewDependencies();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'easel-live-sample-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { createCanvasMediaStore } = require('../src/canvas-media-store');
+  const media = createCanvasMediaStore({ userDataPath: root });
+  const data = require('../assets/strudel-drums/bank.json').samples[1].data;
+  const assetId = await media.save({ data, mimeType: 'audio/wav', name: 'Snare.wav' });
+  const store = createCanvasStore({ userDataPath: root, assetStore: media });
+  const canvas = await createCanvasView({ WebContentsView: fake.WebContentsView, sessionFactory: async () => ({ session: fake.session }), canvasStore: store });
+  await canvas.present({ title: 'Live samples', html: '<main>Score</main>', assets: [] });
+  const url = fake.state.url, generation = canvas.getContract().runtimeGeneration;
+  const realm = { window: {}, location: { href: url + fragment }, Object, Promise };
+  if (fragment) fake.state.events['did-start-navigation']({ url: realm.location.href, isSameDocument: true, isMainFrame: true });
+  fake.state.commandHandler = (method, params) => {
+    if (method === 'Runtime.evaluate' && params.expression.includes('const added=')) {
+      return { result: { value: vm.runInNewContext(params.expression, realm) } };
+    }
+  };
+  const result = await canvas.attachCanvasAssets({ assetIds: [assetId], validate: false });
+  assert.equal(result.runtimeAssetsUpdated, true);
+  assert.equal(canvas.getContract().sourcePendingReload, false);
+  assert.equal(canvas.getContract().runtimeGeneration, generation);
+  assert.equal(fake.state.url, url);
+  const command = fake.state.commands.find(command => command.params?.expression.includes('const added='));
+  assert.ok(command);
+  assert.equal(realm.window.__easelProjectAssets[assetId].url, 'data:audio/wav;base64,' + data);
+  for (const href of ['easel-canvas://different-project#section', url.replace(/generation=\d+/, 'generation=999') + fragment, url + '&other=1' + fragment]) {
+    const switched = { window: {}, location: { href }, Object, Promise };
+    assert.throws(() => vm.runInNewContext(command.params.expression, switched), /canvas changed/i);
+    assert.equal(switched.window.__easelProjectAssets, undefined);
+  }
+  canvas.destroy();
+});
 
 test('routine source queries have compact runtime identity and omit media unless requested', async () => {
   const fake = createFakeViewDependencies();

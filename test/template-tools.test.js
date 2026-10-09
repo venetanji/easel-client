@@ -185,7 +185,7 @@ test('source_patch_does_not_autoplay', async (t) => {
 test('starter_describes_verified_wav_without_claiming_a_pending_runtime_gate', () => {
   const html = require('../src/strudel-template').createStrudelTemplate({ instanceId }).files['index.html'];
   assert.doesNotMatch(html, /awaiting its runtime compatibility check|only after its end-to-end runtime check/);
-  assert.match(html, /Save to Media/);
+  assert.match(html, /Export WAV/);
   assert.match(html, /WAV export supports/);
   assert.match(html, /loaded runtime check|loaded source context/);
 });

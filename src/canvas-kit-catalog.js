@@ -3,7 +3,7 @@ const KIT_CATALOG = Object.freeze([
   { id: 'html-deck', name: 'HTML deck', description: 'Interactive pages and presentations with HTML and CSS.', builtin: true },
   { id: 'three', name: 'Three.js', description: 'WebGL scenes, lighting and 3D objects.' },
   { id: 'p5', name: 'p5.js', description: 'Creative coding, drawing and interactive sketches.' },
-  { id: 'strudel', name: 'Strudel', description: 'Native-synth patterns. Experimental offline compatibility; no samples or REPL.' },
+  { id: 'strudel', name: 'Strudel', description: 'Live patterns with synths, offline drums and attached audio samples.' },
   { id: 'tone', name: 'Tone.js', description: 'Synthesizers, effects and audio sequencing.' },
   { id: 'matter', name: 'Matter.js', description: '2D physics and body simulation.' },
   { id: 'phaser', name: 'Phaser', description: '2D games, sprites and scenes.' },

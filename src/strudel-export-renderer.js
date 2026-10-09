@@ -33,7 +33,7 @@ function encodePCM16Wav(buffer) {
 }
 // Executed only in the host-owned disposable realm with its exact project pin.
 // Never called in the authored document or against its live Strudel module.
-async function renderNativeStrudelSnapshot(snapshot) {
+async function renderNativeStrudelSnapshot(snapshot, sampleAssets = {}) {
   const frames = Math.ceil((snapshot.cycles * 240 / snapshot.bpm + 0.5) * 48000);
   const context = new OfflineAudioContext(2, frames, 48000);
   const native = window.strudel;
@@ -41,6 +41,22 @@ async function renderNativeStrudelSnapshot(snapshot) {
     native.setAudioContext(context);
     native.setSuperdoughAudioController(null);
     await native.registerSynthSounds();
+    const samples = snapshot.events.filter(event => event.sample);
+    if (samples.length) {
+      const registry = window.EaselStrudelSamples;
+      if (!registry) throw new Error("This project's pinned Strudel kit has no local sample bank. Create a new Strudel sketch to use samples.");
+      window.__easelProjectAssets = Object.freeze(sampleAssets);
+      window.__easelProjectAssetsReady = Promise.resolve(sampleAssets);
+      await registry.prepare();
+      const prepared = new Set();
+      for (const event of samples) {
+        if (prepared.has(event.waveform)) continue;
+        if (event.sample.assetId) await registry.add(event.waveform, event.sample.assetId);
+        const actual = registry.get(event.waveform);
+        if (!actual || actual.assetId !== event.sample.assetId || actual.digest !== event.sample.digest || Math.abs(actual.durationSeconds - event.sample.durationSeconds) > 1 / 48000) throw new Error(`Sample ${event.waveform} does not match the captured content or decoded duration.`);
+        prepared.add(event.waveform);
+      }
+    }
     // Offline time has not advanced while scheduling: the native source map
     // counts total scheduled sources. Host policy still limits actual overlap
     // to 32; raise only this realm's native ceiling to avoid premature stealing.
@@ -49,7 +65,7 @@ async function renderNativeStrudelSnapshot(snapshot) {
     controller.output.destinationGain.gain.setValueAtTime(1, 0);
     for (const event of snapshot.events) {
       // superdough mutates values.duration: never pass the canonical snapshot.
-      await native.superdough({ note: event.midiNote, s: event.waveform, gain: event.gain, ...(event.envelopeMode === "explicit" ? { attack: event.attackSeconds, release: event.releaseSeconds } : {}) }, event.timeSeconds, event.durationSeconds, snapshot.bpm / 240, event.absoluteCycle);
+      await native.superdough({ ...(event.sample ? {} : { note: event.midiNote }), s: event.waveform, gain: event.gain, ...(event.envelopeControls ?? (event.envelopeMode === "explicit" ? { attack: event.attackSeconds, release: event.releaseSeconds } : {})) }, event.timeSeconds, event.durationSeconds, snapshot.bpm / 240, event.absoluteCycle);
     }
     const buffer = await context.startRendering();
     const bytes = encodePCM16Wav(buffer);
@@ -63,11 +79,11 @@ async function renderNativeStrudelSnapshot(snapshot) {
     // OfflineAudioContext has no close/abort API. The host destroys this realm.
   }
 }
-function nativeRenderScript(snapshot) {
-  return `(() => { const encodePCM16Wav=${encodePCM16Wav.toString()}; return (${renderNativeStrudelSnapshot.toString()})(${JSON.stringify(snapshot)}); })()`;
+function nativeRenderScript(snapshot, sampleAssets = {}) {
+  return `(() => { const encodePCM16Wav=${encodePCM16Wav.toString()}; return (${renderNativeStrudelSnapshot.toString()})(${JSON.stringify(snapshot)},${JSON.stringify(sampleAssets)}); })()`;
 }
 function createStrudelExportRenderer({ BrowserWindow, sessionFactory, timeoutMs = MAX_RENDER_MS }) {
-  async function renderStrudelSnapshot(input, { signal, kitSource } = {}) {
+  async function renderStrudelSnapshot(input, { signal, kitSource, sampleAssets = {} } = {}) {
     const snapshot = validateStrudelSnapshot(input);
     if (typeof kitSource !== "string" || !kitSource || Buffer.byteLength(kitSource) > 8 * 1048576) throw new Error("The pinned Strudel dependency is unavailable or oversized.");
     let window2, environment, finished = false, timer;
@@ -128,7 +144,7 @@ function createStrudelExportRenderer({ BrowserWindow, sessionFactory, timeoutMs 
         for (const name of ["will-navigate", "will-redirect", "will-frame-navigate"]) window2.webContents.on(name, deny);
         await window2.loadURL(url);
         check();
-        const result = await window2.webContents.executeJavaScript(nativeRenderScript(snapshot));
+        const result = await window2.webContents.executeJavaScript(nativeRenderScript(snapshot, sampleAssets));
         check();
         if (!result || result.channels !== 2 || result.sampleRate !== 48000 || typeof result.wavBase64 !== "string" || result.wavBase64.length > 8 * 1048576 || !isMediaBase64(result.wavBase64)) throw new Error("The isolated renderer returned invalid WAV data.");
         const wavBytes = Buffer.from(result.wavBase64, "base64");

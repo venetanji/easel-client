@@ -58,21 +58,52 @@ stays silent until Run. Run always evaluates the editor buffer.
 
 Suno's `generate_sound` tool exposes `soundType: "one_shot"` and `"loop"`.
 Generated audio can be saved to Media, attached by its returned asset ID, and
-registered with `samples({name: [EaselCanvas.assets.getUrl(assetId)]})` after
-the attached asset is available to the runtime. The current general attachment
-tool needs a reload to provide newly attached assets to an already open canvas;
-automatic live attachment and sample preparation are not implemented here.
-Once available, local samples can be loaded and the pattern updated while
-audio continues. Check generated attacks, pitch, duration and loop boundaries;
-these controls alone do not establish a ready-to-use drum or piano sample bank.
+registered in the score using the shared local sample registry:
+
+```js
+await window.EaselStrudelSamples.add('suno_snare', 'ATTACHED_MEDIA_ASSET_ID')
+s("suno_snare*4").gain(.25)
+```
+
+Studio's Media and job attachment paths refresh the current project's asset
+resolver without reloading. Registering a sample preloads and decodes its bytes
+before changing its name mapping; it does not stop or replace the live audio
+context. Repeating the same registration is harmless. Keep this line in saved
+score source to restore the mapping after reopening or exporting project HTML.
+Use single quotes for the plain name and asset ID; Strudel interprets double
+quotes as patterns. Use lowercase names with underscores, at most 48 characters. Built-in names
+are reserved; choose a new name for generated alternatives.
+
+Samples must be WAV, MP3 or M4A, mono or stereo, at most 10 seconds and 4 MiB each.
+Suno M4A (`audio/mp4`, also `audio/x-m4a`) decodes directly in Studio's Electron
+runtime for playback and WAV export. The duration limit applies to decoded
+audio; ask Suno for at most 9 seconds to leave room for AAC padding.
+Use `generate_sound` for short one-shots or loops; full generated songs usually
+need trimming first. Check attacks, duration and loop boundaries. Generation
+does not automatically trim, normalize, tune or register audio.
+
+Existing projects retain their kit pin. Check
+`window.EaselStrudelSamples?.supportedFormats?.includes('m4a')` before using M4A on an
+older project. To refresh on the user's request, read `list_canvas_files` and
+collect every `kit.name` from `manifest.kits`, then pass that complete list to `update_canvas_project`
+with `reload:true,preserveState:true`. This takes installed bundles while
+preserving authored source, attached media and editor text. Playback stops at
+reload and stays silent until the user presses Run.
 
 ## Local sounds and effects
 
 The reference panel lists working native sounds: sine, triangle, square,
 sawtooth, sbd (synth kick), supersaw, pulse and white/pink/brown noise. Melody,
-rhythm and layered examples use these sounds and work offline.
+rhythm and layered examples work offline.
 
-Website sample banks such as bd, sd, hh and piano are not bundled. Remote
+The kit also embeds seven original electronic WAV one-shots: `bd` (kick), `sd`
+(snare), `hh` (closed hat), `oh` (open hat), `cp` (clap), `tom` and `rim`.
+These are named samples, not a SoundFont. The JSON bank records names, decoded
+durations, SHA-256 identities and provenance, and travels with the project-pinned
+kit and corresponding-source archive. `scripts/generate-strudel-drums.cjs`
+reproduces every PCM byte. The sample registry prepares these before Run.
+
+Other website sample banks such as piano are not bundled. Remote
 `samples('github:...')` requests remain blocked. Live audio effects use bundled
 worklets; their embedded bytes load through temporary local blob URLs, released
 after loading. Only the marked Strudel document receives the REPL's
@@ -80,7 +111,8 @@ after loading. Only the marked Strudel document receives the REPL's
 and network access stays blocked.
 
 WAV export remains narrower than playback: it accepts validated native
-note/synth events, and reports unsupported sample/effect controls explicitly.
+oscillator, kick, noise and registered local sample events, and reports
+unsupported effect and sample pitch/speed/slicing controls explicitly.
 
 ## Explore an idea
 
@@ -98,8 +130,8 @@ upload or sound.
 
 ## Export a WAV loop
 
-Run the code once, then open **Reference → Save a WAV loop**, choose **Cycles**,
-and press **Save to Media**. You can Stop playback before saving. Export snapshots the loaded source revision, tempo,
+Run the code once, choose **Cycles** in the top bar,
+and press **Export WAV**. You can Stop playback before saving. Export snapshots the loaded source revision, tempo,
 volume, pattern version and selected onset events before asynchronous work.
 It uses the project-pinned Strudel bytes, not an arbitrary newer installed kit.
 
@@ -117,19 +149,26 @@ or 120,000 sample frames. The fixed tail crops any synth release beyond that
 boundary, including its final native node-stop allowance. It is not an arbitrary
 recording duration.
 
-Supported authored event fields are only `note`, `s`, `gain`, `attack` and
-`release`:
+Supported authored event fields are `note`, `s`, `gain`, `attack`, `decay`,
+`sustain` and `release`, with sample index `n: 0` accepted for single-sample names:
 
 - Native sine/sin, triangle/tri, square/sqr and sawtooth/saw aliases
+- Native `sbd` kick and `white`, `pink` and `brown` noise
+- Bundled drums and samples registered with `EaselStrudelSamples.add`, without
+  `note`, speed or slicing. Up to 16 distinct names and 8 MiB of attached sample
+  bytes per export. The host captures attached bytes and checks their hashes;
+  the isolated renderer checks the actual decoded duration against the snapshot.
+  Sample voices count their full duration, and output is cropped at the fixed tail.
 - Finite MIDI notes 24–96, or the pinned kit's accepted note spelling and
-  default-octave rules
+  default-octave rules; omitted pitch uses the native kick default 29 or synth default 36
 - Gain 0–1; omitted gain retains the pinned native 0.8 default
-- Attack/release 0–0.5 seconds; omitted envelopes retain the native default
-  branch rather than being silently replaced with explicit controls
+- Attack/decay/release 0–0.5 seconds and sustain 0–1; omitted controls retain
+  the native envelope and sustain inference. Kick polyphony counts its decay
+  independently of the pattern event duration
 - Rests and volume-zero loops are valid; actual pattern query errors fail
   visibly rather than becoming a silent rest
 
-Samples, effects, callbacks/stateful event values, continuous events, additional
+Unregistered samples, effects, callbacks/stateful event values, continuous events, additional
 control fields, and `duration`/`clip` overrides are rejected with an error.
 Explicit null, undefined and non-finite numeric controls reject too. Easel does
 not strip unsupported semantics or substitute another synthesizer. See the
@@ -171,7 +210,7 @@ The kit is pinned to `@strudel/web@1.3.0`, built from its published source entry
 and the repository lockfile. Supported playback needs no CDN, microphone or device permission. The ordinary
 canvas policy blocks eval and workers; only the marked Strudel scratchpad opts
 into local REPL evaluation and blob-backed audio worklets, without network access.
-Sample packs (including remote sample loading), MP3 export, microphone recording
+Remote sample packs, MP3 export, microphone recording
 and audiovisual capture remain outside this template.
 
 Compiled Project ZIP HTML embeds the offline kit and can play the supported
@@ -202,6 +241,13 @@ other dependency notices remain separate from Easel's GPL declaration. See
 The missing `chord-voicings` notice and final source review remain caveats.
 
 ## Verification
+
+The current REPL, bundled drums and attached-sample evidence is recorded in the
+[9 October 2026 compatibility update](strudel-compatibility.md#repl-and-percussion-evidence---9-october-2026).
+PR #19 passed the native Strudel/WAV probe and Windows, macOS and Linux packaging.
+Browser tests additionally cover uninterrupted live edits, local worklet effects,
+sample playback/export, 44.1 kHz device normalization and saved-project sample
+restoration. The earlier native-only evidence below remains a dated baseline.
 
 [Test run 37306231481](https://github.com/venetanji/easel-client/actions/runs/37306231481)
 passed the disposable native kit, editable starter and production WAV fixture at

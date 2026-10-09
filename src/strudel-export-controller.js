@@ -4,7 +4,7 @@ const EXPORT_ID = /^[A-Za-z0-9_-]{1,80}$/;
 function exportKey(scope, exportId) {
   return `${scope.projectId}:${scope.instanceId}:${exportId}`;
 }
-function createStrudelExportController({ render, saveMedia, findExport, isAttached, attach, assertScope, captureDependency, onExport }) {
+function createStrudelExportController({ render, saveMedia, findExport, isAttached, attach, assertScope, captureDependency, captureSamples, onExport }) {
   const reservations = new Map();
   let active;
   function check(entry) {
@@ -67,7 +67,11 @@ function createStrudelExportController({ render, saveMedia, findExport, isAttach
           return recoveredReceipt(scope, request.exportId, existing.id);
         }
         check(entry);
-        const output = await render(snapshot, { signal: entry.abort.signal, kitSource: dependency.source });
+        // A durable WAV retry no longer needs its original input sample. Only
+        // fresh renders resolve attached bytes, after receipt recovery is checked.
+        const sampleAssets = captureSamples?.(scope, snapshot) ?? {};
+        if (snapshot.events.some(event => event.sample?.assetId && !sampleAssets[event.sample.assetId])) throw new Error("An attached export sample is unavailable.");
+        const output = await render(snapshot, { signal: entry.abort.signal, kitSource: dependency.source, sampleAssets });
         check(entry);
         const timing = validateStrudelWav(output.wavBytes, snapshot);
         if (output.duration !== timing.duration || output.channels !== 2 || output.sampleRate !== 48000) throw new Error("Renderer metadata does not match the frozen WAV.");

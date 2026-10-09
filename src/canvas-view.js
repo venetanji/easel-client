@@ -274,13 +274,21 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
 
   async function installProjectAssets(assetIds) {
     if (!currentUrl || !currentDocumentPath) return { runtimeAssetsUpdated: false };
+    const projectId = currentCanvasId, documentPath = currentDocumentPath, generation = runtimeGeneration, url = currentUrl;
+    const check = () => {
+      if (currentCanvasId !== projectId || currentDocumentPath !== documentPath || runtimeGeneration !== generation || currentUrl !== url || loading || webContents.isDestroyed()) throw new Error('The canvas changed while updating attached media. Reopen the original project to load its samples.');
+    };
     const assets = {};
     for (const id of assetIds) {
-      const asset = await canvasStore.getAsset(currentCanvasId, id);
+      check();
+      const asset = await canvasStore.getAsset(projectId, id);
       const { data, ...metadata } = asset;
       assets[id] = { ...metadata, url: `data:${asset.mimeType};base64,${data}` };
     }
-    await evaluate(`(() => {const added=${JSON.stringify(assets).replace(/</g, '\\u003c')};window.__easelProjectAssets=Object.freeze({...window.__easelProjectAssets,...Object.fromEntries(Object.entries(added).map(([id,asset])=>[id,Object.freeze(asset)]))});window.__easelProjectAssetsReady=Promise.resolve(window.__easelProjectAssets);return true;})()`);
+    check();
+    const installed = await evaluate(`(() => {if(location.href.split('#')[0]!==${JSON.stringify(url.split('#')[0])})throw new Error('The canvas changed before attached media could be installed.');const added=${JSON.stringify(assets).replace(/</g, '\\u003c')};window.__easelProjectAssets=Object.freeze({...window.__easelProjectAssets,...Object.fromEntries(Object.entries(added).map(([id,asset])=>[id,Object.freeze(asset)]))});window.__easelProjectAssetsReady=Promise.resolve(window.__easelProjectAssets);return true;})()`);
+    check();
+    if (installed !== 'true') throw new Error('The attached media resolver did not confirm its update. Reload the project.');
     return { runtimeAssetsUpdated: true };
   }
 
@@ -495,7 +503,12 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
     const generation = runtimeGeneration;
     const updated = await canvasStore[method](saved.id, args);
     if (saved.id !== currentCanvasId || generation !== runtimeGeneration) throw new Error('Source saved, but the canvas changed. Reopen it to apply the edits.');
-    markSourcePendingReload();
+    const liveAttachment = ['attachAsset', 'attachAssets'].includes(method) && !args.reload;
+    let runtimeAssetsUpdated = false, runtimeWarning;
+    if (liveAttachment) {
+      try { ({ runtimeAssetsUpdated } = await installProjectAssets(method === 'attachAsset' ? [args.assetId] : args.assetIds)); }
+      catch (error) { markSourcePendingReload(); runtimeWarning = 'Media is attached; reload to refresh its runtime URL. ' + error.message; }
+    } else markSourcePendingReload();
     let cleanup = null;
     let state;
     async function rollbackBatch(reason, attemptedValidation = null) {
@@ -525,7 +538,8 @@ async function createCanvasView({ WebContentsView, sessionFactory, assetStore, m
       return rollbackBatch('Observed source or app runtime errors.', validation);
     }
     return {
-      ...mutationIdentity(updated), ok: true, effects: { source: 'saved', runtime: args.reload ? 'replaced' : 'unchanged' }, cleanup,
+      ...mutationIdentity(updated), ok: true, effects: { source: 'saved', runtime: args.reload ? 'replaced' : runtimeAssetsUpdated ? 'attached media URLs refreshed' : 'unchanged' }, cleanup,
+      ...(liveAttachment ? { runtimeAssetsUpdated, ...(runtimeWarning ? { runtimeWarning } : {}) } : {}),
       validation,
       contract: compactCanvasContract(),
     };

@@ -860,6 +860,7 @@ const STRUDEL_EXPORT_CONTROLLER = createStrudelExportController({
   attach: (projectId, assetIds, beforeCommit) => attachProjectAssets(requireCanvasView(), projectId, assetIds, { beforeCommit }),
   assertScope: (scope) => assertStrudelScope(scope, STRUDEL_EXPORT_OPTIONS),
   captureDependency: (scope) => CANVASES.getProjectKitSource(scope.projectId, 'strudel'),
+  captureSamples: (scope, snapshot) => require('./strudel-sample-assets').captureStrudelSamples(CANVASES, scope.projectId, snapshot),
   onExport: (receipt) => emitAgentEvent({ type: 'strudel-exported', ...receipt }),
 });
 const STRUDEL_EXPORT_BRIDGE = createStrudelExportBridge({

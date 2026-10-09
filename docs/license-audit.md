@@ -186,3 +186,20 @@ are preserved byte-for-byte from the merged main. This records source provenance
 not an independent ownership or licensing determination. The original five-skill
 audit above remains historical evidence. Existing license/notice files and their
 hashes are unchanged; no new grant or vendor relabeling is asserted.
+
+## Strudel Runtime and Sample Update (9 October 2026)
+
+The 5 October unreleased-foundation addendum is historical. Strudel shipped in
+0.0.6 and 0.0.7. PR #19 at `377361949ab955452d20c57fbae126b19dee8825` passes
+the native renderer/production WAV probe and Windows, macOS and Linux packaging;
+see the dated [compatibility evidence](strudel-compatibility.md). Runtime proof
+is no longer pending. The original procedural drum bank, generator and sample
+adapter are retained in the pinned kit's corresponding-source archive.
+
+The existing `chord-voicings@0.0.1` notice gap remains: the exact npm gitHead
+`447ee7932851562dcfc480f54f5011430174a30d` declares ISC, but its source tree and
+the current upstream repository contain no LICENSE file. The exact source,
+package metadata and prior verification remain retained under
+`build/strudel-notices/`; no notice text or copyright year has been invented.
+Runtime and packaging results do not close that gap or replace final
+artifact/source review.

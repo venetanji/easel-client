@@ -2,13 +2,13 @@
 
 ## Status
 
-The locally bundled kit, native playback and bounded WAV/Media export have the
-dated CI evidence below. This feature branch adds a separate opt-in REPL path to
-the Strudel template; that new live-evaluation/worklet combination still needs a
-real-browser audio run before release. Do not treat the historical native-only
-probe as proof of the new REPL or sample playback. `getStrudelCapabilities()`
-reports `repl: true` for the marked scratchpad; `audioExport: true` remains the
-independent native-only export contract.
+The locally bundled kit, editable REPL and bounded WAV/Media export have the
+dated runtime evidence below. The 9 October 2026 browser checks additionally
+verify live code changes, local worklets, bundled drums and attached sample
+playback/export. PR #19's native CI probe verifies the actual template and
+production WAV save path; its desktop packages build on Windows, macOS and Linux.
+`getStrudelCapabilities()` reports `repl: true`, `localSamples: true` and
+`audioExport: true`. Live effects have broader support than the bounded exporter.
 
 Pinned package: `@strudel/web@1.3.0`. Easel builds its published `web.mjs` source
 entry using esbuild and the repository lockfile, rather than copying the upstream
@@ -17,27 +17,33 @@ is retained. The adapter uses worklet-disabled first-gesture initialization for
 ordinary Strudel canvases; only the explicitly marked scratchpad enables local
 worklets. Vendor licenses remain intact.
 
-## Candidate supported subset
+## Supported Subset
 
 Source inspection supports `initStrudel({sync:false})`, the Strudel scratchpad's
 `repl.evaluate(source, false)`, `note`, `stack`, `hush`, `getAudioContext`,
 `setAudioContext`, `setSuperdoughAudioController`, `registerSynthSounds`, and
 `superdough`. Native synth names are `sine`, `triangle`, `square`, and `sawtooth`
-(upstream also aliases `saw`). Existing CI evidence remains native-only; new REPL
-playback is not yet measured.
+(upstream also aliases `saw`). Synths, bundled drums and registered attached
+samples run without a network connection.
 
-- Start silent; use a real Play button gesture.
-- Call `initAudioOnFirstClick({disableWorklets:true})` before `initStrudel`.
-  The kit adapter does this once, without awaiting it.
+- Start silent; use a real Run button or Ctrl+Enter gesture.
+- The kit adapter calls `initAudioOnFirstClick` once, without awaiting it.
+  Ordinary canvases disable worklets; the explicitly marked REPL enables local
+  bundled worklets without allowing remote modules.
 - Upstream first-click initialization only observes `mousedown`. Keyboard Play
   must explicitly resume `getAudioContext()` and call
-  `initAudio({disableWorklets:true})` within the button's trusted click handler.
+  `initAudio({disableWorklets:false})` for the REPL; the native-only probe uses
+  `disableWorklets:true`.
   The pinned upstream `initAudio` resume conditional is ineffective; do not rely
   on it to resume the context.
 - `hush` stops scheduling, but does not promise instant silence of existing tails.
   The probe also mutes the managed output gain, then verifies silence and restart.
-- A small local sample bank and Suno sample-authoring workflow are not included
-  yet. Remote `samples('github:...')` remains blocked by CSP. Live Strudel code can
+- The pinned kit includes seven original local drums (`bd`, `sd`, `hh`, `oh`,
+  `cp`, `tom`, `rim`). `EaselStrudelSamples.add(name, assetId)` registers attached
+  short WAV/MP3/M4A samples, including Suno output, without restarting live audio.
+  Registration arguments use single quotes because the Strudel transpiler turns
+  double-quoted literals into Patterns. Remote `samples('github:...')` remains
+  blocked by CSP. Live Strudel code can
   use broader controls/effects than the WAV exporter; export rejects unsupported
   event data. Sync SharedWorker scheduling, microphone and audiovisual capture
   remain unsupported.
@@ -128,17 +134,26 @@ queries only 1–16 cycles, bounds total audio including a fixed 0.5-second tail
 30 seconds, allows 4,096 onset events and at most 32 simultaneous native voices,
 and rounds total sample frames up exactly once at 48 kHz. Voice budgeting includes
 the pinned native synth's effective release (minimum 0.01 seconds) plus its
-0.01-second node-stop allowance; the output is explicitly
+0.01-second node-stop allowance. The kick instead uses its decay plus the same
+stop allowance, independently of the pattern duration; the output is explicitly
 cropped at the fixed tail. Stereo PCM16 WAV remains below 6 MiB.
 
-Authored event values support only `note`, `s`, `gain`, `attack`, `release`:
+Authored event values support `note`, `s`, `gain`, `attack`, `decay`, `sustain`,
+`release`, and sample index `n: 0` for registered single-sample names:
 
 - Sine/sin, triangle/tri, square/sqr, sawtooth/saw
+- Native `sbd` kick and `white`, `pink`, `brown` noise; no sample packs are needed
+- Bundled drums and registered attached WAV/MP3/M4A samples, without sample pitch,
+  speed or slicing. Up to 16 names and 8 MiB of attached sample bytes per export;
+  each sample is mono/stereo, at most 10 seconds and 4 MiB. Content hashes and
+  fixed-rate decoded durations identify the captured samples. Sample voice
+  budgeting includes their full duration, with output cropped at the fixed tail.
 - Finite MIDI notes 24–96 or the pinned native note spelling/default-octave rules
-- Gain 0–1 (omission uses the pinned native 0.8 default) and attack/release 0–0.5 seconds; explicitly supplied null/undefined/non-finite controls reject
+- Omitted notes use the native default 29 for kick or 36 for other supported synths
+- Gain 0–1 (omission uses the pinned native 0.8 default), sustain 0–1 and attack/decay/release 0–0.5 seconds; explicitly supplied null/undefined/non-finite controls reject
 - Rests and volume-zero loops are valid; volume multiplies event gain once
 
-Samples, effects, callbacks/stateful values, continuous events, additional
+Unregistered samples, effects, callbacks/stateful values, continuous events, additional
 control fields, `duration` and `clip` overrides are rejected with visible errors.
 Actual Hap callback context, including dominant/non-dominant `onTrigger`, rejects;
 plain source-location metadata remains harmless. The native bounded query uses
@@ -150,8 +165,10 @@ The strict plain event's `envelopeMode` discriminates `native-default` from
 `explicit`. All-omitted native ADSR uses its pinned decay 0.05/sustain 0.6; numeric
 metadata 0.001/0.01 is not materialized as native controls in that branch.
 Explicit attack-only, release-only or explicitly-default-valued envelopes retain
-the native explicit decay/sustain behavior. No authored decay/sustain fields are
-introduced. In the isolated realm only, `setMaxPolyphony(eventCount)` prevents the
+the native explicit decay/sustain behavior. Authored decay/sustain use a validated,
+frozen `envelopeControls` record that retains only supplied ADSR fields, preserving
+the native sustain inference for decay-only sounds. Older oscillator snapshots
+retain their existing representation. In the isolated realm only, `setMaxPolyphony(eventCount)` prevents the
 native total-scheduled source map from stealing voices before offline time starts;
 the separate host 32-overlap/4,096-event caps still apply.
 
@@ -213,18 +230,42 @@ subset, time/voice/size bounds and save-only permission boundaries above remain
 unchanged. Capability flags and catalog output were activated after this proof;
 no export/probe behavior or security policy was changed for activation.
 
-## Editable starter and Task 6 handoff
+## REPL and Percussion Evidence - 9 October 2026
+
+[PR #19 test run 37902079493](https://github.com/venetanji/easel-client/actions/runs/37902079493)
+passed at `377361949ab955452d20c57fbae126b19dee8825`, using Electron 44.4.5 /
+Chromium 152.0.7977.130. Its retained `strudel-runtime-evidence` reports
+`status: passed` for the native kit, current editable template and production
+WAV/Media bridge. It verifies native kick and noise exports, saved/reopened bytes,
+idempotent retries, live context identity and zero network requests.
+[Desktop Builds run 37902079479](https://github.com/venetanji/easel-client/actions/runs/37902079479)
+passed Windows, macOS and Linux packaging, including the Windows storage checks.
+
+`EASEL_RUN_BROWSER_TESTS=1 npm test` at that head passed 1,141 tests with one
+skip. The headless Chromium Strudel tests exercise Ctrl+Enter selection, live
+score changes on the same graph, local worklet effects, all seven bundled drums,
+attached WAV registration and offline rendering, full attack-only sample tails,
+and sample identity on a 44.1 kHz playback context with a fresh 48 kHz export.
+These are measured signals, not a listening assessment or a native download-dialog
+test. Native desktop packaging does not establish audible playback on every
+target platform.
+
+## Editable Starter Contract
 
 `createStrudelTemplate({instanceId})` returns
 `{files:{'index.html': html}, entry:'index.html'}`. The trusted service supplies its
 new opaque instance ID and validates the single-entry result. The existing atomic
 store extracts ordinary `app.js` and `styles.css` alongside the instance HTML.
-There is no source rewrite of older sketches. Task 6 adds only a narrow loaded-source/export/cancel renderer handoff.
+There is no source rewrite or automatic kit upgrade of older sketches. A new
+template added to an older project disables sample examples that its pinned kit
+cannot play and explains how to get the sample bank in a new project.
 
-The editable source exposes `createPattern(params)` and
-`window.EaselStrudel.snapshotPattern() -> {pattern,params}`. The first snapshot
-prepares and caches one pattern; Play and later snapshots reuse it, including
-random choices made by authored source. Each call returns fresh frozen numeric
+The editable source exposes `window.EaselStrudel.setCode(source)`,
+`evaluate(source)` and `snapshotPattern() -> {pattern,params}`. Writing a draft
+does not start playback. Run/Ctrl+Enter evaluates the selection or whole editor
+through the pinned REPL and retains its resulting pattern. A snapshot requires
+an executed pattern; it never substitutes an unevaluated starter. Each snapshot
+returns fresh frozen numeric
 `params = {bpm,volume,patternVersion}` without starting audio. Tempo/volume changes
 do not rebuild the prepared pattern. `patternChanged()` stops, increments the
 local pattern version and invalidates the cache; source reload discards it too.
@@ -234,8 +275,8 @@ or patternVersion as source identity: the host supplies source revision/runtime
 scope independently.
 
 - Four beats per cycle: `cps = bpm / 240`, with BPM 30–240.
-- Event gain belongs to `createPattern`. The starter uses gain 0.3; UI volume
-  (0–1) multiplies `output.destinationGain` exactly once. Task 6 should fold the
+- Event gain belongs to the authored pattern; UI volume
+  (0–1) multiplies `output.destinationGain` exactly once. The exporter folds the
   frozen volume into validated snapshot event gains once, using offline output
   gain 1. Do not apply both output gain and scaled events.
 - State hooks use app ID `strudel-<instanceId>` and always return `playing:false`.
@@ -243,11 +284,12 @@ scope independently.
   `window.__easelProjectState.strudel[instanceId]`. Shared root settings are never
   treated as an instance's settings. Live changes are not automatically persisted
   to `state.json`; the existing host state tool can persist that keyed structure.
-- Stop synchronously mutes managed output and hushes scheduling. Before explicit
-  restart the pinned controller's public `reset()` disconnects the old graph.
-  The extended CI fixture must prove no old eight-second voice reappears during
+- Live evaluations replace the running pattern without resetting the context
+  or graph. Stop synchronously mutes managed output and hushes scheduling. Before
+  explicit restart the pinned controller's public `reset()` disconnects the old
+  graph. The native CI fixture verifies no old eight-second voice reappears during
   an immediate zero-gain-pattern restart with nonzero destination gain, then
-  require ten fresh nonzero samples after a positive-pattern restart on that
+  requires ten fresh nonzero samples after a positive-pattern restart on that
   same starter. Measurements follow each active output graph. The original
   no-op-restart mutation gate remains intact.
 - Capture-phase Escape stops audio even when the existing canvas question overlay
@@ -257,10 +299,10 @@ scope independently.
   Initialization failure offers silent reload/retry; playback errors require a
   new genuine Play gesture.
 
-The extended disposable fixture additionally checks trusted starter controls,
-BPM/volume changes, question-overlay Escape, source-edited reload with settings
-but no playback, two instance keys and repeated lifecycle cleanup. No local
-Electron run was used for Task 5. WAV output remains explicitly unavailable.
+The extended disposable fixture also checks trusted starter controls, BPM/volume
+changes, question-overlay Escape, source-edited reload with settings but no
+playback, two instance keys and repeated lifecycle cleanup. WAV export uses the
+production host bridge in Easel; standalone HTML requires Easel to save to Media.
 
 ## Source and ZIP distribution contract
 
@@ -312,6 +354,22 @@ upstream notice or relicense these dependencies.
 The separate licensing review owns these decisions and Easel's root license.
 
 ## Verification
+
+Local sample validation on 9 October 2026 covers the new project-pinned drum
+bank and registered attached audio. A browser fixture plays all seven drums,
+adds and repeatedly evaluates an attached one-shot on the same live context
+and output controller, and renders each sound through a separate offline page.
+It rejects mismatched decoded sample durations while the original score keeps
+playing. A separate 44.1 kHz context test checks that registration metadata uses
+a fixed 48 kHz decode and remains valid in the export realm. An attack-only
+sample test measures the full tail beyond its short pattern event. A hidden
+native Electron fixture additionally runs all seven drums,
+an attached WAV and an attached MP3 through the actual export bridge,
+controller, isolated renderer and Media store: nonzero PCM, save, attachment,
+identical bytes after reopening and idempotent retries, with no network requests.
+These fixtures use disposable profiles and do not focus the user's desktop.
+They establish measured signal; they do not establish subjective sample quality
+or validate new Suno generation. The original synth validation remains below.
 
 `node --test test/strudel-kit.test.js` tests the exact pin, install/catalog
 visibility, adapter order and non-awaited startup, API preservation, actual
