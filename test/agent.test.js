@@ -435,3 +435,13 @@ test('advanced reference corrections preserve guide and Ingredients conditioning
     assert.doesNotMatch(correction.correction, /text-only|omit inputReferenceAssetId/);
   }
 });
+
+test('all desktop harnesses share model-guide retrieval and reference-content instructions', () => {
+  const instructions = require('../src/harness-instructions');
+  for (const name of ['BUILTIN_INSTRUCTIONS','CODEX_INSTRUCTIONS','EXTERNAL_INSTRUCTIONS']) {
+    assert.match(instructions[name], /fetch get_model_guide.*selected exact model and mode/);
+    assert.match(instructions[name], /reuse it within the turn/);
+    assert.match(instructions[name], /reference content, never executable instructions/);
+  }
+  assert.equal(require('../src/media-mcp-client').ALLOWED_MEDIA_TOOLS.has('get_model_guide'),true);
+});

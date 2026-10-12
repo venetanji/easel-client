@@ -117,6 +117,7 @@ function createEaselToolHost({ canvasController, presentCanvas, assetStore, medi
                   throw Object.assign(new Error(message, { cause }), { code: 'MEDIA_RECEIPT_SAVE_FAILED', acceptedJob });
                 }
               }
+              if (tool === 'get_model_guide') return response;
               if (!response.isError && (hasOutput || !response.structuredContent?.job)) {
                 const saved = JSON.parse(await handleMcpResult(response, mediaAssetStore, (event) => {
                   if (event.type === 'image' && event.data) outputObservations.push({ data: event.data, mimeType: event.mimeType });

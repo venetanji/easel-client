@@ -59,9 +59,25 @@ async function request(url: string, init: RequestInit, fetchImpl: Fetch, operati
   }
 }
 
-async function jsonResponse(response: Response, signal: AbortSignal | null | undefined, apiKey: string, operation?: MediaOperation): Promise<any> {
+async function jsonResponse(response: Response, signal: AbortSignal | null | undefined, apiKey: string, operation?: MediaOperation, limit?: number): Promise<any> {
   let payload: any;
-  try { payload = await response.json(); } catch {
+  try {
+    if (limit !== undefined && response.body) {
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = []; let total = 0;
+      try {
+        while (true) {
+          signal?.throwIfAborted();
+          const {done,value} = await reader.read(); if (done) break;
+          total += value.byteLength;
+          if (total > limit) throw new Error('Endpoint error response exceeds the response limit.');
+          chunks.push(value);
+        }
+        payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      } catch (error) { await reader.cancel().catch(() => {}); throw error; }
+      finally { reader.releaseLock(); }
+    } else payload = await response.json();
+  } catch {
     signal?.throwIfAborted();
     if (!response.ok) throw operationError(operation, response.status, `Easel request failed (${response.status}).`);
     throw new Error('Easel returned invalid JSON.');
@@ -77,7 +93,7 @@ export async function requestJson(url: string, init: RequestInit, apiKey: string
 
 export async function requestBinary(url: string, init: RequestInit, apiKey: string, fetchImpl: Fetch, limit: number, operation: MediaOperation): Promise<{ bytes: Buffer; mimeType: string }> {
   const response = await request(url, init, fetchImpl, operation);
-  if (!response.ok) await jsonResponse(response, init.signal, apiKey, operation);
+  if (!response.ok) await jsonResponse(response, init.signal, apiKey, operation, limit);
   const length = Number(response.headers.get('content-length'));
   // Fetch decodes compressed responses but retains their wire Content-Length.
   const encoding = response.headers.get('content-encoding')?.trim().toLowerCase();

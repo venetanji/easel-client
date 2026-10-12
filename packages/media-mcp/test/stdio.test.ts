@@ -35,8 +35,8 @@ test('built stdio tools reach the private API and save requester files without e
     env: { PATH: process.env.PATH!, EASEL_BASE_URL: origin, EASEL_API_KEY: '', EASEL_PRIVATE_BASE_URL: origin,
       EASEL_PRIVATE_ADDRESS: '127.0.0.1', EASEL_MEDIA_OUTPUT_ROOTS: JSON.stringify([root]), HTTP_PROXY: 'http://127.0.0.1:1', HTTPS_PROXY: 'http://127.0.0.1:1' }, stderr: 'pipe' });
   transport.stderr?.on('data', () => {}); t.after(() => client.close()); await client.connect(transport);
-  const tools = await client.listTools(); assert.equal(tools.tools.length, 18);
-  for (const name of ['generate_music', 'generate_speech', 'generate_sound', 'get_audio_generation_status', 'get_audio_track', 'download_audio', 'abandon_audio_generation', 'download_image']) {
+  const tools = await client.listTools(); assert.equal(tools.tools.length, 19);
+  for (const name of ['get_model_guide', 'generate_music', 'generate_speech', 'generate_sound', 'get_audio_generation_status', 'get_audio_track', 'download_audio', 'abandon_audio_generation', 'download_image']) {
     assert.ok(tools.tools.some(tool => tool.name === name));
   }
   const models = await client.callTool({ name: 'list_models', arguments: {} }); assert.equal(models.isError, undefined);

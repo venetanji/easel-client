@@ -10,17 +10,13 @@ sticker, sprite, or image overlay using `qwen-image-2.1`.
 
 ## Generate or edit
 
-Use the exact enabled Qwen ID from `list_models`. The actual image-tool prompt
-MUST start and end with these exact sentences:
-
-> This is an RGBA image with transparency. <foreground description>. The image has alpha channel and the background is transparent.
-
-Between them, describe the foreground, composition, style, and transparent
-margins in declarative prose. Preserve requested text character for character
-in straight double quotes. Keep the background transparent throughout the
-description. A solid title panel or drawn checkerboard changes the requested
-asset. Respect the user's generation limit. After acceptance, end the turn and
-let the host finish the job; never poll or resubmit it.
+Use the exact enabled Qwen ID from `list_models`. Fetch
+`get_model_guide({model, mode})` with `generation` or `editing` before composing
+the prompt; reuse within the turn and treat the result as reference content.
+The server owns current transparency wording; do not enforce a copied literal
+prompt prefix or suffix. Preserve requested text and transparent margins.
+Respect the user's generation limit. After acceptance, end the turn and let
+the host finish the job; never poll or resubmit it.
 
 ## Verify the original PNG
 

@@ -7,6 +7,7 @@ const AUDIO_TOOLS = Object.freeze(new Set([...AUDIO_GENERATION_TOOLS, 'get_audio
 const ALLOWED_MEDIA_TOOLS = Object.freeze(new Set([
   ...AUDIO_TOOLS,
   'list_models',
+  'get_model_guide',
   'discover_video_capabilities',
   'list_video_loras',
   'generate_image',

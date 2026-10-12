@@ -23,7 +23,8 @@ test('focused Qwen guidance and media recipes fit the installed and turn instruc
   const combined = formatSkillInstructions(skills);
   for (const skill of skills) {
     assert.ok(combined.includes(skill.instructions), `${skill.name} must reach the agent unchanged`);
-    assert.ok(skill.instructions.includes('This is an RGBA image with transparency. <foreground description>. The image has alpha channel and the background is transparent.'));
+    assert.ok(skill.instructions.includes('get_model_guide({model, mode})'));
+    assert.doesNotMatch(skill.instructions, /MUST start and end|<foreground description>/);
   }
   const probes = skills.map((skill) => skill.instructions.match(/```javascript\n([\s\S]*?)\n```/)[1]);
   assert.equal(probes[0], probes[1], 'Both workflows must teach the same alpha probe');

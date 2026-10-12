@@ -640,6 +640,8 @@ async function executeEaselTool(name, args, {
       throwIfAborted(signal);
       content = name === 'list_models' && !result.isError && Array.isArray(result.structuredContent?.models)
         ? JSON.stringify({ models: result.structuredContent.models })
+        : name === 'get_model_guide' && !result.isError && result.structuredContent?.guide
+          ? JSON.stringify({ referenceContent: true, modelId: result.structuredContent.modelId, guide: result.structuredContent.guide })
         : name === 'discover_video_capabilities' && !result.isError && result.structuredContent?.capabilities
           ? JSON.stringify({ modelId: result.structuredContent.modelId, capabilities: result.structuredContent.capabilities })
           : name === 'list_video_loras' && !result.isError && Array.isArray(result.structuredContent?.loras)
