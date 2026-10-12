@@ -348,3 +348,20 @@ test('external host exposes guide reference content without creating media or re
   const result=await f.host.callTool('get_model_guide',{model:'route',mode:'base'});
   assert.deepEqual(result.structuredContent.guide,guide); assert.equal(result.structuredContent.referenceContent,true);assert.equal(f.saved.length,0);assert.equal(f.receipts.length,0);
 });
+
+test('external schema failure preserves supplied video audio and first-image conditioning', async () => {
+  const f = fixture();
+  f.mediaClient.listTools = async () => [{name:'generate_video',inputSchema:{type:'object',additionalProperties:false,properties:{
+    model:{type:'string'},prompt:{type:'string'},frames:{type:'integer'},
+    sourceAudio:{type:'object'},inputReference:{type:'object'},
+  }}}];
+  await f.host.listTools();
+  const result = await f.host.callTool('generate_video', {model:'minimax-h3',prompt:'speech',frames:124,sourceAudioAssetId:'c'.repeat(32),inputReferenceAssetId:'missing'});
+  assert.equal(result.isError,true);
+  const failure = JSON.parse(result.content[0].text);
+  assert.match(failure.correction,/sourceAudioAssetId/);
+  assert.match(failure.correction,/inputReferenceAssetId/);
+  assert.doesNotMatch(JSON.stringify(failure),/text-only|"seconds"/);
+  assert.equal(failure.example,undefined);
+  assert.equal(f.calls.length,0);
+});

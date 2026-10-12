@@ -87,7 +87,10 @@ async function resolveMediaToolArguments(name, args, readAsset, signal) {
   let totalBytes = 0;
   function invalidReference(message) {
     const advancedReference = guidingFrames !== undefined || loraReferenceAssetId != null;
-    const error = new Error(`${message} The media API was not called. Use list_media_assets to choose an existing image${advancedReference ? ' for the required guidingFrames or Ingredients reference; keep the requested conditioning' : name === 'generate_video' ? ', or omit inputReferenceAssetId/use null for text-only video' : ''}.`);
+    const recovery = name === 'generate_video' && sourceAudioAssetId != null
+      ? 'Use list_media_assets to resolve sourceAudioAssetId and every requested image reference, including inputReferenceAssetId, guidingFrames or loraReferenceAssetId. Preserve all requested conditioning and model timing; correct real asset IDs or report the limitation.'
+      : `Use list_media_assets to choose an existing image${advancedReference ? ' for the required guidingFrames or Ingredients reference; keep the requested conditioning' : name === 'generate_video' ? ', or omit inputReferenceAssetId/use null for text-only video' : ''}.`;
+    const error = new Error(`${message} The media API was not called. ${recovery}`);
     Object.assign(error, { code: 'INVALID_MEDIA_REFERENCE', stage: 'reference_resolution', requestSent: false });
     throw error;
   }

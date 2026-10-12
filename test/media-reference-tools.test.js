@@ -115,3 +115,23 @@ test('desktop rejects missing wrong-type oversized and raw source audio while pr
   for(const asset of [null,{data:'YWJj',mimeType:'image/png'},{data:'!bad!',mimeType:'audio/wav'},{data:'A'.repeat(Math.ceil(32*1024*1024/3)*4+4),mimeType:'audio/wav'}]) await assert.rejects(resolveMediaToolArguments('generate_video',{sourceAudioAssetId:'c'.repeat(32)},async()=>asset),error=>error.code==='INVALID_MEDIA_REFERENCE'&&error.requestSent===false);
   await assert.rejects(resolveMediaToolArguments('generate_video',{sourceAudio:{data:'YWJj',mimeType:'audio/wav'}},()=>assert.fail()),/saved asset IDs/);
 });
+
+test('audio and first-image failures retain all supplied video conditioning in recovery guidance', async () => {
+  const audioId = 'c'.repeat(32), imageId = 'd'.repeat(32);
+  for (const failedAsset of ['audio', 'image']) {
+    await assert.rejects(resolveMediaToolArguments('generate_video', {
+      model: 'minimax-h3', prompt: 'speech', frames: 124,
+      sourceAudioAssetId: audioId, inputReferenceAssetId: imageId,
+    }, async ({ assetId }) => {
+      if ((failedAsset === 'audio' && assetId === audioId) || (failedAsset === 'image' && assetId === imageId)) throw new Error('not permitted');
+      return { data: 'YWJj', mimeType: assetId === audioId ? 'audio/wav' : 'image/png' };
+    }), error => {
+      assert.equal(error.requestSent, false);
+      assert.match(error.message, /sourceAudioAssetId/);
+      assert.match(error.message, /inputReferenceAssetId/);
+      assert.match(error.message, /keep|preserve/i);
+      assert.doesNotMatch(error.message, /text-only|omit inputReferenceAssetId|use null/);
+      return true;
+    });
+  }
+});

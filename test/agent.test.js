@@ -445,3 +445,37 @@ test('all desktop harnesses share model-guide retrieval and reference-content in
   }
   assert.equal(require('../src/media-mcp-client').ALLOWED_MEDIA_TOOLS.has('get_model_guide'),true);
 });
+
+test('final video corrections retain audio and first-image conditioning after either asset fails', async () => {
+  const { resolveMediaToolArguments } = require('../src/media-reference-tools');
+  const audioId = 'c'.repeat(32), imageId = 'd'.repeat(32);
+  for (const model of ['minimax-h3', 'ltx-2.5']) for (const failedAsset of ['audio', 'image']) {
+    let localError;
+    try {
+      await resolveMediaToolArguments('generate_video', { model, prompt: 'speech',
+        ...(model === 'minimax-h3' ? { frames: 124 } : { seconds: 4 }),
+        sourceAudioAssetId: audioId, inputReferenceAssetId: imageId,
+      }, async ({ assetId }) => {
+        if ((failedAsset === 'audio' && assetId === audioId) || (failedAsset === 'image' && assetId === imageId)) return null;
+        return { data: 'YWJj', mimeType: assetId === audioId ? 'audio/wav' : 'image/png' };
+      });
+    } catch (error) { localError = error; }
+    assert.ok(localError);
+    const correction = toolCorrection('generate_video', { function: { parameters: { properties: { model: { enum: [model] } } } } }, localError.message, localError.code);
+    assert.match(correction.correction, /sourceAudioAssetId/);
+    assert.match(correction.correction, /inputReferenceAssetId/);
+    assert.match(correction.correction, /keep|preserve/i);
+    assert.match(correction.correction, /report.*limitation/i);
+    assert.doesNotMatch(JSON.stringify(correction), /text-only|omit inputReferenceAssetId|use null|"seconds"/);
+    assert.equal(correction.example, undefined);
+  }
+});
+
+test('video schema corrections retain supplied audio when the image ID fails before asset resolution', () => {
+  const correction = toolCorrection('generate_video', {}, 'arguments.inputReferenceAssetId must match the asset pattern.', 'INVALID_TOOL_ARGUMENTS', {
+    model: 'minimax-h3', frames: 124, sourceAudioAssetId: 'c'.repeat(32), inputReferenceAssetId: 'missing',
+  });
+  assert.match(correction.correction, /sourceAudioAssetId/);
+  assert.match(correction.correction, /preserve/i);
+  assert.equal(correction.example, undefined);
+});

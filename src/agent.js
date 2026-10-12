@@ -216,8 +216,12 @@ function isOfflineReferenceFailure(error) {
   return /Only relative local project references are supported:\s*(?:https?:|\/\/)|(?:external URLs|external script URLs)/i.test(error);
 }
 
-function toolCorrection(name, descriptor, error, code) {
+function toolCorrection(name, descriptor, error, code, requestedArguments = {}) {
   const schema = descriptor?.function?.parameters;
+  if (name === 'generate_video' && validationFailure(error, code, name) && (requestedArguments?.sourceAudioAssetId != null || /sourceAudioAssetId|source\s+audio/i.test(error))) return {
+    correction: 'This audio-conditioned request failed locally before the video API was called. Use list_media_assets to resolve sourceAudioAssetId and every requested image reference, including inputReferenceAssetId, guidingFrames or loraReferenceAssetId. Preserve all requested conditioning, prompt and model timing. Correct real asset IDs or report the limitation; do not change the generation recipe.',
+    exampleNote: 'Keep the selected exact model and its timing fields. H3 uses frames and must not receive seconds. Check current exact-model source_audio availability before a corrected submission.',
+  };
   if (name === 'generate_video' && validationFailure(error, code, name) && /guidingFrames|loraReference|Ingredients/i.test(error)) return {
     correction: 'This advanced reference failed locally before the video API was called. Use list_media_assets to copy real saved image IDs into guidingFrames or loraReferenceAssetId for Ingredients. Keep the requested conditioning; fix missing assets, positions, strengths or incompatible modes instead of silently changing the generation recipe.',
     exampleNote: 'Guides need unique frameIndex values in 0..seconds*24 and strength 0-1. Ingredients requires its LoRA, a reference sheet and at least 5 seconds. Check discover_video_capabilities and list_video_loras before an advanced retry.',
@@ -730,7 +734,9 @@ async function runAgentTurn({
   const limitNotice = "I reached this turn's tool limit. Send another message to continue working on the canvas.";
   const finalNotice = () => awaitingMediaJob ? 'Your media job is saved. Generation continues in the background, and this conversation will be notified when it is ready.' : failureFinalization ? 'I stopped after repeated tool errors. The canvas may have partial changes; the error details describe the correction needed before continuing.' : limitNotice;
 
-  function recordToolResult(name, fingerprint, content, executed = true) {
+  function recordToolResult(name, fingerprint, content, executed = true, rawArguments) {
+    let requestedArguments;
+    try { requestedArguments = parseArguments(rawArguments); } catch { /* Invalid JSON has no reliable conditioning context. */ }
     let result;
     try { result = typeof content === 'string' ? JSON.parse(content) : content; } catch { return content; }
     if (result?.ok !== false || (name === 'validate_canvas' && result.source && result.scope)) {
@@ -752,7 +758,7 @@ async function runAgentTurn({
       failureFinalization = `${name} repeatedly failed: ${error}`;
       finalizing = true;
     }
-    return JSON.stringify({ ...result, tool: name, error, code: result.code || (validation ? 'INVALID_TOOL_ARGUMENTS' : 'TOOL_EXECUTION_FAILED'), errorType: validation ? 'validation' : 'execution', ...(validation && ALLOWED_MEDIA_TOOLS.has(name) ? { stage: result.stage || 'argument_validation', requestSent: false } : {}), ...toolCorrection(name, descriptors.get(name), error, result.code), guidance, retry: { identicalFailures: identicalCount, sameErrorFailures: errorCount, executed, changeStrategy, turnEnding: Boolean(failureFinalization) } });
+    return JSON.stringify({ ...result, tool: name, error, code: result.code || (validation ? 'INVALID_TOOL_ARGUMENTS' : 'TOOL_EXECUTION_FAILED'), errorType: validation ? 'validation' : 'execution', ...(validation && ALLOWED_MEDIA_TOOLS.has(name) ? { stage: result.stage || 'argument_validation', requestSent: false } : {}), ...toolCorrection(name, descriptors.get(name), error, result.code, requestedArguments), guidance, retry: { identicalFailures: identicalCount, sameErrorFailures: errorCount, executed, changeStrategy, turnEnding: Boolean(failureFinalization) } });
   }
 
   function savedHistory(cancelled = false) {
@@ -867,7 +873,7 @@ async function runAgentTurn({
       const fingerprint = argumentFingerprint(name, call?.function?.arguments);
       const previousFailure = argumentFailures.get(fingerprint);
       if (previousFailure?.count >= 2) {
-        const content = recordToolResult(name, fingerprint, { ok: false, error: previousFailure.error, code: previousFailure.code }, false);
+        const content = recordToolResult(name, fingerprint, { ok: false, error: previousFailure.error, code: previousFailure.code }, false, call?.function?.arguments);
         messages.push({ role: 'tool', tool_call_id: call.id, content });
         continue;
       }
@@ -892,7 +898,7 @@ async function runAgentTurn({
       } catch (error) {
         content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error), ...(error?.code ? { code: error.code } : {}), ...(error?.stage ? { stage: error.stage, requestSent: error.requestSent } : {}) });
       }
-      if (!signal?.aborted) content = recordToolResult(name, fingerprint, content);
+      if (!signal?.aborted) content = recordToolResult(name, fingerprint, content, true, call?.function?.arguments);
       messages.push({ role: 'tool', tool_call_id: call.id, content });
       await checkpoint();
       throwIfAborted(signal);
