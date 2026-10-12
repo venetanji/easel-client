@@ -52,12 +52,13 @@ function mediaToolSchema(tool) {
   }
   if (!['edit_image', 'create_image_variation', 'generate_video'].includes(tool.name)) return schema;
   const properties = { ...schema.properties, projectId: { ...PROJECT_ID, type: ['string', 'null'] } };
-  const required = (schema.required || []).filter((key) => !['images', 'mask', 'image', 'inputReference', 'loraReference'].includes(key));
+  const required = (schema.required || []).filter((key) => !['images', 'mask', 'image', 'inputReference', 'loraReference', 'sourceAudio'].includes(key));
   delete properties.images;
   delete properties.mask;
   delete properties.image;
   delete properties.inputReference;
   delete properties.loraReference;
+  delete properties.sourceAudio;
   if (tool.name === 'edit_image') {
     properties.imageAssetIds = { type: 'array', minItems: 1, maxItems: 16, items: ASSET_ID, description: 'Saved image IDs to upload as edit references (32 MiB combined). The host resolves their bytes. Use list_media_assets or a capture result.' };
     properties.maskAssetId = { ...ASSET_ID, description: 'Optional saved PNG mask. Transparent pixels identify regions to edit; it must match the first image dimensions.' };
@@ -66,6 +67,7 @@ function mediaToolSchema(tool) {
     properties.imageAssetId = { ...ASSET_ID, description: 'A saved image to upload for a variation. Model/endpoint support is required; DALL-E 2 requires a square PNG under 4 MiB.' };
     required.push('imageAssetId');
   } else {
+    if (schema.properties?.sourceAudio) properties.sourceAudioAssetId = { ...ASSET_ID, type: ['string', 'null'], description: 'Saved WAV/MP3/M4A audio to condition video and supply its trimmed soundtrack. Requires live selected-model source_audio availability. Omit or use null without audio; never drop requested audio after a lookup failure.' };
     properties.inputReferenceAssetId = { ...ASSET_ID, type: ['string', 'null'], description: 'Optional saved PNG/JPEG/WebP reference. For text-only video OMIT this field or use null. Never use a placeholder or an all-zero ID. If the user requests a reference, copy a real ID from list_media_assets or a capture result.' };
     if (schema.properties?.loraReference) properties.loraReferenceAssetId = { ...ASSET_ID, type: ['string', 'null'], description: 'Saved Ingredients reference sheet; requires the ingredients LoRA and at least 5 seconds. The host uploads bytes. Do not omit required conditioning after a lookup failure.' };
     if (schema.properties?.guidingFrames) {
@@ -81,7 +83,7 @@ function mediaToolSchema(tool) {
 
 async function resolveMediaToolArguments(name, args, readAsset, signal) {
   if (!['edit_image', 'create_image_variation', 'generate_video'].includes(name)) return args;
-  const { projectId, imageAssetIds, imageAssetId, maskAssetId, inputReferenceAssetId, loraReferenceAssetId, guidingFrames, ...wire } = args;
+  const { projectId, imageAssetIds, imageAssetId, maskAssetId, inputReferenceAssetId, loraReferenceAssetId, sourceAudioAssetId, guidingFrames, ...wire } = args;
   let totalBytes = 0;
   function invalidReference(message) {
     const advancedReference = guidingFrames !== undefined || loraReferenceAssetId != null;
@@ -112,7 +114,7 @@ async function resolveMediaToolArguments(name, args, readAsset, signal) {
     if (maskAssetId) wire.mask = await image(maskAssetId, true);
   } else if (name === 'create_image_variation') wire.image = await image(imageAssetId);
   else {
-    if (Object.hasOwn(wire, 'inputReference') || Object.hasOwn(wire, 'loraReference')) invalidReference('In-app video tools accept saved asset IDs, not image upload objects.');
+    if (Object.hasOwn(wire, 'inputReference') || Object.hasOwn(wire, 'loraReference') || Object.hasOwn(wire, 'sourceAudio')) invalidReference('In-app video tools accept saved asset IDs, not image upload objects.');
     if (guidingFrames !== undefined) {
       if (!Array.isArray(guidingFrames) || !guidingFrames.length || guidingFrames.length > 8) invalidReference('guidingFrames requires one to eight image anchors.');
       if (inputReferenceAssetId || loraReferenceAssetId || wire.loras?.some(lora => lora.id === 'ingredients')) invalidReference('guidingFrames cannot be combined with first-image or Ingredients references.');
@@ -127,6 +129,17 @@ async function resolveMediaToolArguments(name, args, readAsset, signal) {
       }
       wire.guidingFrames = [];
       for (const guide of guidingFrames) wire.guidingFrames.push({ image: await image(guide.assetId), frameIndex: guide.frameIndex, ...(guide.strength !== undefined ? { strength: guide.strength } : {}) });
+    }
+    if (sourceAudioAssetId != null) {
+      signal?.throwIfAborted();
+      if (typeof sourceAudioAssetId !== 'string' || !new RegExp(ASSET_ID.pattern).test(sourceAudioAssetId)) invalidReference('Copy an exact saved audio asset ID; preserve requested source audio.');
+      let asset;
+      try { asset = await readAsset({assetId:sourceAudioAssetId,projectId:projectId ?? undefined}); }
+      catch { signal?.throwIfAborted(); invalidReference('Saved source audio is unavailable; preserve requested audio and select an available saved audio asset.'); }
+      signal?.throwIfAborted();
+      const extension = {'audio/wav':'wav','audio/x-wav':'wav','audio/mpeg':'mp3','audio/mp3':'mp3','audio/mp4':'m4a','audio/x-m4a':'m4a'}[asset?.mimeType];
+      if (!extension || typeof asset.data !== 'string' || !asset.data || asset.data.length > Math.ceil(32*1024*1024/3)*4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(asset.data) || Buffer.from(asset.data,'base64').toString('base64') !== asset.data || Buffer.byteLength(asset.data,'base64') > 32*1024*1024) invalidReference('Source audio must be saved WAV/MP3/M4A with valid bytes, at most 32 MiB independently of images.');
+      wire.sourceAudio = {data:asset.data,mimeType:asset.mimeType,name:`${sourceAudioAssetId}.${extension}`};
     }
     if (inputReferenceAssetId) wire.inputReference = await image(inputReferenceAssetId);
     if (loraReferenceAssetId) wire.loraReference = await image(loraReferenceAssetId);

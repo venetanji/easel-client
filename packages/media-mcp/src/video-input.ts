@@ -1,3 +1,4 @@
+import { SourceAudioSchema } from './source-audio-upload.js';
 import { z } from 'zod/v4';
 import { MAX_IMAGE_BASE64_CHARS } from './image-upload.js';
 
@@ -14,6 +15,7 @@ export const VideoGenerationSchema = z.object({
   seconds: z.number().int().min(1).max(60).describe('Easel accepts 1-12 whole seconds; other endpoint limits vary.').optional(),
   size: z.string().regex(/^\d{2,5}x\d{2,5}$/).optional(),
   inputReference: VideoImageUploadSchema.optional(),
+  sourceAudio: SourceAudioSchema.nullish().transform(value => value ?? undefined),
   frames: z.number().int().min(124).max(362).describe('H3 only: native frame count on the 17k+5 grid; default 124. Never combine with seconds.').optional(),
   semanticReferences: z.array(VideoImageUploadSchema).min(1).max(2).optional(),
   temporalGroups: z.array(z.object({
