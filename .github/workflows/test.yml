@@ -57,3 +57,35 @@ jobs:
         run: xvfb-run -a node scripts/smoke-video-editor.cjs
       - name: Verify native timeline direct controls and stacking parity
         run: xvfb-run -a node scripts/smoke-timeline-controls.cjs
+
+  server-contract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      # Deliberately fail if this repository's existing token cannot read the
+      # private server. Do not skip the contract or create new credentials.
+      - uses: actions/checkout@v4
+        with:
+          repository: venetanji/easel
+          ref: 4c114e5642c7db875ffafb3ae3c70a21183032ad
+          path: contract-server
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install audio contract tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Verify audio executables
+        run: command -v ffmpeg && command -v ffprobe
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build --workspace packages/media-mcp
+      - name: Verify production Media MCP against pinned server
+        working-directory: contract-server
+        env:
+          EASEL_MEDIA_MCP_SOURCE: ${{ github.workspace }}
+        run: uv run --group dev pytest -q -rs tests/test_mcp_contract.py
