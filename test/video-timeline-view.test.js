@@ -35,11 +35,11 @@ function timeline(id = 'timeline-a', revision = 1) {
     tracks: [{ id: 'video-1', type: 'video', name: 'Video' }, { id: 'audio-1', type: 'audio', name: 'Audio' }, { id: 'overlay-1', type: 'overlay', name: 'Overlay' }],
     items: [{ id: 'clip-1', trackId: 'video-1', startFrame: 24, endFrame: 72, assetId: 'asset-video', sourceStartSeconds: 1, sourceEndSeconds: 3, sourceDurationSeconds: 8, name: 'Coast', gain: 0.5 }], transitions: [] };
 }
-function fixture({ initial = timeline(), assets = [{ id: 'asset-video', mimeType: 'video/mp4', name: 'Coast', duration: 8 }, { id: 'asset-image', mimeType: 'image/png', name: 'Title' }], overrides = {}, viewOptions = {} } = {}) {
+function fixture({ initial = timeline(), assets = [{ id: 'asset-video', mimeType: 'video/mp4', name: 'Coast', duration: 8 }, { id: 'asset-image', mimeType: 'image/png', name: 'Title' }], overrides = {}, viewOptions = {}, decodeBase64 = atob } = {}) {
   let stored = clone(initial);
   const calls = [], selections = [], statuses = [], urls = [], revoked = [];
   const frames = new Map(); let frameId = 0;
-  const window = { URL: { createObjectURL() { const url = `blob:test-${urls.length}`; urls.push(url); return url; }, revokeObjectURL(url) { revoked.push(url); } }, Blob, atob, performance: { now: () => 0 }, requestAnimationFrame(fn) { frames.set(++frameId, fn); return frameId; }, cancelAnimationFrame(id) { frames.delete(id); } };
+  const window = { URL: { createObjectURL() { const url = `blob:test-${urls.length}`; urls.push(url); return url; }, revokeObjectURL(url) { revoked.push(url); } }, Blob, atob: decodeBase64, performance: { now: () => 0 }, requestAnimationFrame(fn) { frames.set(++frameId, fn); return frameId; }, cancelAnimationFrame(id) { frames.delete(id); } };
   const document = { createElement(tag) { const node = element(tag); node.ownerDocument = document; return node; }, defaultView: window };
   const container = element();
   const client = {
@@ -275,6 +275,45 @@ test('lookahead limits decoder count and a failed preload can retry when its cli
   first.currentTime = 3; playbackTick(f, 2000); await settle();
   assert.equal(attempts, 2); assert.equal(f.role('preview-empty').hidden, true); assert.equal(f.role('preview-status').textContent, '');
   f.view.close();
+});
+
+test('active media evicts a cached hidden preload after scrubbing without exceeding the preview budget', async () => {
+  const doc = timeline();
+  doc.items = [
+    { id: 'video', assetId: 'video', trackId: 'video-1', startFrame: 0, endFrame: 96, sourceStartSeconds: 0, sourceEndSeconds: 4 },
+    { id: 'earlier', assetId: 'earlier', trackId: 'audio-1', startFrame: 24, endFrame: 48, sourceStartSeconds: 0, sourceEndSeconds: 1 },
+    { id: 'later', assetId: 'later', trackId: 'audio-1', startFrame: 48, endFrame: 72, sourceStartSeconds: 0, sourceEndSeconds: 1 },
+  ];
+  const f = fixture({ initial: doc, assets: [{ id: 'video', mimeType: 'video/mp4' }, { id: 'earlier', mimeType: 'audio/wav' }, { id: 'later', mimeType: 'audio/wav' }],
+    // Preserve production byte accounting without allocating three 50 MiB fixture payloads.
+    decodeBase64: () => ({ length: 50 * 1024 * 1024, *[Symbol.iterator]() { yield 'a'; } }),
+  });
+  await f.view.open('project-a'); await settle();
+  await f.change(f.role('seek'), 60); await settle();
+  const later = f.all(node => node.tagName === 'AUDIO')[0], laterUrl = later.src;
+  await f.change(f.role('seek'), 0); await f.click(f.role('play')); await settle();
+  const warmedLater = f.all(node => node.tagName === 'AUDIO' && node.hidden)[0];
+  assert.equal(warmedLater.src, laterUrl);
+  const video = f.all(node => node.tagName === 'VIDEO')[0];
+  video.currentTime = 1; playbackTick(f, 1000); await settle();
+  assert.equal(f.role('seek').value, '24');
+  assert.equal(f.role('preview-status').textContent, '', 'active video and earlier audio fit in 100 MiB');
+  const earlier = f.all(node => node.tagName === 'AUDIO' && !node.hidden)[0];
+  assert.ok(earlier); assert.equal(earlier.paused, false);
+  assert.equal(warmedLater.parentNode, null); assert.equal(warmedLater.src, '');
+  assert.ok(f.revoked.includes(laterUrl), 'evicted hidden media releases its URL');
+  assert.equal(f.urls.length - f.revoked.length, 2, 'only 100 MiB remains cached');
+  const reads = f.calls.filter(([method]) => method === 'asset').length;
+  for (let timestamp = 1100; timestamp <= 1500; timestamp += 100) { playbackTick(f, timestamp); await settle(); }
+  assert.equal(f.calls.filter(([method]) => method === 'asset').length, reads, 'evicted lookahead does not reload on each render');
+  assert.equal(f.urls.length - f.revoked.length, 2);
+  earlier.currentTime = 1; video.currentTime = 2; playbackTick(f, 2000); await settle();
+  assert.equal(f.role('seek').value, '48'); assert.equal(f.role('preview-status').textContent, '');
+  const activeLater = f.all(node => node.tagName === 'AUDIO' && !node.hidden)[0];
+  assert.ok(activeLater); assert.equal(activeLater.paused, false);
+  assert.notEqual(activeLater.src, laterUrl, 'evicted media reloads when it becomes active');
+  assert.equal(f.urls.length - f.revoked.length, 2);
+  f.view.close(); assert.equal(f.urls.length, f.revoked.length);
 });
 
 test('a future unsupported playback rate cannot disable a healthy occurrence of the same asset', async () => {

@@ -749,10 +749,17 @@
         if (typeof media.data !== 'string' || !media.data.length || media.data.length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4) throw new Error('This source is empty or exceeds the 64 MiB live-preview limit. Use a smaller proxy.');
         const binary = decodeBase64(media.data); const bytes = binary.length;
         if (bytes > MAX_MEDIA_BYTES) throw new Error('This source exceeds the 64 MiB live-preview limit. Use a smaller proxy.');
-        const activeAssets = new Set([...getPreviewLayers(timeline, playhead).map(layer => layer.item.assetId), ...[...mediaNodes.values()].map(record => record.assetId)]);
+        const activeAssets = new Set(getPreviewLayers(timeline, playhead).map(layer => layer.item.assetId));
+        // Speculative decoders may pin their cache entries only while no active source needs the space.
+        if (!activeAssets.has(assetId)) for (const record of mediaNodes.values()) activeAssets.add(record.assetId);
         for (const [key, entry] of [...cache].sort((a, b) => a[1].usedAt - b[1].usedAt)) {
           if (cachedBytes + bytes <= MAX_CACHE_BYTES) break;
-          if (!activeAssets.has(key)) { urlApi.revokeObjectURL(entry.url); cachedBytes -= entry.bytes; cache.delete(key); }
+          if (!activeAssets.has(key)) {
+            for (const [id, record] of mediaNodes) if (record.assetId === key) {
+              disposeNode(record); mediaNodes.delete(id); preloadFailures.add(key);
+            }
+            urlApi.revokeObjectURL(entry.url); cachedBytes -= entry.bytes; cache.delete(key);
+          }
         }
         if (cachedBytes + bytes > MAX_CACHE_BYTES) throw new Error('Active media exceeds the 128 MiB preview budget. Use smaller proxies or fewer overlapping sources.');
         const buffer = Uint8Array.from(binary, (character) => character.charCodeAt(0));
