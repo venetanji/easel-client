@@ -69,7 +69,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: venetanji/easel
-          ref: b55d28da6d290f2ee239677477cc11a9661c948b
+          ref: 796086b346937e6dda0d66f7bd44bbee789c0d51
           path: contract-server
       - uses: astral-sh/setup-uv@v5
         with:
@@ -88,4 +88,4 @@ jobs:
         working-directory: contract-server
         env:
           EASEL_MEDIA_MCP_SOURCE: ${{ github.workspace }}
-        run: uv run --group dev pytest -q -rs tests/test_mcp_contract.py tests/test_model_guides.py
+        run: uv run --group dev pytest -q -rs tests/test_mcp_contract.py tests/test_model_guides.py tests/test_video_sizing.py

@@ -18,6 +18,26 @@ image..." or "Continue from the previous video..." belong in the agent workflow,
 not as prompt preambles. A guide-required alignment line remains part of the
 model prompt. Reference asset IDs and uploads stay in the tool arguments.
 
+Plan the requested/default video geometry before generating an anchor. Resolve
+`size_constraints.aliases` and `size_presets` width/height from exact-model
+capabilities, then match new anchors to that effective aspect ratio. Existing
+references need a geometry check and the canonical model guide's fit guidance;
+optional `capabilities.input_reference` describes first-image `fit`, `target`
+and `configurable`. These fields survive client discovery unchanged. Explain
+mismatches and known effects or unknown geometry/fit before submission. Preserve
+requested output dimensions and source framing; omit video size unless requested
+and never derive it from reference dimensions.
+
+The companion [API PR #11](https://github.com/venetanji/easel/pull/11) documents
+the existing H3 first-image stretch and LTX center-crop paths. It adds read-only
+fit metadata and H3 base-guide wording without changing preprocessing or exposing
+a fit selector. Reference bytes remain unchanged; prompt wording cannot override
+preprocessing. This metadata applies only to ordinary first-image conditioning,
+including source audio, not semantic references, timed guides or Ingredients.
+Older endpoints still work; missing fit guidance must be reported as uncertainty.
+The API changes must be deployed to the configured endpoint to appear in live
+capabilities and guides.
+
 For `generate_speech`, `prompt` is the literal spoken text. For example,
 `prompt: "I would like some python please?"` and
 `tone: "Deep, warm adult male voice; natural conversational delivery"` keep the
@@ -70,8 +90,8 @@ video uploads remain outside this desktop change.
 ### Pinned offline contract CI
 
 The existing CI workflow now runs the consumer's production adapter against
-server commit `b55d28da6d290f2ee239677477cc11a9661c948b` with fake backends and installed ffmpeg/ffprobe.
-The client job builds Media MCP before running the server's MCP and model-guide suites;
+server commit `796086b346937e6dda0d66f7bd44bbee789c0d51` from API PR #11 with fake backends and installed ffmpeg/ffprobe.
+The client job builds Media MCP before running the server's MCP, model-guide and video-sizing suites;
 the CLI job runs its local `contract/server_contract.py` with the server's dev
 dependencies. An absent or invalid configured checkout fails the job.
 

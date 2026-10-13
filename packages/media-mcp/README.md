@@ -171,6 +171,20 @@ Easel's live API exposes multipart `POST /v1/videos`, JSON `GET /v1/videos/{vide
 
 `generate_video` submits exactly one job with no automatic retries. It returns `job.id`, `job.modelId`, status and available progress/duration/size metadata. Keep the ID even when pending. The optional standalone `inputReference` uses the same validated PNG/JPEG/WebP upload object as image tools and is sent as `input_reference`. The in-app agent supplies `inputReferenceAssetId` instead; the host uploads the saved reference bytes.
 
+Plan video geometry before making an anchor: discover the exact model's
+requested/default size and resolve `size_constraints.aliases` and `size_presets`
+width/height. Reference uploads remain unchanged and do not set output size.
+The canonical model guide and optional `capabilities.input_reference` metadata
+describe first-image fitting with `fit`, `target` and `configurable`; the client
+preserves these fields. This metadata is not a selectable generation argument.
+Match new anchors to the effective aspect. Inspect existing references and
+explain mismatches, known effects or unknown geometry/fit before submission;
+preserve requested output dimensions and source framing. If the endpoint lacks
+fit metadata or guidance, report uncertainty rather than inferring its policy.
+First-image fit metadata does not describe semantic references, timed guides or
+Ingredients sheets. Omit video `size` unless requested; never derive it from
+reference dimensions. See the companion [API PR #11](https://github.com/venetanji/easel/pull/11).
+
 ### Advanced controls and read-only discovery
 
 Call `discover_video_capabilities({"model":"EXACT_ENABLED_MODEL_ID"})` and
