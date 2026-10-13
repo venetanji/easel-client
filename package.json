@@ -20,7 +20,7 @@
     "build:video-runtime": "node scripts/build-video-runtime.js",
     "test:video-export": "npm run build:video-runtime && node scripts/smoke-video-export.cjs",
     "test:video-live": "npm run build:media-mcp && npm run build:video-runtime && node scripts/test-live-video-workflow.cjs",
-    "pretest": "npm run build:media-mcp"
+    "pretest": "npm run build:media-mcp && npm run build:video-runtime"
   },
   "overrides": {
     "hono": "4.13.9"

@@ -22,7 +22,7 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npx playwright install --with-deps chromium
-      - run: npm test
+      - run: xvfb-run -a npm test
         env:
           EASEL_RUN_BROWSER_TESTS: '1'
       - run: npm run build
