@@ -32,7 +32,7 @@ const MEDIA_REFERENCE_TOOLS = Object.freeze([
   } },
   { type: 'function', function: {
     name: 'extract_video_frame',
-    description: 'Decode one still from a managed MP4/WebM (generated, imported or recorded). Defaults to the final native video frame; timestampSeconds selects the frame at or before that source time. Saves a reusable JPEG in Media and provides one temporary image observation. Use returned assetId for inputReferenceAssetId or guidingFrames. Silent, offline; no generation or canvas reload. Unsupported codecs fail explicitly.',
+    description: 'Decode one still from a managed MP4/WebM (generated, imported or recorded). Defaults to the final native video frame; timestampSeconds selects the frame at or before that source time. Saves a reusable JPEG in Media and provides one temporary image observation. Use returned assetId for inputReferenceAssetId, guidingFrames or H3 temporalGroups. For a sequence, extract successive source times and check returned timestamps before ordering IDs. Silent, offline; no generation or canvas reload. Unsupported codecs fail explicitly.',
     parameters: { type: 'object', additionalProperties: false, required: ['assetId'], properties: {
       assetId: ASSET_ID, projectId: PROJECT_ID,
       position: { type: 'string', enum: ['last'], description: 'Default: last. Omit when using timestampSeconds.' },
@@ -62,13 +62,14 @@ function mediaToolSchema(tool) {
   }
   if (!['edit_image', 'create_image_variation', 'generate_video'].includes(tool.name)) return schema;
   const properties = { ...schema.properties, projectId: { ...PROJECT_ID, type: ['string', 'null'] } };
-  const required = (schema.required || []).filter((key) => !['images', 'mask', 'image', 'inputReference', 'loraReference', 'sourceAudio'].includes(key));
+  const required = (schema.required || []).filter((key) => !['images', 'mask', 'image', 'inputReference', 'loraReference', 'sourceAudio', 'semanticReferences'].includes(key));
   delete properties.images;
   delete properties.mask;
   delete properties.image;
   delete properties.inputReference;
   delete properties.loraReference;
   delete properties.sourceAudio;
+  delete properties.semanticReferences;
   if (tool.name === 'edit_image') {
     properties.imageAssetIds = { type: 'array', minItems: 1, maxItems: 16, items: ASSET_ID, description: 'Saved image IDs to upload as edit references (32 MiB combined). The host resolves their bytes. Use list_media_assets or a capture result.' };
     properties.maskAssetId = { ...ASSET_ID, description: 'Optional saved PNG mask. Transparent pixels identify regions to edit; it must match the first image dimensions.' };
@@ -77,6 +78,14 @@ function mediaToolSchema(tool) {
     properties.imageAssetId = { ...ASSET_ID, description: 'A saved image to upload for a variation. Model/endpoint support is required; DALL-E 2 requires a square PNG under 4 MiB.' };
     required.push('imageAssetId');
   } else {
+    if (schema.properties?.semanticReferences) properties.semanticReferenceAssetIds = { ...schema.properties.semanticReferences, items: { ...ASSET_ID }, description: 'H3 saved PNG/JPEG identity/content references in Picture order. The host checks current capabilities and uploads separate copies if an ID also appears in a temporal group.' };
+    if (schema.properties?.temporalGroups) {
+      const groups = schema.properties.temporalGroups;
+      const { images, ...metadata } = groups.items.properties;
+      properties.temporalGroups = { ...groups, description: 'H3 contiguous saved PNG/JPEG frame sequences. Each group starts at frameIndex on the output timeline; imageAssetIds are in source-time order. Read current capabilities for allowed group lengths, bounds and availability. No raw bytes, paths or URLs.',
+        items: { ...groups.items, additionalProperties: false, required: [...(groups.items.required || []).filter(key => key !== 'images'), 'imageAssetIds'],
+          properties: { ...metadata, imageAssetIds: { ...images, items: { ...ASSET_ID } } } } };
+    }
     if (schema.properties?.sourceAudio) properties.sourceAudioAssetId = { ...ASSET_ID, type: ['string', 'null'], description: 'Saved WAV/MP3/M4A audio to condition video and supply its trimmed soundtrack. Requires live selected-model source_audio availability. Omit or use null without audio; never drop requested audio after a lookup failure.' };
     properties.inputReferenceAssetId = { ...ASSET_ID, type: ['string', 'null'], description: 'Optional saved PNG/JPEG/WebP first-image reference, uploaded unchanged. Read saved width/height and inspect_media_asset as needed; consult the selected model guide and capabilities input_reference fit/target/configurable metadata. Explain aspect mismatches and known effects or unknown geometry/fit before submission; preserve requested output dimensions and source framing. Fit metadata is descriptive, not a generation argument. For text-only video OMIT this field or use null. Never use a placeholder or all-zero ID; copy a real ID from list_media_assets or a capture result.' };
     if (schema.properties?.loraReference) properties.loraReferenceAssetId = { ...ASSET_ID, type: ['string', 'null'], description: 'Saved Ingredients reference sheet; requires the ingredients LoRA and at least 5 seconds. The host uploads bytes. Do not omit required conditioning after a lookup failure.' };
@@ -91,16 +100,20 @@ function mediaToolSchema(tool) {
   return { ...schema, properties, required, additionalProperties: false };
 }
 
-async function resolveMediaToolArguments(name, args, readAsset, signal) {
+async function resolveMediaToolArguments(name, args, readAsset, signal, discoverCapabilities) {
   if (!['edit_image', 'create_image_variation', 'generate_video'].includes(name)) return args;
-  const { projectId, imageAssetIds, imageAssetId, maskAssetId, inputReferenceAssetId, loraReferenceAssetId, sourceAudioAssetId, guidingFrames, ...wire } = args;
+  const { projectId, imageAssetIds, imageAssetId, maskAssetId, inputReferenceAssetId, loraReferenceAssetId, sourceAudioAssetId, guidingFrames, semanticReferenceAssetIds, temporalGroups, ...wire } = args;
   let totalBytes = 0;
+  let maxImageBytes = 32 * 1024 * 1024;
+  let imageMimeTypes = ['image/png', 'image/jpeg', 'image/webp'];
+  const h3References = semanticReferenceAssetIds !== undefined || temporalGroups !== undefined;
   function invalidReference(message) {
     const advancedReference = guidingFrames !== undefined || loraReferenceAssetId != null;
     const recovery = name === 'generate_video' && sourceAudioAssetId != null
-      ? 'Use list_media_assets to resolve sourceAudioAssetId and every requested image reference, including inputReferenceAssetId, guidingFrames or loraReferenceAssetId. Preserve all requested conditioning and model timing; correct real asset IDs or report the limitation.'
-      : `Use list_media_assets to choose an existing image${advancedReference ? ' for the required guidingFrames or Ingredients reference; keep the requested conditioning' : name === 'generate_video' ? ', or omit inputReferenceAssetId/use null for text-only video' : ''}.`;
-    const error = new Error(`${message} The media API was not called. ${recovery}`);
+      ? 'Use list_media_assets to resolve sourceAudioAssetId and every requested image reference, including inputReferenceAssetId, guidingFrames, temporalGroups, semanticReferenceAssetIds or loraReferenceAssetId. Preserve all requested conditioning and model timing; correct real asset IDs or report the limitation.'
+      : h3References ? 'Use list_media_assets to resolve temporalGroups and semanticReferenceAssetIds; preserve all requested conditioning and timing or report the limitation.'
+        : `Use list_media_assets to choose an existing image${advancedReference ? ' for the required guidingFrames or Ingredients reference; keep the requested conditioning' : name === 'generate_video' ? ', or omit inputReferenceAssetId/use null for text-only video' : ''}.`;
+    const error = new Error(`${message} No generation request was sent. ${recovery}`);
     Object.assign(error, { code: 'INVALID_MEDIA_REFERENCE', stage: 'reference_resolution', requestSent: false });
     throw error;
   }
@@ -114,10 +127,10 @@ async function resolveMediaToolArguments(name, args, readAsset, signal) {
       invalidReference(`Saved image reference ${assetId} could not be resolved locally: ${cause instanceof Error ? cause.message : String(cause)}.`);
     }
     signal?.throwIfAborted();
-    if (!asset || !['image/png', 'image/jpeg', 'image/webp'].includes(asset.mimeType) || (pngOnly && asset.mimeType !== 'image/png')) invalidReference(pngOnly ? 'This reference must be a saved PNG image.' : 'Media references must be saved PNG, JPEG or WebP images.');
+    if (!asset || !imageMimeTypes.includes(asset.mimeType) || (pngOnly && asset.mimeType !== 'image/png')) invalidReference(pngOnly ? 'This reference must be a saved PNG image.' : `Media references must be saved images with MIME types: ${imageMimeTypes.join(', ')}.`);
     if (typeof asset.data !== 'string' || !asset.data) invalidReference('Saved image reference is missing.');
     totalBytes += Buffer.byteLength(asset.data, 'base64');
-    if (totalBytes > 32 * 1024 * 1024) invalidReference('Saved image references exceed 32 MiB combined.');
+    if (totalBytes > maxImageBytes) invalidReference(maxImageBytes === 32 * 1024 * 1024 ? 'Saved image references exceed 32 MiB combined.' : 'Saved image references exceed the discovered combined byte limit.');
     const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }[asset.mimeType];
     return { data: asset.data, mimeType: asset.mimeType, name: `${assetId}.${extension}` };
   }
@@ -127,7 +140,53 @@ async function resolveMediaToolArguments(name, args, readAsset, signal) {
     if (maskAssetId) wire.mask = await image(maskAssetId, true);
   } else if (name === 'create_image_variation') wire.image = await image(imageAssetId);
   else {
-    if (Object.hasOwn(wire, 'inputReference') || Object.hasOwn(wire, 'loraReference') || Object.hasOwn(wire, 'sourceAudio')) invalidReference('In-app video tools accept saved asset IDs, not image upload objects.');
+    if (['inputReference', 'loraReference', 'sourceAudio', 'semanticReferences'].some(key => Object.hasOwn(wire, key))) invalidReference('In-app video tools accept saved asset IDs, not image upload objects.');
+    if (h3References) {
+      const validIds = values => Array.isArray(values) && values.length > 0 && values.every(id => typeof id === 'string' && new RegExp(ASSET_ID.pattern).test(id));
+      if (semanticReferenceAssetIds !== undefined && !validIds(semanticReferenceAssetIds)) invalidReference('semanticReferenceAssetIds needs a nonempty array of real saved image IDs.');
+      if (temporalGroups !== undefined && (!Array.isArray(temporalGroups) || !temporalGroups.length || temporalGroups.some(group => !group || typeof group !== 'object' || Array.isArray(group)
+        || Object.keys(group).some(key => !['frameIndex', 'imageAssetIds'].includes(key)) || !Number.isSafeInteger(group.frameIndex) || group.frameIndex < 0 || !validIds(group.imageAssetIds)))) invalidReference('temporalGroups needs strict frameIndex/imageAssetIds objects with ordered saved image IDs.');
+      if (inputReferenceAssetId != null || loraReferenceAssetId != null || guidingFrames !== undefined || ['seconds', 'cameraLora', 'cameraLoraStrength', 'loras', 'motionSpeed', 'loraReferenceStrength'].some(key => wire[key] !== undefined)) invalidReference('H3 reference groups cannot combine with first-image or LTX controls.');
+      signal?.throwIfAborted();
+      if (typeof discoverCapabilities !== 'function') invalidReference('Current H3 capability discovery is unavailable.');
+      let caps;
+      try { caps = await discoverCapabilities(wire.model); }
+      catch { signal?.throwIfAborted(); invalidReference('Could not discover the selected model capabilities.'); }
+      signal?.throwIfAborted();
+      const frame = caps?.frames, groups = caps?.temporal_groups, refs = caps?.semantic_references, uploads = caps?.uploads;
+      const positive = value => Number.isSafeInteger(value) && value > 0;
+      if (caps?.model !== 'minimax-h3' || caps.schema_version !== 1 || !frame || ![frame.min, frame.max, frame.default, frame.step].every(positive)
+        || !Number.isSafeInteger(frame.offset) || frame.offset < 0 || !positive(groups?.max_count) || !Array.isArray(groups?.image_counts) || !groups.image_counts.length || !groups.image_counts.every(positive)
+        || !positive(refs?.max_count) || !positive(uploads?.max_count) || !positive(uploads?.max_total_bytes) || !Array.isArray(uploads?.mime_types) || !uploads.mime_types.length
+        || uploads.mime_types.some(type => !['image/png', 'image/jpeg'].includes(type))) invalidReference('The selected model does not advertise a usable H3 reference contract.');
+      const profile = caps.profiles?.[temporalGroups ? 'temporal_ref20' : 'ref20'];
+      if (profile?.supported !== true || profile.available !== true) invalidReference('The selected H3 reference profile is unavailable.');
+      const frames = wire.frames ?? frame.default;
+      if (!Number.isSafeInteger(frames) || frames < frame.min || frames > frame.max || (frames - frame.offset) % frame.step !== 0) invalidReference('frames must match the discovered H3 frame bounds and grid.');
+      if ((semanticReferenceAssetIds?.length || 0) > refs.max_count || (temporalGroups?.length || 0) > groups.max_count) invalidReference('H3 references exceed the discovered group limits.');
+      const ordered = [...(temporalGroups || [])].sort((a, b) => a.frameIndex - b.frameIndex);
+      for (const [index, group] of ordered.entries()) {
+        if (!groups.image_counts.includes(group.imageAssetIds.length) || group.frameIndex + group.imageAssetIds.length > frames) invalidReference('Temporal group lengths and positions must fit discovered H3 limits.');
+        const previous = ordered[index - 1];
+        if (previous && previous.frameIndex + previous.imageAssetIds.length > group.frameIndex) invalidReference('H3 temporal groups must not overlap.');
+      }
+      if ((semanticReferenceAssetIds?.length || 0) + ordered.reduce((n, group) => n + group.imageAssetIds.length, 0) > uploads.max_count) invalidReference('H3 references exceed the discovered image count limit.');
+      wire.frames = frames;
+      maxImageBytes = Math.min(maxImageBytes, uploads.max_total_bytes);
+      imageMimeTypes = uploads.mime_types;
+      if (semanticReferenceAssetIds) {
+        wire.semanticReferences = [];
+        for (const id of semanticReferenceAssetIds) wire.semanticReferences.push(await image(id));
+      }
+      if (temporalGroups) {
+        wire.temporalGroups = [];
+        for (const group of temporalGroups) {
+          const images = [];
+          for (const id of group.imageAssetIds) images.push(await image(id));
+          wire.temporalGroups.push({ frameIndex: group.frameIndex, images });
+        }
+      }
+    }
     if (guidingFrames !== undefined) {
       if (!Array.isArray(guidingFrames) || !guidingFrames.length || guidingFrames.length > 8) invalidReference('guidingFrames requires one to eight image anchors.');
       if (inputReferenceAssetId || loraReferenceAssetId || wire.loras?.some(lora => lora.id === 'ingredients')) invalidReference('guidingFrames cannot be combined with first-image or Ingredients references.');

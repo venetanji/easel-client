@@ -1,0 +1,281 @@
+{
+  "object": "video.capabilities",
+  "schema_version": 1,
+  "model": "minimax-h3",
+  "fps": 24,
+  "frames": {
+    "min": 124,
+    "max": 362,
+    "default": 124,
+    "step": 17,
+    "offset": 5
+  },
+  "sizes": [
+    "512x320",
+    "320x512",
+    "640x384",
+    "384x640",
+    "768x512",
+    "512x768",
+    "1024x576",
+    "576x1024",
+    "1280x704",
+    "704x1280",
+    "512x512",
+    "640x640",
+    "768x768",
+    "1024x1024",
+    "1280x720",
+    "720x1280",
+    "864x480"
+  ],
+  "size_presets": [
+    {
+      "size": "512x320",
+      "width": 512,
+      "height": 320,
+      "max_frames": 362,
+      "validation": "admission_only"
+    },
+    {
+      "size": "320x512",
+      "width": 320,
+      "height": 512,
+      "max_frames": 362,
+      "validation": "admission_only"
+    },
+    {
+      "size": "640x384",
+      "width": 640,
+      "height": 384,
+      "max_frames": 362,
+      "validation": "admission_only"
+    },
+    {
+      "size": "384x640",
+      "width": 384,
+      "height": 640,
+      "max_frames": 362,
+      "validation": "admission_only"
+    },
+    {
+      "size": "768x512",
+      "width": 768,
+      "height": 512,
+      "max_frames": 362,
+      "validation": "admission_only"
+    },
+    {
+      "size": "512x768",
+      "width": 512,
+      "height": 768,
+      "max_frames": 362,
+      "validation": "admission_only"
+    },
+    {
+      "size": "1024x576",
+      "width": 1024,
+      "height": 576,
+      "max_frames": 260,
+      "validation": "admission_only"
+    },
+    {
+      "size": "576x1024",
+      "width": 576,
+      "height": 1024,
+      "max_frames": 260,
+      "validation": "admission_only"
+    },
+    {
+      "size": "1280x704",
+      "width": 1280,
+      "height": 704,
+      "max_frames": 175,
+      "validation": "admission_only"
+    },
+    {
+      "size": "704x1280",
+      "width": 704,
+      "height": 1280,
+      "max_frames": 175,
+      "validation": "admission_only"
+    },
+    {
+      "size": "512x512",
+      "width": 512,
+      "height": 512,
+      "max_frames": 362,
+      "validation": "admission_only"
+    },
+    {
+      "size": "640x640",
+      "width": 640,
+      "height": 640,
+      "max_frames": 362,
+      "validation": "admission_only"
+    },
+    {
+      "size": "768x768",
+      "width": 768,
+      "height": 768,
+      "max_frames": 260,
+      "validation": "admission_only"
+    },
+    {
+      "size": "1024x1024",
+      "width": 1024,
+      "height": 1024,
+      "max_frames": 141,
+      "validation": "admission_only"
+    },
+    {
+      "size": "1280x720",
+      "width": 1280,
+      "height": 704,
+      "max_frames": 175,
+      "validation": "admission_only"
+    },
+    {
+      "size": "720x1280",
+      "width": 704,
+      "height": 1280,
+      "max_frames": 175,
+      "validation": "admission_only"
+    },
+    {
+      "size": "864x480",
+      "width": 864,
+      "height": 480,
+      "max_frames": 362,
+      "validation": "admission_only"
+    }
+  ],
+  "size_constraints": {
+    "custom_sizes": true,
+    "format": "WIDTHxHEIGHT",
+    "min_dimension": 256,
+    "max_dimension": 2048,
+    "dimension_multiple": 32,
+    "max_pixels": 2097152,
+    "max_pixel_frames": 160000000,
+    "budget_kind": "admission_heuristic",
+    "oom_guarantee": false,
+    "aliases": {
+      "1280x720": "1280x704",
+      "720x1280": "704x1280"
+    }
+  },
+  "failure_recovery": {
+    "oom_code": "upstream_out_of_memory",
+    "automatic_retry": false,
+    "suggested_action": "reduce_size_or_duration"
+  },
+  "default_size": "864x480",
+  "seed": {
+    "min": "0",
+    "max": "18446744073709551615",
+    "encoding": "decimal_string"
+  },
+  "input_reference": {
+    "fit": "stretch",
+    "target": "effective_video_dimensions",
+    "configurable": false
+  },
+  "profiles": {
+    "fl8": {
+      "supported": true,
+      "available": true,
+      "validation": "graph_contract_tested",
+      "gpu_executed": false,
+      "visually_reviewed": false
+    },
+    "ia2v_fl8": {
+      "supported": true,
+      "available": false,
+      "validation": "graph_contract_tested",
+      "gpu_executed": false,
+      "visually_reviewed": false
+    },
+    "ref20": {
+      "supported": true,
+      "available": true,
+      "validation": "graph_contract_tested",
+      "gpu_executed": false,
+      "visually_reviewed": false
+    },
+    "temporal_ref20": {
+      "supported": true,
+      "available": true,
+      "validation": "graph_contract_tested",
+      "gpu_executed": false,
+      "visually_reviewed": false
+    }
+  },
+  "semantic_references": {
+    "max_count": 2,
+    "fields": [
+      "image_index"
+    ]
+  },
+  "temporal_groups": {
+    "max_count": 3,
+    "image_counts": [
+      1,
+      5,
+      22,
+      39
+    ],
+    "fields": [
+      "frame_index",
+      "image_indices"
+    ]
+  },
+  "uploads": {
+    "field": "images",
+    "mime_types": [
+      "image/png",
+      "image/jpeg"
+    ],
+    "max_total_bytes": 33554432,
+    "max_total_pixels": 64000000,
+    "max_image_pixels": 32000000,
+    "max_count": 119
+  },
+  "source_audio": {
+    "supported": true,
+    "available": false,
+    "field": "source_audio",
+    "mime_types": [
+      "audio/wav",
+      "audio/x-wav",
+      "audio/wave",
+      "audio/mpeg",
+      "audio/mp3",
+      "audio/flac",
+      "audio/x-flac",
+      "audio/ogg",
+      "application/ogg",
+      "audio/mp4",
+      "audio/x-m4a",
+      "application/octet-stream"
+    ],
+    "max_bytes": 33554432,
+    "start_seconds": 0,
+    "duration_policy": "must_cover_rendered_video; longer_audio_is_trimmed",
+    "conditioning": true,
+    "output": "trimmed_source_audio",
+    "normalization": "48000 Hz stereo PCM WAV",
+    "validation": "graph_contract_tested",
+    "gpu_executed": false
+  },
+  "unsupported": [
+    "seconds",
+    "camera_lora",
+    "loras",
+    "motion_speed",
+    "control_video",
+    "negative_prompt",
+    "cfg",
+    "custom_sampling"
+  ]
+}

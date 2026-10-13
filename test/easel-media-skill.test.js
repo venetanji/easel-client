@@ -146,7 +146,7 @@ test('injected stitching recipes separate local cuts from unsupported temporal g
   const instructions = injectedMediaInstructions();
   assert.match(instructions, /Hard-cut assembly/);
   assert.match(instructions, /Generative stitching/);
-  assert.match(instructions, /H3 source audio.*sourceAudioAssetId.*semantic\/temporal.*unavailable/);
+  assert.match(instructions, /H3 source audio uses `sourceAudioAssetId`/);
   assert.match(instructions, /LTX.*still-image.*temporal.*not exposed/);
   assert.match(instructions, /retained.*boundary frames/);
   assert.match(instructions, /duplicate.*boundary frame/);

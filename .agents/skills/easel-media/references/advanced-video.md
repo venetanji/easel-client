@@ -153,8 +153,10 @@ bounded to two 1-second 512×320 jobs and has a GET-only discovery preflight.
 
 The current client/MCP has no typed guide-video upload/control path. The LTX
 API accepts still-image guidance only; most of its video-conditioned IC entries
-remain `supported:false`. H3 server workflows can use temporal video/audio
-guides, but the current client cannot submit those fields. Installed weights
+remain `supported:false`. H3 accepts saved `semanticReferenceAssetIds`, ordered
+`temporalGroups: [{frameIndex,imageAssetIds}]` and `sourceAudioAssetId`; see the
+shared extraction and conditioning flow in [Easel Media](../SKILL.md).
+A raw guide-video upload is not exposed. Installed weights
 or a private ComfyUI graph are not proof of client/MCP/UI support.
 
 For assembly, use the revision-safe timeline recipe in [Easel Media](../SKILL.md).
