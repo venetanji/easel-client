@@ -27,8 +27,18 @@ const MEDIA_REFERENCE_TOOLS = Object.freeze([
   } },
   { type: 'function', function: {
     name: 'inspect_media_asset',
-    description: 'Inspect a saved reference. Images are provided to the model as a temporary visual observation. Use get_video_frames for a recorded video. Binary data is excluded from the saved tool result.',
+    description: 'Inspect a saved image as a temporary visual observation. For video use extract_video_frame or get_video_frames (recorder samples). Binary data is excluded from saved tool results.',
     parameters: { type: 'object', additionalProperties: false, required: ['assetId'], properties: { assetId: ASSET_ID, projectId: PROJECT_ID } },
+  } },
+  { type: 'function', function: {
+    name: 'extract_video_frame',
+    description: 'Decode one still from a managed MP4/WebM (generated, imported or recorded). Defaults to the final native video frame; timestampSeconds selects the frame at or before that source time. Saves a reusable JPEG in Media and provides one temporary image observation. Use returned assetId for inputReferenceAssetId or guidingFrames. Silent, offline; no generation or canvas reload. Unsupported codecs fail explicitly.',
+    parameters: { type: 'object', additionalProperties: false, required: ['assetId'], properties: {
+      assetId: ASSET_ID, projectId: PROJECT_ID,
+      position: { type: 'string', enum: ['last'], description: 'Default: last. Omit when using timestampSeconds.' },
+      timestampSeconds: { type: 'number', minimum: 0, maximum: 3600, description: 'Source-video seconds before the video track ends; exclusive with position.' },
+      maxWidth: { type: 'integer', minimum: 320, maximum: 1920, default: 1600, description: 'Bounds both image dimensions, preserves aspect ratio and never enlarges.' },
+    } },
   } },
   { type: 'function', function: {
     name: 'delete_media_asset',

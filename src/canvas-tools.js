@@ -80,7 +80,7 @@ const SOURCE_CANVAS_TOOLS = Object.freeze([
   {
     type: 'function', function: {
       name: 'get_video_frames',
-      description: 'Inspect one to six stored JPEG samples from a video created by record_canvas_video. Returns compact reusable asset metadata and transient model images without putting video/base64 bytes in conversation history. Works for captured library IDs with stored samples; imported project digest videos can instead be shared through the chat attachment UI for a temporary observation. Audio and frames between samples are not inspected.',
+      description: 'Inspect one to six stored JPEG samples from record_canvas_video. Returns compact video metadata and transient images; samples are not reusable image IDs. For imported/generated videos or a reusable last/timestamped still use extract_video_frame. Audio and frames between stored samples are not inspected.',
       parameters: { type: 'object', additionalProperties: false, required: ['assetId'], properties: {
         assetId: { type: 'string', pattern: '^[a-f0-9]{32}$' },
         maxFrames: { type: 'integer', minimum: 1, maximum: 6, default: 6 },

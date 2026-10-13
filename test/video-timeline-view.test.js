@@ -191,6 +191,111 @@ test('preview seeks source timestamps and preserves per-clip audio gain', async 
   await f.change(f.role('seek'), 72); assert.equal(f.all((node) => node.tagName === 'VIDEO').length, 0);
 });
 
+function playbackTick(f, timestamp) {
+  const [id, tick] = f.frames.entries().next().value;
+  f.frames.delete(id); f.window.performance.now = () => timestamp; tick(timestamp);
+}
+
+test('playback follows the trimmed audio clock without repeatedly seeking lagging media', async () => {
+  const doc = timeline(); doc.items[0].endFrame = 120; doc.items[0].sourceStartSeconds = 0; doc.items[0].sourceEndSeconds = 4;
+  doc.items.push({ id: 'song', trackId: 'audio-1', assetId: 'asset-audio', startFrame: 24, endFrame: 120, sourceStartSeconds: 2, sourceEndSeconds: 10 });
+  const f = fixture({ initial: doc, assets: [{ id: 'asset-video', mimeType: 'video/mp4' }, { id: 'asset-audio', mimeType: 'audio/wav' }] });
+  await f.view.open('project-a'); await f.change(f.role('seek'), 24); await settle();
+  const audio = f.all(node => node.tagName === 'AUDIO')[0], video = f.all(node => node.tagName === 'VIDEO')[0];
+  let audioTime = audio.currentTime, videoTime = video.currentTime, seeks = 0;
+  for (const [node, read, write] of [[audio, () => audioTime, value => { audioTime = value; }], [video, () => videoTime, value => { videoTime = value; }]]) {
+    Object.defineProperty(node, 'currentTime', { get: read, set(value) { seeks += 1; write(value); } });
+  }
+  await f.click(f.role('play')); await settle();
+  for (let timestamp = 50; timestamp <= 2000; timestamp += 50) {
+    const elapsed = Math.max(0, timestamp / 1000 - 0.25);
+    audioTime = 2 + elapsed * 2; videoTime = elapsed; playbackTick(f, timestamp);
+    assert.equal(Number(f.role('seek').value), 24 + Math.floor(elapsed * 24 + 1e-6));
+  }
+  assert.equal(seeks, 0, 'decoder startup latency must not trigger repeated corrective seeks');
+  assert.equal(audio.playbackRate, 2); assert.equal(video.playbackRate, 1);
+  await f.change(f.role('seek'), 60);
+  assert.equal(audio.currentTime, 5); assert.equal(video.currentTime, 1.5, 'explicit scrubbing still seeks both sources');
+  assert.equal(audio.paused, true);
+});
+
+test('preview waits for media startup and follows video when there is no audio layer', async () => {
+  const f = fixture(); await f.view.open('project-a'); await f.change(f.role('seek'), 24); await settle();
+  const video = f.all(node => node.tagName === 'VIDEO')[0]; video.readyState = 0;
+  await f.click(f.role('play')); await settle(); playbackTick(f, 1000);
+  assert.equal(f.role('seek').value, '24', 'loading media must not be chased by a wall clock');
+  video.readyState = 4; video.currentTime = 1.5; playbackTick(f, 1500);
+  assert.equal(f.role('seek').value, '36');
+  video.ended = true; playbackTick(f, 2000);
+  assert.equal(f.role('seek').value, '72'); assert.equal(f.role('play').textContent, 'Play');
+});
+
+test('playback crosses media endings, empty gaps and stills without losing fractional frames', async () => {
+  const doc = timeline(); doc.items[0].startFrame = 0; doc.items[0].endFrame = 24;
+  doc.items.push({ id: 'still', trackId: 'overlay-1', assetId: 'asset-image', startFrame: 48, endFrame: 72, sourceStartSeconds: 0, sourceEndSeconds: 1 });
+  const f = fixture({ initial: doc }); await f.view.open('project-a'); await settle();
+  const video = f.all(node => node.tagName === 'VIDEO')[0]; await f.click(f.role('play')); await settle();
+  video.ended = true; playbackTick(f, 1000); assert.equal(f.role('seek').value, '24');
+  for (let timestamp = 1010; timestamp <= 3010 && f.frames.size; timestamp += 10) playbackTick(f, timestamp);
+  assert.equal(f.role('seek').value, '72'); assert.equal(f.role('play').textContent, 'Play');
+});
+
+test('upcoming trimmed video is decoded silently ahead of the cut and reused at the boundary', async () => {
+  const doc = timeline(); doc.items.push({ ...doc.items[0], id: 'clip-next', assetId: 'asset-next', startFrame: 72, endFrame: 120, sourceStartSeconds: 2, sourceEndSeconds: 4 });
+  const f = fixture({ initial: doc, assets: [{ id: 'asset-video', mimeType: 'video/mp4' }, { id: 'asset-next', mimeType: 'video/mp4' }] });
+  await f.view.open('project-a'); await f.change(f.role('seek'), 24); await settle();
+  const first = f.all(node => node.tagName === 'VIDEO')[0];
+  await f.click(f.role('play')); await settle();
+  const upcoming = f.all(node => node.tagName === 'VIDEO').find(node => node !== first);
+  assert.ok(upcoming, 'the next clip must have a media element before the cut');
+  assert.equal(upcoming.hidden, true); assert.equal(upcoming.paused, true); assert.equal(upcoming.currentTime, 2);
+  const url = upcoming.src; first.currentTime = 3; playbackTick(f, 2000); await settle();
+  assert.equal(f.role('seek').value, '72'); assert.equal(upcoming.hidden, false); assert.equal(upcoming.paused, false);
+  assert.equal(upcoming.src, url); assert.equal(f.role('preview-empty').hidden, true);
+  assert.equal(f.calls.filter(([method, , id]) => method === 'asset' && id === 'asset-next').length, 1);
+  f.view.close(); assert.equal(upcoming.paused, true); assert.deepEqual(f.revoked, f.urls);
+});
+
+test('lookahead limits decoder count and a failed preload can retry when its clip becomes active', async () => {
+  const doc = timeline();
+  for (let index = 0; index < 12; index++) doc.items.push({ ...doc.items[0], id: `next-${index}`, startFrame: 72 + index, endFrame: 73 + index, sourceStartSeconds: 0, sourceEndSeconds: 1 / 24 });
+  const bounded = fixture({ initial: doc }); await bounded.view.open('project-a'); await bounded.change(bounded.role('seek'), 48); await settle();
+  await bounded.click(bounded.role('play')); await settle();
+  assert.equal(bounded.all(node => node.tagName === 'VIDEO' && node.hidden).length, 4);
+  bounded.view.close();
+
+  doc.items = [doc.items[0], { ...doc.items[0], id: 'next', assetId: 'asset-next', startFrame: 72, endFrame: 120 }];
+  let attempts = 0;
+  const f = fixture({ initial: doc, assets: [{ id: 'asset-video', mimeType: 'video/mp4' }, { id: 'asset-next', mimeType: 'video/mp4' }], overrides: {
+    async getProjectAsset(_project, id) { if (id === 'asset-next' && !attempts++) throw new Error('Preview budget is currently full.'); return { data: 'YWJj', mimeType: 'video/mp4' }; },
+  } });
+  await f.view.open('project-a'); await f.change(f.role('seek'), 24); await settle();
+  const first = f.all(node => node.tagName === 'VIDEO')[0]; await f.click(f.role('play')); await settle();
+  assert.equal(attempts, 1); assert.equal(f.role('preview-status').textContent, '');
+  first.currentTime = 3; playbackTick(f, 2000); await settle();
+  assert.equal(attempts, 2); assert.equal(f.role('preview-empty').hidden, true); assert.equal(f.role('preview-status').textContent, '');
+  f.view.close();
+});
+
+test('a future unsupported playback rate cannot disable a healthy occurrence of the same asset', async () => {
+  const doc = timeline(); doc.items.push({ ...doc.items[0], id: 'fast-next', startFrame: 72, endFrame: 74 });
+  const f = fixture({ initial: doc }), createElement = f.document.createElement;
+  f.document.createElement = tag => {
+    const node = createElement(tag);
+    if (tag === 'video') {
+      let rate = 1;
+      Object.defineProperty(node, 'playbackRate', { get: () => rate, set(value) { if (value > 16) throw new Error('Unsupported playback rate'); rate = value; } });
+    }
+    return node;
+  };
+  await f.view.open('project-a'); await f.change(f.role('seek'), 24); await settle();
+  const first = f.all(node => node.tagName === 'VIDEO')[0]; await f.click(f.role('play')); await settle();
+  assert.equal(first.paused, false); assert.equal(f.role('preview-status').textContent, ''); assert.equal(f.role('preview-empty').hidden, true);
+  first.currentTime = 3; playbackTick(f, 2000);
+  assert.match(f.role('preview-status').textContent, /Unsupported playback rate/);
+  f.view.close();
+});
+
 test('pending media is discarded after a project switch', async () => {
   let finish;
   const f = fixture({ overrides: { getProjectAsset() { return new Promise((resolve) => { finish = resolve; }); } } });
@@ -401,6 +506,8 @@ test('browser preview frame preserves output geometry at desktop and narrow size
     app.whenReady().then(async()=>{const window=new BrowserWindow({width:1100,height:820,show:true,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});const run=s=>window.webContents.executeJavaScript(s);await window.loadFile(${JSON.stringify(path.join(directory, 'index.html'))});
     await run(\`new Promise((resolve,reject)=>{let n=0;const id=setInterval(()=>{if(document.querySelector('.timeline-preview-layer')?.complete){clearInterval(id);resolve()}else if(n++>100){clearInterval(id);reject(new Error('Fixture did not load'))}},20)})\`);
     const measure=async()=>run(\`(()=>{const stage=document.querySelector('[data-role="preview-stage"]').getBoundingClientRect();const preview=document.querySelector('.timeline-preview').getBoundingClientRect();const tracks=document.querySelector('[data-role="tracks-viewport"]').getBoundingClientRect();const image=document.querySelector('.timeline-preview-layer');return {frame:{width:stage.width,height:stage.height,left:stage.left,top:stage.top,right:stage.right,bottom:stage.bottom},preview:{left:preview.left,top:preview.top,right:preview.right,bottom:preview.bottom},tracksBottom:tracks.bottom,viewportHeight:innerHeight,overflow:document.documentElement.scrollWidth>innerWidth,imageFit:getComputedStyle(image).objectFit,imageWidth:image.naturalWidth,imageHeight:image.naturalHeight}})()\`);
+    // Apply fixture dimensions after X11's provisional startup bounds settle.
+    window.setSize(1100,820);await run('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
     const desktop=await measure();fs.writeFileSync(${JSON.stringify(path.join(artifacts, 'desktop.png'))},(await window.webContents.capturePage()).toPNG());
     window.setSize(600,850);await run('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');const narrow=await measure();fs.writeFileSync(${JSON.stringify(path.join(artifacts, 'narrow.png'))},(await window.webContents.capturePage()).toPNG());
     fs.writeFileSync(${JSON.stringify(path.join(directory, 'result.json'))},JSON.stringify({desktop,narrow}));window.destroy();app.quit();}).catch(error=>{console.error(error);app.exit(1)});

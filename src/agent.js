@@ -560,9 +560,16 @@ async function executeEaselTool(name, args, {
   } else if (name === 'inspect_media_asset') {
     if (typeof canvasController?.readMediaAsset !== 'function') throw new Error('Saved media references are unavailable.');
     const asset = await canvasController.readMediaAsset(args);
-    if (!IMAGE_TYPES.has(asset.mimeType)) throw new Error('Use get_video_frames for a captured video. This inspection accepts saved images.');
+    if (!IMAGE_TYPES.has(asset.mimeType)) throw new Error('Use extract_video_frame for saved video or get_video_frames for recorder samples. This inspection accepts saved images.');
     liveCaptures.push({ ...asset, assetId: args.assetId, canvasId: args.projectId || '', observation: `Saved image reference asset://${args.assetId}` });
     content = JSON.stringify({ ok: true, assetId: args.assetId, mimeType: asset.mimeType, name: asset.name, bytes: asset.bytes, message: 'Saved image supplied as a temporary visual observation.' });
+  } else if (name === 'extract_video_frame') {
+    if (typeof canvasController?.extractVideoFrame !== 'function') throw new Error('Video frame extraction is unavailable in this app version.');
+    const result = await canvasController.extractVideoFrame(args, { signal });
+    const { data, ...metadata } = result;
+    liveCaptures.push({ ...result, observation: `Saved video asset://${result.sourceAssetId} at ${result.timestampSeconds.toFixed(3)} seconds, extracted as reusable still asset://${result.assetId}.` });
+    onEvent?.({ type: 'image', assetId: result.assetId, mimeType: result.mimeType, data, name: result.name, width: result.width, height: result.height, chatId: context.chatId, generated: false });
+    content = JSON.stringify({ ok: true, ...metadata });
   } else if (PROJECT_CANVAS_TOOLS.some((tool) => tool.function.name === name)) {
     try {
       const method = PROJECT_CANVAS_METHODS[name];

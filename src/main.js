@@ -72,6 +72,7 @@ const { createCanvasMediaStore } = require('./canvas-media-store');
 const { createMediaJobStore, mediaJobSummary } = require('./media-job-store');
 const { createMediaJobMonitor } = require('./media-job-monitor');
 const { createVideoMetadataService } = require('./video-metadata');
+const { createManagedVideoSourceResolver } = require('./video-frame-reference');
 const { createDeletionService } = require('./deletion-service');
 const { validateFilePath } = require('./canvas-project');
 const { createLiteLLMModelService } = require('./litellm-models');
@@ -564,6 +565,7 @@ const CANVAS_CONTROLLER = {
     captureLiveCanvas: (options, context) => withCanvas((controller) => controller.captureLiveCanvas(options, context)),
     recordCanvasVideo: (options, context) => withCanvas((controller) => controller.recordCanvasVideo(options, context)),
     getVideoFrames: ({ assetId, maxFrames } = {}) => CAPTURE_MEDIA.getFrames(validateOpaqueId(assetId, 'Video asset ID'), { maxFrames }),
+    extractVideoFrame: (options, context) => VIDEO_METADATA.extractFrame(options, context),
     deleteCanvasFile: (args, context) => withCanvas((controller) => DELETIONS.deleteProjectFile(controller, validateOpaqueId(controller.getCurrentCanvasId(), 'Project ID'), validateFileDeletion(args), { ...context, preview: true })),
     deleteMediaAsset: (args, context) => withCanvas((controller) => {
       const scope = args.scope || 'project';
@@ -825,6 +827,8 @@ const VIDEO_METADATA = createVideoMetadataService({
   BrowserWindow,
   sessionFactory: async (partition) => ({ partition, session: session.fromPartition(partition, { cache: false }) }),
   mediaStore: CAPTURE_MEDIA,
+  imageStore: ASSETS,
+  readVideoSource: createManagedVideoSourceResolver({ mediaStore: CAPTURE_MEDIA, readMediaReference }),
   onChanged: async (assets) => {
     const previews = await Promise.all(assets.map(async (asset) => {
       try { return { ...asset, ...await CAPTURE_MEDIA.getMetadata(asset.assetId) }; }

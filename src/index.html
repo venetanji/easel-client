@@ -518,10 +518,13 @@
       .media-job-detail, .media-job-error { margin: 4px 0; color: var(--muted); font-size: 11px; line-height: 1.5; font-variant-numeric: tabular-nums; }
       .media-job-error { color: var(--ink); }
       .media-drawer-head { padding-block: 0; }
-      .media-drawer-tabs { display: flex; align-self: stretch; gap: 16px; min-width: 0; }
-      .media-drawer-tabs button { display: flex; align-items: center; justify-content: center; gap: 7px; min-width: 52px; min-height: calc(var(--panel-header-height) - 1px); border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 0 2px; color: var(--muted); background: transparent; font-size: 13px; font-weight: 700; cursor: pointer; }
+      .media-drawer-tabs { display: flex; align-self: stretch; gap: 4px; min-width: 0; }
+      .media-drawer-tabs button { display: flex; align-items: center; justify-content: center; gap: 8px; min-width: 80px; min-height: calc(var(--panel-header-height) - 1px); border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 0 12px; color: var(--muted); background: transparent; font-size: 13px; font-weight: 700; cursor: pointer; }
+      .media-tab-icon { flex: none; width: 16px; height: 16px; }
+      .media-drawer-tabs button[data-generating="true"] { color: var(--green); }
+      .media-drawer-tabs button[data-generating="true"] .media-tab-icon { animation: media-job-turn 3s linear infinite; }
       .media-drawer-tabs button:hover { color: var(--green); background: var(--green-wash); }
-      .media-drawer-tabs button[aria-selected="true"] { border-bottom-color: var(--green); color: var(--green); }
+      .media-drawer-tabs button[aria-selected="true"] { border-bottom-color: var(--green); color: var(--green); background: var(--green-wash); }
       .media-drawer-tabs button:focus-visible { outline-offset: -4px; }
       .media-tab-panel { min-height: 0; flex: 1; display: flex; flex-direction: column; }
       .media-jobs-intro { margin: 0; padding: 12px 14px; color: var(--muted); font-size: 11px; line-height: 1.5; border-bottom: 1px solid var(--line); }
@@ -674,8 +677,8 @@
         <section id="media-drawer" class="panel media-drawer" aria-label="Media and jobs" hidden>
           <div class="section-head media-drawer-head">
             <div class="media-drawer-tabs" role="tablist" aria-label="Media views">
-              <button id="media-tab-assets" type="button" role="tab" aria-controls="media-assets-panel" aria-selected="true">Media</button>
-              <button id="media-tab-jobs" type="button" role="tab" aria-controls="media-jobs-panel" aria-selected="false" tabindex="-1">Jobs <span id="media-jobs-count" class="drawer-count" hidden>0</span></button>
+              <button id="media-tab-assets" type="button" role="tab" aria-controls="media-assets-panel" aria-selected="true"><svg class="media-tab-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 3h12v12M3 5h12v12H3ZM4 14l4-4 3 3 2-2 2 3M7 8h.1"/></svg><span>Media</span></button>
+              <button id="media-tab-jobs" type="button" role="tab" aria-controls="media-jobs-panel" aria-selected="false" tabindex="-1"><svg class="media-tab-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m8 2-.5 2-1.5.9-2-.6-2 3.4 1.5 1.4v1.8L2 12.3l2 3.4 2-.6 1.5.9.5 2h4l.5-2 1.5-.9 2 .6 2-3.4-1.5-1.4V9.1L18 7.7l-2-3.4-2 .6-1.5-.9-.5-2H8Z"/><circle cx="10" cy="10" r="2.5"/></svg><span>Jobs</span><span id="media-jobs-count" class="drawer-count" hidden>0</span></button>
             </div>
             <button id="media-collapse" class="fold-button" type="button" aria-label="Close media" title="Close drawer"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m9 4-4 4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           </div>

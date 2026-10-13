@@ -10,7 +10,7 @@ export const VideoImageUploadSchema = z.object({
   name: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/).optional(),
 }).strict();
 export const VideoGenerationSchema = z.object({
-  prompt: z.string().trim().min(1).max(5_000),
+  prompt: z.string().trim().min(1).max(5_000).describe('Describe the target video: subjects, scene, actions over time, camera, lighting and sound, using the selected model/mode guide format. For continuation, describe the next shot and its motion concretely. Reference uploads and workflow requests belong in tool fields and agent actions.'),
   model: z.string().trim().min(1).max(320),
   seconds: z.number().int().min(1).max(60).describe('Easel accepts 1-12 whole seconds; other endpoint limits vary.').optional(),
   size: z.string().regex(/^\d{2,5}x\d{2,5}$/).optional(),

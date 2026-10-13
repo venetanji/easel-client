@@ -47,6 +47,7 @@ The current Media MCP package exposes:
 - `get_video` and `get_image_job` to retrieve accepted jobs in standalone MCP use.
 - Suno: `generate_music`, `generate_speech`, `generate_sound`, `get_audio_generation_status`, `get_audio_track`, `download_audio`, `abandon_audio_generation`; require matching exposed tools and exact configured IDs.
 - In-app `list_media_jobs` and `list_media_assets` to inspect jobs and real saved references; `inspect_media_asset` shows saved images, not decoded video frames.
+- In-app `extract_video_frame({assetId, position:"last"})` saves a reusable JPEG from a managed MP4/WebM and supplies one temporary image observation. For a source time, omit `position` and use `timestampSeconds`. Optional `projectId` resolves a project digest asset. The returned image `assetId` works in `inputReferenceAssetId` or `guidingFrames`; recorder `get_video_frames` samples do not provide reusable still IDs.
 - In-app `inspect_timeline`, `create_timeline`, `apply_timeline_edit`, `undo_timeline` and `redo_timeline` for revision-safe hard-cut assembly; `attach_canvas_assets` attaches existing managed media to the active project.
 - `capture_canvas_screenshot` to render HTML and local image assets in an offline browser and return a PNG screenshot.
 
@@ -135,8 +136,15 @@ reference. For LTX, `guidingFrames` accepts 1–8 saved still-image anchors,
 including first/last positions, as soft conditioning. Alternatively use one
 `inputReferenceAssetId`; these modes are mutually exclusive. Inputs are stills,
 not a selected timeline range, guide video or source audio. If usable boundary
-stills are already saved, inspect and use their real IDs; otherwise ask the user
-to capture/import the intended stills. There is no agent frame-extraction tool.
+stills are already saved, inspect and use their real IDs; otherwise use
+`extract_video_frame` with the managed source-video ID and `position:"last"`
+or a source `timestampSeconds`. It decodes one native video frame silently and
+offline, saves its image ID in Media, and returns compact metadata plus a
+temporary image observation. Extraction is bounded to 32 MiB inputs, one hour,
+32 million source pixels, 1920 pixels per output side, 4 MiB output and 15 seconds
+of decoding; unsupported codecs fail explicitly. It does not promise seamless
+motion or copy source audio into the next shot. If extraction is unavailable,
+ask the user to capture/import the intended stills.
 
 H3 source audio is exposed through `sourceAudioAssetId`; saved semantic/temporal
 image groups and full guide-video adaptation remain unavailable in the desktop. LTX's current API guidance is still-image-only;
