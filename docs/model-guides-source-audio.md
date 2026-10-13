@@ -10,6 +10,21 @@ API, with its original sources. An unavailable guide does not enable unsupported
 arguments. Currently reviewed pairs are Qwen `generation`/`editing` and H3
 `base`/`reference`; LTX may return an unavailable-guide error.
 
+Apply the retrieved guide to the generation prompt itself, including its field
+order and reference/alignment syntax. Image and video prompts describe the
+intended media: subject, appearance, action, composition, camera, lighting and
+sound. Generic agent directions such as "Create an image...", "Use the provided
+image..." or "Continue from the previous video..." belong in the agent workflow,
+not as prompt preambles. A guide-required alignment line remains part of the
+model prompt. Reference asset IDs and uploads stay in the tool arguments.
+
+For `generate_speech`, `prompt` is the literal spoken text. For example,
+`prompt: "I would like some python please?"` and
+`tone: "Deep, warm adult male voice; natural conversational delivery"` keep the
+words separate from voice directions. Do not prepend "Say exactly:" or append
+voice instructions to the text. If those phrases are themselves part of the
+user's requested speech or visible image text, preserve them literally.
+
 For a speech-driven H3 first-image example:
 
 1. Use `list_models` to find the exact configured `minimax-h3` route, then

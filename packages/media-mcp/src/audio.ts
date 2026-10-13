@@ -15,7 +15,10 @@ export const MusicInputSchema = z.object({
   inspirationIds: z.array(uuid).max(4).nullable().optional(), inspirationPlaylist: z.string().max(4096).optional(),
 }).strict();
 export const SpeechInputSchema = z.object({
-  ...common, ...voice, prompt: z.string().trim().min(1).max(5000), tone: z.string().max(1000).optional(), backgroundMusic: z.boolean().optional(),
+  ...common, ...voice,
+  prompt: z.string().trim().min(1).max(5000).describe('Only the exact words to be spoken, preserving the requested language and punctuation. No added "Say exactly..." preamble, voice directions or workflow instructions. Put delivery/voice qualities in tone and vocalGender; music choice belongs in backgroundMusic.'),
+  tone: z.string().max(1000).describe('Voice quality, emotion and delivery, such as a deep warm voice and natural conversational pacing. These directions stay separate from the spoken prompt.').optional(),
+  backgroundMusic: z.boolean().describe('Whether backing music accompanies the speech. Use false for a dry spoken audio reference.').optional(),
 }).strict();
 export const SoundInputSchema = z.object({
   ...common, prompt: z.string().trim().min(1).max(500), soundType: z.enum(['one_shot', 'loop']).optional(), bpm: z.number().int().min(1).max(300).nullable().optional(),
