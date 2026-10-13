@@ -47,7 +47,7 @@ The current Media MCP package exposes:
 - `get_video` and `get_image_job` to retrieve accepted jobs in standalone MCP use.
 - Suno: `generate_music`, `generate_speech`, `generate_sound`, `get_audio_generation_status`, `get_audio_track`, `download_audio`, `abandon_audio_generation`; require matching exposed tools and exact configured IDs.
 - In-app `list_media_jobs` and `list_media_assets` to inspect jobs and real saved references; `inspect_media_asset` shows saved images, not decoded video frames.
-- In-app `extract_video_frame({assetId, position:"last"})` saves a reusable JPEG from a managed MP4/WebM and supplies one temporary image observation. For a source time, omit `position` and use `timestampSeconds`. Optional `projectId` resolves a project digest asset. The returned image `assetId` works in `inputReferenceAssetId` or `guidingFrames`; recorder `get_video_frames` samples do not provide reusable still IDs.
+- In-app `extract_video_frame({assetId, position:"last"})` saves a reusable JPEG from a managed MP4/WebM and supplies one temporary image observation. For a source time, omit `position` and use `timestampSeconds`. Optional `projectId` resolves a project digest asset. The returned image `assetId` works in `inputReferenceAssetId`, `guidingFrames` or H3 `temporalGroups`; recorder `get_video_frames` samples do not provide reusable still IDs.
 - In-app `inspect_timeline`, `create_timeline`, `apply_timeline_edit`, `undo_timeline` and `redo_timeline` for revision-safe hard-cut assembly; `attach_canvas_assets` attaches existing managed media to the active project.
 - `capture_canvas_screenshot` to render HTML and local image assets in an offline browser and return a PNG screenshot.
 
@@ -128,9 +128,8 @@ clips. This preserves source files and does not submit a generation job.
 
 ### Generative stitching
 
-Generating a transition, extension or gap-fill means synthesizing new content;
-putting two clips next to each other is not that capability. Plan the missing
-shot and continuity constraints, then check the actual enabled tool schema.
+A transition, extension or gap-fill synthesizes new content; juxtaposing clips
+does not. Plan the missing shot and continuity, then check the enabled schema.
 Do not promise exact motion, seamless joins or audio alignment from a still
 reference. For LTX, `guidingFrames` accepts 1–8 saved still-image anchors,
 including first/last positions, as soft conditioning. Alternatively use one
@@ -138,20 +137,21 @@ including first/last positions, as soft conditioning. Alternatively use one
 not a selected timeline range, guide video or source audio. If usable boundary
 stills are already saved, inspect and use their real IDs; otherwise use
 `extract_video_frame` with the managed source-video ID and `position:"last"`
-or a source `timestampSeconds`. It decodes one native video frame silently and
-offline, saves its image ID in Media, and returns compact metadata plus a
-temporary image observation. Extraction is bounded to 32 MiB inputs, one hour,
+or a source `timestampSeconds`. It silently decodes one native frame offline, saves its ID in Media and returns
+metadata plus a temporary image observation. Extraction is bounded to 32 MiB inputs, one hour,
 32 million source pixels, 1920 pixels per output side, 4 MiB output and 15 seconds
 of decoding; unsupported codecs fail explicitly. It does not promise seamless
 motion or copy source audio into the next shot. If extraction is unavailable,
 ask the user to capture/import the intended stills.
 
-H3 source audio is exposed through `sourceAudioAssetId`; saved semantic/temporal
-image groups and full guide-video adaptation remain unavailable in the desktop. LTX's current API guidance is still-image-only;
-temporal video guidance and source-video continuation are not exposed
-by this client. Timed stills do not guarantee exact first/last pixels. Do not infer callable support from model discovery, installed
-weights, a server feature or a successful text/image-to-video job. Do not invent
-fields, tools or direct API/shell bypasses to bridge this gap.
+H3 source audio uses `sourceAudioAssetId`; saved references use
+`semanticReferenceAssetIds` in Picture order and
+`temporalGroups: [{frameIndex,imageAssetIds}]` for contiguous stills.
+Reuse extraction above at successive times; check returned timestamps and order.
+Discover group lengths, nonoverlapping positions, `frames` grid and availability.
+No `seconds`, first-image/LTX controls or raw guide-video upload with H3 groups.
+An ID used in both roles uploads separately. Timed stills do not guarantee exact
+first/last pixels. Require exposed tools; never invent fields or API/shell bypasses.
 
 For a currently supported new shot, submit once, let the host finish/download
 it, then inspect the saved result and attach it before typed timeline edits.
@@ -171,7 +171,7 @@ Before generating an anchor, use discover_video_capabilities for the requested o
 5. Completed downloads are saved to Media, attached to the original project, and previewed automatically in chat. Use the notification's asset IDs to continue the original request; never regenerate a completed job. A brief completion message is enough; do not send only a View/Watch link. Removing a job asks the user to confirm losing the monitor's ID; it does not cancel server generation or remove downloaded files.
 6. Standalone MCP without the host monitor can retrieve with `get_video`, using the same `videoId` and `model`. Preserve IDs and never resubmit a pending job.
 
-For text-only video, omit `inputReferenceAssetId` or set it to `null`. Never invent an asset ID or use all-zero placeholders. A local `INVALID_MEDIA_REFERENCE` error means the API was not called; correct the reference or omit it and retry the corrected request.
+For text-only video, omit `inputReferenceAssetId` or set it to `null`. Never invent an asset ID or use all-zero placeholders. A local `INVALID_MEDIA_REFERENCE` error means no generation request was sent; correct the reference while preserving requested conditioning.
 
 Stop cancels local work, not an accepted remote job. Easel accepts integer durations from 1 to 12 seconds; other endpoint limits depend on the model. Duration defaults to 4 seconds. Omit size unless the user requests dimensions, allowing the endpoint to choose a supported default. Reference image dimensions do not determine video dimensions. Downloads are bounded to 32 MiB. See the package README for endpoint contracts and limits.
 
@@ -390,8 +390,7 @@ are not MCP tool argument syntax.
 
 The current client has no typed guide-video submission path. The LTX API
 still accepts image references only; its video-conditioned IC adapters mostly
-remain disabled even when their weights are installed. H3 server temporal
-guidance does not expose that capability to this client. A private ComfyUI
+remain disabled even when their weights are installed. H3 accepts ordered saved still groups as described above, not a raw guide-video upload. A private ComfyUI
 prototype is not a portable callable workflow.
 
 Prepare depth for spatial layout/occlusion/parallax, real Canny for silhouettes,

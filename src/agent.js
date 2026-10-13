@@ -218,6 +218,10 @@ function isOfflineReferenceFailure(error) {
 
 function toolCorrection(name, descriptor, error, code, requestedArguments = {}) {
   const schema = descriptor?.function?.parameters;
+  if (name === 'generate_video' && validationFailure(error, code, name) && (requestedArguments?.temporalGroups !== undefined || requestedArguments?.semanticReferenceAssetIds !== undefined || requestedArguments?.semanticReferences !== undefined)) return {
+    correction: 'No generation request was sent. Preserve temporalGroups, semanticReferenceAssetIds and any sourceAudioAssetId; correct saved IDs, permissions or incompatible arguments. Keep the requested conditioning or report the limitation.',
+    exampleNote: 'Discover capabilities for the exact selected model; use its H3 profile availability, group lengths, nonoverlapping positions and native frames grid. Never substitute seconds or an unconditioned request.',
+  };
   if (name === 'generate_video' && validationFailure(error, code, name) && (requestedArguments?.sourceAudioAssetId != null || /sourceAudioAssetId|source\s+audio/i.test(error))) return {
     correction: 'This audio-conditioned request failed locally before the video API was called. Use list_media_assets to resolve sourceAudioAssetId and every requested image reference, including inputReferenceAssetId, guidingFrames or loraReferenceAssetId. Preserve all requested conditioning, prompt and model timing. Correct real asset IDs or report the limitation; do not change the generation recipe.',
     exampleNote: 'Keep the selected exact model and its timing fields. H3 uses frames and must not receive seconds. Check current exact-model source_audio availability before a corrected submission.',
@@ -624,7 +628,11 @@ async function executeEaselTool(name, args, {
     const wireArgs = await resolveMediaToolArguments(name, args, async (reference) => {
       if (typeof canvasController?.readMediaAsset === 'function') return canvasController.readMediaAsset(reference);
       return assetStore.get(reference.assetId);
-    }, signal);
+    }, signal, async model => {
+      const result = await mcp.callTool('discover_video_capabilities', { model }, { signal });
+      if (result.isError || result.structuredContent?.modelId !== model) throw new Error('Selected-model capability discovery failed.');
+      return result.structuredContent.capabilities;
+    });
     content = name === 'get_video' ? await cachedVideoResult(messages, args, mediaAssetStore)
       : name === 'download_audio' ? await cachedAudioResult(messages, args, mediaAssetStore) : null;
     if (!content) {

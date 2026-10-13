@@ -1,0 +1,1 @@
+capabilities.json is the canonical GET /v1/videos/capabilities?model=minimax-h3 response generated offline from venetanji/easel commit 5389fd0 using its H3 ComfyUI test fixture. It contains no endpoint credentials. Tests vary limits to verify the desktop adapter consumes the advertised contract.

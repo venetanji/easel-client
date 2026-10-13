@@ -49,7 +49,7 @@ test('missing video references identify the local failure and a correction', asy
     assert.equal(error.code, 'INVALID_MEDIA_REFERENCE');
     assert.equal(error.stage, 'reference_resolution');
     assert.equal(error.requestSent, false);
-    assert.match(error.message, /API was not called/);
+    assert.match(error.message, /No generation request was sent/);
     assert.match(error.message, /omit inputReferenceAssetId/);
     return true;
   });
