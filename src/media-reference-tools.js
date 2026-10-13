@@ -1,3 +1,4 @@
+const { imageDimensions } = require('./image-dimensions');
 const { AUDIO_TOOLS } = require('./media-mcp-client');
 const ASSET_ID = { type: 'string', pattern: '^(?!0+$)(?:[a-f0-9]{32}|[a-f0-9]{64})$' };
 const PROJECT_ID = { type: 'string', pattern: '^[a-f0-9]{32}$', description: 'Optional project containing digest asset IDs. Omit for shared library assets or the active project.' };
@@ -104,6 +105,8 @@ async function resolveMediaToolArguments(name, args, readAsset, signal, discover
   if (!['edit_image', 'create_image_variation', 'generate_video'].includes(name)) return args;
   const { projectId, imageAssetIds, imageAssetId, maskAssetId, inputReferenceAssetId, loraReferenceAssetId, sourceAudioAssetId, guidingFrames, semanticReferenceAssetIds, temporalGroups, ...wire } = args;
   let totalBytes = 0;
+  let totalPixels = 0;
+  let pixelLimits;
   let maxImageBytes = 32 * 1024 * 1024;
   let imageMimeTypes = ['image/png', 'image/jpeg', 'image/webp'];
   const h3References = semanticReferenceAssetIds !== undefined || temporalGroups !== undefined;
@@ -131,6 +134,16 @@ async function resolveMediaToolArguments(name, args, readAsset, signal, discover
     if (typeof asset.data !== 'string' || !asset.data) invalidReference('Saved image reference is missing.');
     totalBytes += Buffer.byteLength(asset.data, 'base64');
     if (totalBytes > maxImageBytes) invalidReference(maxImageBytes === 32 * 1024 * 1024 ? 'Saved image references exceed 32 MiB combined.' : 'Saved image references exceed the discovered combined byte limit.');
+    if (pixelLimits) {
+      // Inspect the uploaded bytes; saved metadata may be absent or stale.
+      const { width, height } = imageDimensions(Buffer.from(asset.data, 'base64'), asset.mimeType);
+      const pixels = width * height;
+      if (!Number.isSafeInteger(pixels) || pixels <= 0) invalidReference('Saved image reference dimensions could not be determined.');
+      if (pixels > pixelLimits.max_image_pixels) invalidReference('Saved image reference exceeds the discovered per-image pixel limit.');
+      // Each occurrence is a separate multipart upload, including reused IDs.
+      totalPixels += pixels;
+      if (totalPixels > pixelLimits.max_total_pixels) invalidReference('Saved image references exceed the discovered combined pixel limit.');
+    }
     const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }[asset.mimeType];
     return { data: asset.data, mimeType: asset.mimeType, name: `${assetId}.${extension}` };
   }
@@ -157,12 +170,30 @@ async function resolveMediaToolArguments(name, args, readAsset, signal, discover
       const positive = value => Number.isSafeInteger(value) && value > 0;
       if (caps?.model !== 'minimax-h3' || caps.schema_version !== 1 || !frame || ![frame.min, frame.max, frame.default, frame.step].every(positive)
         || !Number.isSafeInteger(frame.offset) || frame.offset < 0 || !positive(groups?.max_count) || !Array.isArray(groups?.image_counts) || !groups.image_counts.length || !groups.image_counts.every(positive)
-        || !positive(refs?.max_count) || !positive(uploads?.max_count) || !positive(uploads?.max_total_bytes) || !Array.isArray(uploads?.mime_types) || !uploads.mime_types.length
+        || !positive(refs?.max_count) || !positive(uploads?.max_count) || !positive(uploads?.max_total_bytes) || !positive(uploads?.max_image_pixels) || !positive(uploads?.max_total_pixels) || !Array.isArray(uploads?.mime_types) || !uploads.mime_types.length
         || uploads.mime_types.some(type => !['image/png', 'image/jpeg'].includes(type))) invalidReference('The selected model does not advertise a usable H3 reference contract.');
       const profile = caps.profiles?.[temporalGroups ? 'temporal_ref20' : 'ref20'];
       if (profile?.supported !== true || profile.available !== true) invalidReference('The selected H3 reference profile is unavailable.');
       const frames = wire.frames ?? frame.default;
       if (!Number.isSafeInteger(frames) || frames < frame.min || frames > frame.max || (frames - frame.offset) % frame.step !== 0) invalidReference('frames must match the discovered H3 frame bounds and grid.');
+      const constraints = caps.size_constraints;
+      if (!Array.isArray(caps.size_presets) || !constraints) invalidReference('The selected model does not advertise a usable H3 size contract.');
+      const requestedSize = wire.size || caps.default_size;
+      if (typeof requestedSize !== 'string') invalidReference('H3 size requires a discovered default or explicit dimensions.');
+      const normalizedSize = requestedSize.trim().toLowerCase();
+      const size = Object.hasOwn(constraints.aliases || {}, normalizedSize) ? constraints.aliases[normalizedSize] : normalizedSize;
+      const preset = caps.size_presets.find(entry => entry.size === size);
+      if (preset) {
+        if (!positive(preset.max_frames)) invalidReference('The selected model does not advertise a usable H3 size frame limit.');
+        if (frames > preset.max_frames) invalidReference('frames exceed the discovered H3 size-specific frame limit.');
+      } else {
+        if (constraints.custom_sizes !== true || typeof size !== 'string' || !/^[0-9]{3,4}x[0-9]{3,4}$/.test(size)) invalidReference('H3 size must match a discovered preset or supported custom dimensions.');
+        if (![constraints.min_dimension, constraints.max_dimension, constraints.dimension_multiple, constraints.max_pixels, constraints.max_pixel_frames].every(positive)) invalidReference('The selected model does not advertise a usable H3 custom-size contract.');
+        const dimensions = size.split('x').map(Number);
+        if (dimensions.some(value => value < constraints.min_dimension || value > constraints.max_dimension || value % constraints.dimension_multiple !== 0)) invalidReference('H3 size dimensions must match the discovered bounds and multiple.');
+        const pixels = dimensions[0] * dimensions[1];
+        if (pixels > constraints.max_pixels || frames > Math.floor(constraints.max_pixel_frames / pixels)) invalidReference('H3 size and frames exceed the discovered pixel or pixel-frame budget.');
+      }
       if ((semanticReferenceAssetIds?.length || 0) > refs.max_count || (temporalGroups?.length || 0) > groups.max_count) invalidReference('H3 references exceed the discovered group limits.');
       const ordered = [...(temporalGroups || [])].sort((a, b) => a.frameIndex - b.frameIndex);
       for (const [index, group] of ordered.entries()) {
@@ -174,6 +205,7 @@ async function resolveMediaToolArguments(name, args, readAsset, signal, discover
       wire.frames = frames;
       maxImageBytes = Math.min(maxImageBytes, uploads.max_total_bytes);
       imageMimeTypes = uploads.mime_types;
+      pixelLimits = uploads;
       if (semanticReferenceAssetIds) {
         wire.semanticReferences = [];
         for (const id of semanticReferenceAssetIds) wire.semanticReferences.push(await image(id));

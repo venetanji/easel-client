@@ -154,3 +154,91 @@ test('H3 saved audio remains independent of semantic and temporal references', a
   assert.equal(wire.temporalGroups[0].images.length, 5);
   assert.equal(wire.seconds, undefined);
 });
+
+function preflightFailure(pattern) {
+  return error => {
+    assert.equal(error.code, 'INVALID_MEDIA_REFERENCE');
+    assert.equal(error.requestSent, false);
+    assert.match(error.message, pattern);
+    return true;
+  };
+}
+
+test('H3 enforces discovered preset ceilings including aliases and the default before asset reads', async () => {
+  for (const [size, maximum] of [['1024x1024', 141], ['1280x720', 175], ['720x1280', 175]]) {
+    const options = { ...input(), size, frames: maximum };
+    const accepted = await resolveMediaToolArguments('generate_video', options, read, undefined, discover);
+    assert.equal(accepted.frames, maximum);
+    await assert.rejects(resolveMediaToolArguments('generate_video', { ...options, frames: maximum + 17 },
+      () => assert.fail('no asset reads'), undefined, discover), preflightFailure(/size.*frame|frame.*size/i));
+  }
+  const caps = structuredClone(capabilities);
+  caps.default_size = '1024x1024';
+  caps.frames.default = 158;
+  await assert.rejects(resolveMediaToolArguments('generate_video', input(), () => assert.fail('no asset reads'),
+    undefined, async () => caps), preflightFailure(/size.*frame|frame.*size/i));
+  // An alias need not also have its own preset entry.
+  caps.size_presets = caps.size_presets.filter(preset => !Object.hasOwn(caps.size_constraints.aliases, preset.size));
+  await assert.rejects(resolveMediaToolArguments('generate_video', { ...input(), size: '1280x720', frames: 192 },
+    () => assert.fail('no asset reads'), undefined, async () => caps), preflightFailure(/size.*frame|frame.*size/i));
+});
+
+test('H3 custom sizes obey discovered dimensions and pixel-frame budgets', async () => {
+  const caps = structuredClone(capabilities);
+  caps.size_constraints.max_pixel_frames = 800 * 800 * 141;
+  const options = { ...input(), size: '800x800', frames: 141 };
+  const accepted = await resolveMediaToolArguments('generate_video', options, read, undefined, async () => caps);
+  assert.equal(accepted.size, '800x800');
+  for (const bad of [{ frames: 158 }, { size: '801x800' }, { size: '224x800' }, { size: '2080x800' }, { size: '2048x2048' }]) {
+    await assert.rejects(resolveMediaToolArguments('generate_video', { ...options, ...bad },
+      () => assert.fail('no asset reads'), undefined, async () => caps), preflightFailure(/size|pixel/i));
+  }
+  caps.size_constraints.custom_sizes = false;
+  await assert.rejects(resolveMediaToolArguments('generate_video', options, () => assert.fail('no asset reads'),
+    undefined, async () => caps), preflightFailure(/size/i));
+});
+
+const pixelFixtures = [{ mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAIAAAA2iEnWAAAAC0lEQVR4nGNgwAIAABUAAapll8QAAAAASUVORK5CYII=' },
+{ mimeType: 'image/jpeg', data: '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAADAAIDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD5/ooooA//2Q==' }];
+
+test('H3 checks actual PNG/JPEG pixels against discovered per-image limits', async () => {
+  for (const asset of pixelFixtures) {
+    const caps = structuredClone(capabilities);
+    caps.uploads.max_image_pixels = 6;
+    const options = { ...input(), temporalGroups: undefined };
+    const reader = async () => ({ ...asset, width: 1, height: 1 }); // Stale metadata cannot bypass byte dimensions.
+    const wire = await resolveMediaToolArguments('generate_video', options, reader, undefined, async () => caps);
+    assert.equal(wire.semanticReferences[0].data, asset.data);
+    caps.uploads.max_image_pixels = 5;
+    await assert.rejects(resolveMediaToolArguments('generate_video', options, reader, undefined, async () => caps),
+      preflightFailure(/image.*pixel/i));
+  }
+});
+
+test('H3 aggregate pixels count every semantic and temporal upload, including duplicate IDs', async () => {
+  for (const asset of pixelFixtures) {
+    const caps = structuredClone(capabilities);
+    caps.uploads.max_total_pixels = 36; // One semantic plus five temporal copies, six pixels each.
+    const wire = await resolveMediaToolArguments('generate_video', input(), async () => asset, undefined, async () => caps);
+    assert.equal(wire.temporalGroups[0].images.length, 5);
+    caps.uploads.max_total_pixels = 35;
+    await assert.rejects(resolveMediaToolArguments('generate_video', input(), async () => asset, undefined, async () => caps),
+      preflightFailure(/combined.*pixel|total.*pixel/i));
+  }
+});
+
+test('H3 unknown image geometry fails closed without trusting saved dimensions', async () => {
+  for (const mimeType of ['image/png', 'image/jpeg']) {
+    await assert.rejects(resolveMediaToolArguments('generate_video', input(), async () => ({
+      mimeType, data: 'YWJj', width: 1, height: 1,
+    }), undefined, discover), preflightFailure(/dimension/i));
+  }
+});
+
+test('H3 missing or invalid discovered pixel budgets fail before asset reads', async () => {
+  for (const field of ['max_image_pixels', 'max_total_pixels']) for (const value of [undefined, 0, -1, 1.5]) {
+    const caps = structuredClone(capabilities); caps.uploads[field] = value;
+    await assert.rejects(resolveMediaToolArguments('generate_video', input(), () => assert.fail('no asset reads'),
+      undefined, async () => caps), preflightFailure(/contract/i));
+  }
+});
