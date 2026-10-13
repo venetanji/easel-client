@@ -102,7 +102,7 @@ function createEaselToolHost({ canvasController, presentCanvas, assetStore, medi
             if (!detachedTools.has(tool)) return withMedia((client) => client.callTool(tool, input, options), signal);
             // Once submitted, generation must save its receipt even if the controller disconnects.
             const submission = withMedia(async (client) => {
-              let response = await client.callTool(tool, input);
+              let response = await client.callTool(tool, input, tool === 'generate_video' ? { preflightSignal: signal } : undefined);
               if (tool === 'download_audio') response = await enrichAudioDownload(response, input, client);
               if (AUDIO_GENERATION_TOOLS.has(tool)) response = await registerAudioTrackJobs(response,
                 { model: input.model, prompt: input.prompt, projectId: submittedProjectId }, registerMediaJob ? registerOnce : undefined);

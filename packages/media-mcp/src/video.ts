@@ -96,9 +96,11 @@ export async function generateVideo(options: GenerateVideoInput & ProviderOption
     if(source?.supported !== true || source.available !== true) invalidVideoArguments('Source audio is unavailable for the selected exact model; keep the requested audio and report this limitation.');
     form.append('source_audio',new Blob([new Uint8Array(audio.bytes)],{type:audio.mimeType}),audio.name);
   }
+  // Cancellation is safe until dispatch; afterwards preserve the receipt even if Stop arrives.
+  signal?.throwIfAborted();
   const apiKey = options.apiKey || '';
   const result = await requestJson(`${normalizeEaselBaseUrl(options.baseUrl)}/v1/videos`, {
-    method: 'POST', headers: headers(apiKey), body: form, signal: requestSignal(options.signal, 45_000),
+    method: 'POST', headers: headers(apiKey), body: form, signal: requestSignal(undefined, 45_000),
   }, apiKey, options.fetchImpl || globalThis.fetch, { label: 'Video generation', path: '/v1/videos', model });
   return parseMediaJob(result, apiKey);
 }

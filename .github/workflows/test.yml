@@ -64,12 +64,12 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      # Deliberately fail if this repository's existing token cannot read the
-      # private server. Do not skip the contract or create new credentials.
+      # Check out the public server at the verified revision using the existing
+      # token. A checkout failure must fail the contract, never skip it.
       - uses: actions/checkout@v4
         with:
           repository: venetanji/easel
-          ref: 4c114e5642c7db875ffafb3ae3c70a21183032ad
+          ref: b55d28da6d290f2ee239677477cc11a9661c948b
           path: contract-server
       - uses: astral-sh/setup-uv@v5
         with:
@@ -88,4 +88,4 @@ jobs:
         working-directory: contract-server
         env:
           EASEL_MEDIA_MCP_SOURCE: ${{ github.workspace }}
-        run: uv run --group dev pytest -q -rs tests/test_mcp_contract.py
+        run: uv run --group dev pytest -q -rs tests/test_mcp_contract.py tests/test_model_guides.py

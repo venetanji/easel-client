@@ -271,7 +271,7 @@ function createChatService({
             const submission = (async () => {
               const submissionMcp = await mcpFactory(launchOptions);
               try {
-                let result = await submissionMcp.callTool(name, args);
+                let result = await submissionMcp.callTool(name, args, name === 'generate_video' ? { preflightSignal: signal } : undefined);
                 if (name === 'download_audio') result = await enrichAudioDownload(result, args, submissionMcp);
                 if (AUDIO_GENERATION_TOOLS.has(name)) {
                   result = await registerAudioTrackJobs(result, { model: args.model, prompt: args.prompt, projectId: submittedProjectId }, trackJob);

@@ -247,7 +247,7 @@ test('canceled queued video submission retains its detached receipt and remains 
   await new Promise(setImmediate);
   abort.abort(); await canceled;
   assert.equal(f.host.isBusy(), true);
-  assert.equal(f.calls[0][2], undefined);
+  assert.equal(f.calls[0][2].preflightSignal, abort.signal);
   f.canvasController.getCurrentCanvasId = () => 'c'.repeat(32);
   respond({ content: [], structuredContent: { job: { id: 'remote-video', status: 'queued' } } });
   await f.host.shutdown();
