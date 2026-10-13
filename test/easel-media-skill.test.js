@@ -101,7 +101,7 @@ test('in-app skill injection includes every adapter and the essential creative g
     .map((match) => match[1]);
   assert.deepEqual(documentedIds.sort(), catalog.map((entry) => entry.id).sort());
   const normalizedInstructions = skill.instructions.replace(/\s+/g, ' ');
-  for (const practice of ['pose-neutral', 'master audio', 'motionSpeed', 'guide-token', '8n+1']) {
+  for (const practice of ['get_model_guide', 'reference content', 'master audio', 'motionSpeed', 'guide-token', '8n+1']) {
     assert.ok(normalizedInstructions.includes(practice), practice);
   }
   for (const toolName of ['list_media_jobs', 'list_media_assets', 'inspect_media_asset']) {
@@ -146,7 +146,7 @@ test('injected stitching recipes separate local cuts from unsupported temporal g
   const instructions = injectedMediaInstructions();
   assert.match(instructions, /Hard-cut assembly/);
   assert.match(instructions, /Generative stitching/);
-  assert.match(instructions, /H3.*temporal video\/audio guides.*client.*cannot submit/);
+  assert.match(instructions, /H3 source audio.*sourceAudioAssetId.*semantic\/temporal.*unavailable/);
   assert.match(instructions, /LTX.*still-image.*temporal.*not exposed/);
   assert.match(instructions, /retained.*boundary frames/);
   assert.match(instructions, /duplicate.*boundary frame/);

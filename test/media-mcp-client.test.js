@@ -37,7 +37,7 @@ test('connects over stdio, filters tool listings, and closes the MCP client', as
   await assert.rejects(mcp.callTool('read_local_file', {}), /not allowlisted/i);
   await mcp.close();
   assert.deepEqual(calls.at(-1), ['close']);
-  assert.deepEqual([...ALLOWED_MEDIA_TOOLS].sort(), ['abandon_audio_generation', 'capture_canvas_screenshot', 'create_image_variation', 'discover_video_capabilities', 'download_audio', 'edit_image', 'generate_image', 'generate_music', 'generate_sound', 'generate_speech', 'generate_video', 'get_audio_generation_status', 'get_audio_track', 'get_image_job', 'get_video', 'list_models', 'list_video_loras']);
+  assert.deepEqual([...ALLOWED_MEDIA_TOOLS].sort(), ['abandon_audio_generation', 'capture_canvas_screenshot', 'create_image_variation', 'discover_video_capabilities', 'download_audio', 'edit_image', 'generate_image', 'generate_music', 'generate_sound', 'generate_speech', 'generate_video', 'get_audio_generation_status', 'get_audio_track', 'get_image_job', 'get_model_guide', 'get_video', 'list_models', 'list_video_loras']);
 });
 
 test('does not expose a failing child transport as a connected client', async () => {
@@ -67,4 +67,28 @@ test('includes MCP stderr in connection errors and redacts the Easel key', async
     assert.doesNotMatch(error.message, /secret-key/);
     return true;
   });
+});
+
+test('video preflight cancellation fails closed against older media servers', async () => {
+  const mcp = await createMediaMcpClient({ command: 'unused', transportFactory: () => ({}), clientFactory: () => ({
+    async connect() {}, getServerCapabilities: () => ({}), async close() {},
+    async callTool() { assert.fail('Unsupported server must not receive a generation request'); },
+  }) });
+  try {
+    await assert.rejects(mcp.callTool('generate_video', { model: 'video', prompt: 'motion' },
+      { preflightSignal: new AbortController().signal }), /does not support safe video preflight cancellation/);
+  } finally { await mcp.close(); }
+});
+
+test('video MCP deadline covers capability preflight plus submit receipt', async () => {
+  let requestOptions;
+  const mcp = await createMediaMcpClient({ command: 'unused', transportFactory: () => ({}), clientFactory: () => ({
+    async connect() {}, async close() {},
+    getServerCapabilities: () => ({ experimental: { 'easel/video-preflight-cancellation': {} } }),
+    async callTool(_request, _schema, options) { requestOptions = options; return { content: [] }; },
+  }) });
+  try {
+    await mcp.callTool('generate_video', { model: 'video', prompt: 'motion' }, { preflightSignal: new AbortController().signal });
+    assert.ok(requestOptions?.timeout > 30_000 + 45_000, 'MCP must outlast the GET and POST deadlines combined');
+  } finally { await mcp.close(); }
 });

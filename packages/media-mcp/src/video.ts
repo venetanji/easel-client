@@ -1,3 +1,5 @@
+import { decodeSourceAudio, type SourceAudioUpload } from './source-audio-upload.js';
+import { discoverVideoCapabilities } from './video-discovery.js';
 import { MEDIA_JOB_ID_PATTERN, parseMediaJob, type MediaJob as VideoJob } from './media-job.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { appendImage, decodeImageUpload, MAX_INPUT_BYTES, type ImageUpload } from './image-upload.js';
@@ -13,6 +15,7 @@ export interface GenerateVideoInput {
   seconds?: number;
   size?: string;
   inputReference?: ImageUpload;
+  sourceAudio?: SourceAudioUpload | null;
   frames?: number;
   semanticReferences?: ImageUpload[];
   temporalGroups?: Array<{ frameIndex: number; images: ImageUpload[] }>;
@@ -84,9 +87,20 @@ export async function generateVideo(options: GenerateVideoInput & ProviderOption
       image_indices: group.images.map(image => { upload('images', image, 'H3 temporal image'); return imageIndex++; }),
     }))));
   }
+  if (input.sourceAudio) {
+    let audio;
+    try { audio = decodeSourceAudio(input.sourceAudio); }
+    catch (error) { invalidVideoArguments(error instanceof Error ? error.message : 'Invalid source audio.'); }
+    const capabilities = await discoverVideoCapabilities({model,baseUrl,apiKey:options.apiKey,fetchImpl,signal});
+    const source = capabilities.source_audio as {supported?:boolean;available?:boolean} | undefined;
+    if(source?.supported !== true || source.available !== true) invalidVideoArguments('Source audio is unavailable for the selected exact model; keep the requested audio and report this limitation.');
+    form.append('source_audio',new Blob([new Uint8Array(audio.bytes)],{type:audio.mimeType}),audio.name);
+  }
+  // Cancellation is safe until dispatch; afterwards preserve the receipt even if Stop arrives.
+  signal?.throwIfAborted();
   const apiKey = options.apiKey || '';
   const result = await requestJson(`${normalizeEaselBaseUrl(options.baseUrl)}/v1/videos`, {
-    method: 'POST', headers: headers(apiKey), body: form, signal: requestSignal(options.signal, 45_000),
+    method: 'POST', headers: headers(apiKey), body: form, signal: requestSignal(undefined, 45_000),
   }, apiKey, options.fetchImpl || globalThis.fetch, { label: 'Video generation', path: '/v1/videos', model });
   return parseMediaJob(result, apiKey);
 }

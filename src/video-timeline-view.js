@@ -37,10 +37,10 @@
     let projectId = '', timeline = null, selection = null, assets = [], generation = 0, readSequence = 0;
     let closed = true, destroyed = false, loading = false, mutating = false, explicitlyBusy = false;
     let pickerSequence = 0, deleteConfirmation = null;
-    let history = null, libraryAssets = [], exportController = null, preparing = false, exporting = false, playhead = 0, playing = false, animation = null, playOrigin = 0, startedAt = 0;
+    let history = null, libraryAssets = [], exportController = null, preparing = false, exporting = false, playhead = 0, playing = false, animation = null, playbackPosition = 0, lastTick = 0, mediaClock = null;
     let pixelsPerSecond = PIXELS_PER_SECOND, inspectedItemId = '', drag = null, dropTarget = null, suppressClick = false;
     let cachedBytes = 0, itemCounter = 0, mediaFetchTail = Promise.resolve();
-    const cache = new Map(), pendingMedia = new Map(), mediaErrors = new Map(), mediaNodes = new Map(), probeCleanups = new Set();
+    const cache = new Map(), pendingMedia = new Map(), mediaErrors = new Map(), preloadFailures = new Set(), mediaNodes = new Map(), probeCleanups = new Set();
     const ui = {}, editControls = [];
     const active = (token) => !closed && !destroyed && generation === token;
     const canEdit = () => !closed && !!timeline && !loading && !mutating && !preparing && !exporting && !deleteConfirmation && !explicitlyBusy && !isBusy();
@@ -749,10 +749,17 @@
         if (typeof media.data !== 'string' || !media.data.length || media.data.length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4) throw new Error('This source is empty or exceeds the 64 MiB live-preview limit. Use a smaller proxy.');
         const binary = decodeBase64(media.data); const bytes = binary.length;
         if (bytes > MAX_MEDIA_BYTES) throw new Error('This source exceeds the 64 MiB live-preview limit. Use a smaller proxy.');
-        const activeAssets = new Set(getPreviewLayers(timeline, playhead).map((layer) => layer.item.assetId));
+        const activeAssets = new Set(getPreviewLayers(timeline, playhead).map(layer => layer.item.assetId));
+        // Speculative decoders may pin their cache entries only while no active source needs the space.
+        if (!activeAssets.has(assetId)) for (const record of mediaNodes.values()) activeAssets.add(record.assetId);
         for (const [key, entry] of [...cache].sort((a, b) => a[1].usedAt - b[1].usedAt)) {
           if (cachedBytes + bytes <= MAX_CACHE_BYTES) break;
-          if (!activeAssets.has(key)) { urlApi.revokeObjectURL(entry.url); cachedBytes -= entry.bytes; cache.delete(key); }
+          if (!activeAssets.has(key)) {
+            for (const [id, record] of mediaNodes) if (record.assetId === key) {
+              disposeNode(record); mediaNodes.delete(id); preloadFailures.add(key);
+            }
+            urlApi.revokeObjectURL(entry.url); cachedBytes -= entry.bytes; cache.delete(key);
+          }
         }
         if (cachedBytes + bytes > MAX_CACHE_BYTES) throw new Error('Active media exceeds the 128 MiB preview budget. Use smaller proxies or fewer overlapping sources.');
         const buffer = Uint8Array.from(binary, (character) => character.charCodeAt(0));
@@ -780,45 +787,66 @@
     function disposeMediaNodes() { for (const record of mediaNodes.values()) disposeNode(record); mediaNodes.clear(); }
     function disposePreview() {
       pause(); for (const cleanup of [...probeCleanups]) cleanup(); disposeMediaNodes();
-      for (const entry of cache.values()) urlApi.revokeObjectURL(entry.url); cache.clear(); pendingMedia.clear(); mediaErrors.clear(); cachedBytes = 0; mediaFetchTail = Promise.resolve();
+      for (const entry of cache.values()) urlApi.revokeObjectURL(entry.url); cache.clear(); pendingMedia.clear(); mediaErrors.clear(); preloadFailures.clear(); cachedBytes = 0; mediaFetchTail = Promise.resolve();
     }
-    function syncMedia(record, layer) {
+    function syncMedia(record, layer, shouldPlay = playing) {
       const node = record.node;
       if (record.kind === 'img') return;
       try {
-        if (!playing || Math.abs(node.currentTime - layer.sourceTime) > 0.18) node.currentTime = layer.sourceTime;
+        const drift = Math.abs(node.currentTime - layer.sourceTime);
+        const align = !shouldPlay || !record.positioned;
+        // Startup/buffering latency must not seek the clock source into another buffering cycle.
+        const recover = shouldPlay && record !== mediaClock && !node.paused && !node.seeking && !record.starting && node.readyState >= 3 && drift > 0.5 && now() - (record.lastSeekAt ?? -Infinity) > 1000;
+        if (drift > 0.0001 && (align || recover)) { node.currentTime = layer.sourceTime; record.lastSeekAt = now(); }
+        record.positioned = true;
         node.playbackRate = layer.playbackRate; node.muted = false; node.volume = clamp(layer.gain, 0, 1);
-        if (playing && node.paused && !record.starting) {
+        if (shouldPlay && node.paused && !record.starting) {
           record.starting = true; const token = generation;
           Promise.resolve(node.play()).catch((error) => { if (active(token) && mediaNodes.get(layer.item.id) === record) { pause(); mediaErrors.set(layer.item.assetId, `Playback was blocked: ${error.message || 'press Play to retry'}`); renderPreview(); } }).finally(() => { record.starting = false; });
-        } else if (!playing) node.pause?.();
-      } catch (error) { mediaErrors.set(layer.item.assetId, `Cannot play this source range: ${error.message || 'unsupported timing'}. Adjust source in/out or re-import the media.`); }
+        } else if (!shouldPlay) node.pause?.();
+      } catch (error) { record.error = `Cannot play this source range: ${error.message || 'unsupported timing'}. Adjust source in/out or re-import the media.`; }
     }
     function renderPreview() {
       if (!timeline || closed) return;
-      const token = generation, layers = getPreviewLayers(timeline, playhead), ids = new Set(layers.map((layer) => layer.item.id));
+      const token = generation, layers = getPreviewLayers(timeline, playhead);
+      // Decode a bounded lookahead while the current clip plays; upcoming media stays hidden and paused.
+      const upcoming = playing ? timeline.items.filter(item => item.startFrame > playhead && item.startFrame <= playhead + fps(timeline.frameRate) * 2
+        && /^(video|audio)\//.test(assets.find(asset => asset.id === item.assetId)?.mimeType || ''))
+        .sort((a, b) => a.startFrame - b.startFrame).slice(0, 4)
+        .map(item => getPreviewLayers(timeline, item.startFrame).find(layer => layer.item.id === item.id)) : [];
+      const warmingIds = new Set(upcoming.map(layer => layer.item.id)), ids = new Set([...layers, ...upcoming].map(layer => layer.item.id));
       for (const [id, record] of mediaNodes) if (!ids.has(id)) { disposeNode(record); mediaNodes.delete(id); }
       let waiting = false;
-      for (const [index, layer] of layers.entries()) {
+      for (const [index, layer] of [...layers, ...upcoming].entries()) {
         const assetId = layer.item.assetId;
+        const warming = warmingIds.has(layer.item.id);
         if (mediaErrors.has(assetId)) continue;
         let record = mediaNodes.get(layer.item.id);
+        if (record?.error) continue;
         if (!record) {
           const entry = cache.get(assetId);
           if (!entry) {
-            waiting = true;
-            if (!pendingMedia.has(assetId)) loadMedia(assetId, token).then(() => { if (active(token)) renderPreview(); }).catch((error) => { if (active(token)) { mediaErrors.set(assetId, error.message || 'Source unavailable.'); renderPreview(); } });
+            if (!warming) waiting = true;
+            if (!pendingMedia.has(assetId) && !(warming && preloadFailures.has(assetId))) loadMedia(assetId, token).then(() => { if (active(token)) renderPreview(); }).catch((error) => {
+              if (!active(token)) return;
+              if (warming) preloadFailures.add(assetId); else mediaErrors.set(assetId, error.message || 'Source unavailable.');
+              renderPreview();
+            });
             continue;
           }
           const kind = entry.mimeType.startsWith('image/') ? 'img' : entry.mimeType.startsWith('audio/') ? 'audio' : 'video';
           const node = el(kind, `timeline-preview-layer timeline-preview-${layer.type}`); node.alt = layer.item.name || 'Timeline image'; node.preload = 'auto'; node.playsInline = true; node.controls = false; node.draggable = false;
-          node.addEventListener('error', () => { if (active(token) && mediaNodes.get(layer.item.id)?.node === node) { mediaErrors.set(assetId, 'Source cannot be decoded. Re-import a browser-supported file, then retry.'); renderPreview(); } });
-          node.addEventListener('loadedmetadata', () => { const currentLayer = getPreviewLayers(timeline, playhead).find((entry) => entry.item.id === layer.item.id); if (active(token) && currentLayer && mediaNodes.get(layer.item.id)?.node === node) syncMedia(mediaNodes.get(layer.item.id), currentLayer); });
-          record = { node, kind }; mediaNodes.set(layer.item.id, record); node.src = entry.url; mediaSurface.append(node);
+          node.addEventListener('error', () => { if (active(token) && mediaNodes.get(layer.item.id)?.node === node) { mediaNodes.get(layer.item.id).error = 'Source cannot be decoded. Re-import a browser-supported file, then retry.'; renderPreview(); } });
+          node.addEventListener('loadedmetadata', () => {
+            if (!active(token) || mediaNodes.get(layer.item.id)?.node !== node || mediaNodes.get(layer.item.id).error) return;
+            const currentLayer = getPreviewLayers(timeline, node.hidden ? layer.item.startFrame : playhead).find(entry => entry.item.id === layer.item.id);
+            if (currentLayer) syncMedia(mediaNodes.get(layer.item.id), currentLayer, playing && !node.hidden);
+          });
+          record = { node, kind, assetId }; mediaNodes.set(layer.item.id, record); node.hidden = warming; node.src = entry.url; mediaSurface.append(node);
         }
-        record.node.style.zIndex = String(index); syncMedia(record, layer);
+        record.node.hidden = warming; record.node.style.zIndex = String(index); syncMedia(record, layer, playing && !warming);
       }
-      const failures = layers.map((layer) => mediaErrors.get(layer.item.assetId)).filter(Boolean);
+      const failures = layers.map(layer => mediaErrors.get(layer.item.assetId) || mediaNodes.get(layer.item.id)?.error).filter(Boolean);
       previewEmpty.hidden = layers.some((layer) => layer.type !== 'audio') && !waiting && !failures.length;
       previewEmpty.textContent = failures.length ? 'Preview unavailable for this source.' : waiting ? 'Loading project media…' : layers.length ? 'Audio preview' : timeline.items.length ? 'No visual clip at this frame.' : 'Drag media from the Media drawer onto a track to start your edit.';
       ui['preview-status'].textContent = failures[0] || ''; ui['retry-preview'].hidden = !failures.length;
@@ -829,7 +857,7 @@
       updateControls();
     }
     function pause() {
-      playing = false; if (animation !== null) cancelRaf(animation); animation = null;
+      playing = false; mediaClock = null; if (animation !== null) cancelRaf(animation); animation = null;
       for (const record of mediaNodes.values()) record.node.pause?.(); if (ui.play) ui.play.textContent = 'Play';
     }
     function seek(frame) { if (!timeline || !Number.isFinite(frame)) return; pause(); playhead = clamp(Math.round(frame), 0, durationFrames(timeline)); renderPreview(); }
@@ -837,11 +865,26 @@
       if (playing) { pause(); return; }
       if (!timeline || !durationFrames(timeline) || closed) return;
       if (playhead >= durationFrames(timeline)) playhead = 0;
-      playing = true; playOrigin = playhead; startedAt = now(); ui.play.textContent = 'Pause'; renderPreview();
+      playing = true; playbackPosition = playhead; lastTick = now(); ui.play.textContent = 'Pause'; renderPreview();
       const token = generation;
       const tick = (timestamp) => {
         if (!active(token) || !playing) return;
-        playhead = Math.min(durationFrames(timeline), playOrigin + Math.floor((timestamp - startedAt) / 1000 * fps(timeline.frameRate)));
+        const layers = getPreviewLayers(timeline, playhead).filter(layer => !mediaErrors.has(layer.item.assetId) && !mediaNodes.get(layer.item.id)?.error);
+        const timed = layers.filter(layer => !(cache.get(layer.item.assetId)?.mimeType || assets.find(asset => asset.id === layer.item.assetId)?.mimeType || '').startsWith('image/'));
+        const clockLayer = timed.find(layer => mediaNodes.get(layer.item.id)?.kind === 'audio') || timed.find(layer => mediaNodes.get(layer.item.id)?.kind === 'video');
+        mediaClock = clockLayer ? mediaNodes.get(clockLayer.item.id) : null;
+        if (mediaClock) {
+          const node = mediaClock.node;
+          if (node.readyState >= 2 && !node.seeking && Number.isFinite(node.currentTime)) {
+            const frame = node.ended ? clockLayer.item.endFrame : clockLayer.item.startFrame + (node.currentTime - clockLayer.item.sourceStartSeconds) / clockLayer.playbackRate * fps(timeline.frameRate);
+            playbackPosition = Math.max(playbackPosition, Math.min(clockLayer.item.endFrame, frame));
+          }
+        } else if (!timed.length) {
+          // Empty gaps and stills need a wall clock; keep fractional frames across RAF ticks.
+          playbackPosition += Math.max(0, timestamp - lastTick) / 1000 * fps(timeline.frameRate);
+        }
+        lastTick = timestamp;
+        playhead = Math.min(durationFrames(timeline), Math.floor(playbackPosition + 0.000001));
         if (playhead >= durationFrames(timeline)) pause(); renderPreview();
         if (playing) animation = raf(tick);
       };

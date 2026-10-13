@@ -247,7 +247,7 @@ test('canceled queued video submission retains its detached receipt and remains 
   await new Promise(setImmediate);
   abort.abort(); await canceled;
   assert.equal(f.host.isBusy(), true);
-  assert.equal(f.calls[0][2], undefined);
+  assert.equal(f.calls[0][2].preflightSignal, abort.signal);
   f.canvasController.getCurrentCanvasId = () => 'c'.repeat(32);
   respond({ content: [], structuredContent: { job: { id: 'remote-video', status: 'queued' } } });
   await f.host.shutdown();
@@ -338,4 +338,30 @@ test('shared_host_rejects_a_selected_turn_after_runtime_replacement', async (t) 
   const result = await host.callTool('apply_timeline_edit', { projectId: f.projectId, expectedRevision: 0, operations: [{ type: 'insert', item: f.clip }] });
   assert.equal(result.isError, true); assert.match(result.content[0].text, /stale|runtime|document/i);
   assert.deepEqual([f.bytes(a), f.bytes(b)], before);
+});
+
+test('external host exposes guide reference content without creating media or receipts',async()=>{
+  const f=fixture(); f.mediaClient.listTools=async()=>[{name:'get_model_guide',inputSchema:{type:'object',properties:{model:{type:'string'},mode:{type:'string'}},required:['model','mode'],additionalProperties:false}}];
+  const guide={version:1,model:'minimax-h3',mode:'base',guide_id:'minimax-h3.base',text:'Reference text',sources:['https://example.org']};
+  f.setResponse({content:[{type:'text',text:JSON.stringify({referenceContent:true,modelId:'route',guide})}],structuredContent:{referenceContent:true,modelId:'route',guide}});
+  assert.ok((await f.host.listTools()).some(tool=>tool.name==='get_model_guide'));
+  const result=await f.host.callTool('get_model_guide',{model:'route',mode:'base'});
+  assert.deepEqual(result.structuredContent.guide,guide); assert.equal(result.structuredContent.referenceContent,true);assert.equal(f.saved.length,0);assert.equal(f.receipts.length,0);
+});
+
+test('external schema failure preserves supplied video audio and first-image conditioning', async () => {
+  const f = fixture();
+  f.mediaClient.listTools = async () => [{name:'generate_video',inputSchema:{type:'object',additionalProperties:false,properties:{
+    model:{type:'string'},prompt:{type:'string'},frames:{type:'integer'},
+    sourceAudio:{type:'object'},inputReference:{type:'object'},
+  }}}];
+  await f.host.listTools();
+  const result = await f.host.callTool('generate_video', {model:'minimax-h3',prompt:'speech',frames:124,sourceAudioAssetId:'c'.repeat(32),inputReferenceAssetId:'missing'});
+  assert.equal(result.isError,true);
+  const failure = JSON.parse(result.content[0].text);
+  assert.match(failure.correction,/sourceAudioAssetId/);
+  assert.match(failure.correction,/inputReferenceAssetId/);
+  assert.doesNotMatch(JSON.stringify(failure),/text-only|"seconds"/);
+  assert.equal(failure.example,undefined);
+  assert.equal(f.calls.length,0);
 });

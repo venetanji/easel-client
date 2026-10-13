@@ -102,7 +102,7 @@ function createEaselToolHost({ canvasController, presentCanvas, assetStore, medi
             if (!detachedTools.has(tool)) return withMedia((client) => client.callTool(tool, input, options), signal);
             // Once submitted, generation must save its receipt even if the controller disconnects.
             const submission = withMedia(async (client) => {
-              let response = await client.callTool(tool, input);
+              let response = await client.callTool(tool, input, tool === 'generate_video' ? { preflightSignal: signal } : undefined);
               if (tool === 'download_audio') response = await enrichAudioDownload(response, input, client);
               if (AUDIO_GENERATION_TOOLS.has(tool)) response = await registerAudioTrackJobs(response,
                 { model: input.model, prompt: input.prompt, projectId: submittedProjectId }, registerMediaJob ? registerOnce : undefined);
@@ -117,6 +117,7 @@ function createEaselToolHost({ canvasController, presentCanvas, assetStore, medi
                   throw Object.assign(new Error(message, { cause }), { code: 'MEDIA_RECEIPT_SAVE_FAILED', acceptedJob });
                 }
               }
+              if (tool === 'get_model_guide') return response;
               if (!response.isError && (hasOutput || !response.structuredContent?.job)) {
                 const saved = JSON.parse(await handleMcpResult(response, mediaAssetStore, (event) => {
                   if (event.type === 'image' && event.data) outputObservations.push({ data: event.data, mimeType: event.mimeType });
@@ -153,7 +154,7 @@ function createEaselToolHost({ canvasController, presentCanvas, assetStore, medi
     } catch (error) {
       if (signal?.aborted) throw error;
       const message = String(error.message || error);
-      const correction = toolCorrection(name, descriptor ? { function: { parameters: descriptor.inputSchema } } : undefined, message, error.code);
+      const correction = toolCorrection(name, descriptor ? { function: { parameters: descriptor.inputSchema } } : undefined, message, error.code, args);
       return { isError: true, content: [{ type: 'text', text: JSON.stringify({ ok: false, error: message, code: error.code || 'EASEL_TOOL_ERROR', ...(error.requestSent === false && ['INVALID_TOOL_ARGUMENTS', 'INVALID_MEDIA_REFERENCE'].includes(error.code) ? { requestSent: false, stage: error.stage } : {}), ...(error.acceptedJob ? { acceptedJob: error.acceptedJob } : {}), ...correction }) }] };
     }
   }

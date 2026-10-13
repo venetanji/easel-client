@@ -64,6 +64,12 @@ test('Jobs separates generation from saved media, keeps cancel usable when busy,
         window.emitJob({ type: 'media-job', job: jobs[1] });
         window.emitJob({ type: 'media-job-ready', job: jobs[1], assets: [asset], chatId });
       };
+      window.finishJobs = () => {
+        for (const job of jobs.filter(job => ['queued', 'generating', 'downloading'].includes(job.status))) {
+          job.status = 'cancelled';
+          window.emitJob({ type: 'media-job', job });
+        }
+      };
       const api = {
         getSettings: async () => settings,
         getModelCatalog: async () => ({ settings, catalog: [] }),
@@ -86,6 +92,11 @@ test('Jobs separates generation from saved media, keeps cancel usable when busy,
       await page.locator('#all-media-list .project-media-item').waitFor();
       assert.equal(await page.locator('#media-generating').isVisible(), true);
       assert.equal(await page.locator('#media-jobs-count').textContent(), '3');
+      assert.equal(await page.locator('#media-tab-assets .media-tab-icon').isVisible(), true);
+      assert.equal(await page.locator('#media-tab-jobs .media-tab-icon').isVisible(), true);
+      assert.equal(await page.locator('#media-tab-assets').getAttribute('aria-selected'), 'true');
+      assert.equal(await page.locator('#media-tab-jobs').getAttribute('aria-selected'), 'false');
+      assert.equal(await page.locator('#media-tab-jobs .media-tab-icon').evaluate(icon => getComputedStyle(icon).animationName), 'media-job-turn');
       assert.equal(await page.locator('#all-media-list .media-job').count(), 0);
       await page.locator('#media-tab-assets').focus(); await page.keyboard.press('End');
       assert.equal(await page.locator('#media-tab-jobs').getAttribute('aria-selected'), 'true');
@@ -117,6 +128,11 @@ test('Jobs separates generation from saved media, keeps cancel usable when busy,
       assert.equal(await page.locator('#media-assets-panel').isVisible(), true);
       assert.equal(await page.locator('#media-jobs-panel').isVisible(), false);
       assert.equal(await page.locator('#media-unread').isVisible(), false);
+      await page.evaluate(() => window.finishJobs());
+      assert.equal(await page.locator('#media-jobs-count').isVisible(), false);
+      assert.equal(await page.locator('#media-tab-jobs .media-tab-icon').isVisible(), true);
+      assert.equal(await page.locator('#media-tab-jobs .media-tab-icon').evaluate(icon => getComputedStyle(icon).animationName), 'none');
+      assert.equal(await page.locator('#media-tab-assets').getAttribute('aria-selected'), 'true');
     }
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }

@@ -145,6 +145,7 @@ function createProjectWorkspace({ document, client, storage, onSelection, onStat
     const active = jobs.filter(job => ['queued', 'generating', 'downloading'].includes(job.status)).length;
     if (mediaGenerationIndicator) mediaGenerationIndicator.hidden = active === 0;
     if (mediaJobsCount) { mediaJobsCount.textContent = String(active); mediaJobsCount.hidden = active === 0; }
+    mediaJobsTab?.setAttribute('data-generating', String(active > 0));
     mediaJobsTab?.setAttribute('aria-label', active ? `Jobs, ${active} in progress` : 'Jobs');
     const open = !mediaDrawer.hidden;
     const progress = active ? `, ${active} media ${active === 1 ? 'job' : 'jobs'} in progress` : '';

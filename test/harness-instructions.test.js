@@ -104,3 +104,18 @@ test('Suno guidance follows exposed tools and preserves the shared-browser attem
   assert.match(COMMON_INSTRUCTIONS, /never.*resubmit.*abandon/i);
   assert.match(COMMON_INSTRUCTIONS, /Image\/video.*monitors/);
 });
+
+test('all harnesses plan video aspect before anchors and disclose existing-reference uncertainty', () => {
+  const fs = require('node:fs');
+  const skill = fs.readFileSync(require('node:path').join(__dirname, '../.agents/skills/easel-media/SKILL.md'), 'utf8');
+  for (const instructions of [BUILTIN_INSTRUCTIONS, CODEX_INSTRUCTIONS, EXTERNAL_INSTRUCTIONS, skill]) {
+    assert.match(instructions, /Before generating an anchor.*discover_video_capabilities.*requested.*default.*aspect/i);
+    assert.match(instructions, /Match new anchors.*aspect/i);
+    assert.match(instructions, /size_constraints\.aliases.*size_presets.*width\/height/i);
+    assert.match(instructions, /Inspect existing references.*geometry/i);
+    assert.match(instructions, /canonical.*fit guidance/i);
+    assert.match(instructions, /before submission.*mismatch.*known effect.*unknown.*geometry.*fit/i);
+    assert.match(instructions, /never derive.*size.*reference dimensions/i);
+    assert.doesNotMatch(instructions, /H3 stretches|LTX center.crops/i);
+  }
+});

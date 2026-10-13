@@ -1,3 +1,4 @@
+const { randomUUID } = require('node:crypto');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
 const { abortError, awaitAbortable, combinedSignal, isTurnAbort, throwIfAborted } = require('./turn-abort');
@@ -7,6 +8,7 @@ const AUDIO_TOOLS = Object.freeze(new Set([...AUDIO_GENERATION_TOOLS, 'get_audio
 const ALLOWED_MEDIA_TOOLS = Object.freeze(new Set([
   ...AUDIO_TOOLS,
   'list_models',
+  'get_model_guide',
   'discover_video_capabilities',
   'list_video_loras',
   'generate_image',
@@ -80,7 +82,7 @@ function createMediaMcpClient({
     }
   }
 
-  async function callTool(name, argsValue, { signal: requestSignal } = {}) {
+  async function callTool(name, argsValue, { signal: requestSignal, preflightSignal } = {}) {
     const signal = combinedSignal(turnSignal, requestSignal);
     throwIfAborted(signal);
     if (!connected || closed) throw new Error('Media MCP client is not connected.');
@@ -88,8 +90,26 @@ function createMediaMcpClient({
     if (!argsValue || typeof argsValue !== 'object' || Array.isArray(argsValue)) {
       throw new Error('Media MCP tool arguments must be an object.');
     }
+    // Video Stop cancels only preparation. Keep the MCP request and transport alive
+    // so a POST already in flight can still return its durable receipt.
+    throwIfAborted(preflightSignal);
+    const token = name === 'generate_video' && preflightSignal ? randomUUID() : undefined;
+    if (token && !client.getServerCapabilities()?.experimental?.['easel/video-preflight-cancellation']) {
+      throw new Error('Media server does not support safe video preflight cancellation. Update the bundled media server before submitting.');
+    }
+    const cancelPreflight = () => {
+      client.notification({ method: 'notifications/easel/cancel-video-preflight', params: { token } }).catch(() => {
+        // A broken transport cannot confirm cancellation. Keep awaiting the original
+        // result: closing or retrying could lose a receipt or duplicate a billed job.
+      });
+    };
     try {
-      const result = await awaitAbortable(client.callTool({ name, arguments: argsValue }, undefined, signal ? { signal } : undefined), signal);
+      const pending = client.callTool({ name, arguments: argsValue, ...(token ? { _meta: { 'easel/video-preflight-token': token } } : {}) }, undefined, name === 'generate_video' ? { timeout: 90_000, ...(signal ? { signal } : {}) } : signal ? { signal } : undefined);
+      if (token) {
+        preflightSignal.addEventListener('abort', cancelPreflight, { once: true });
+        if (preflightSignal.aborted) cancelPreflight();
+      }
+      const result = await awaitAbortable(pending, signal);
       throwIfAborted(signal);
       if (result.isError && Array.isArray(result.content)) {
         const errorSecrets = [...new Set(secrets.flatMap((secret) => [secret, secret.trim()]).filter(Boolean))];
@@ -101,6 +121,8 @@ function createMediaMcpClient({
     } catch (error) {
       if (isTurnAbort(error, signal)) { await close().catch(() => {}); throw abortError(signal); }
       throw new Error(errorMessage(error, 'Media MCP call failed.'));
+    } finally {
+      if (token) preflightSignal.removeEventListener('abort', cancelPreflight);
     }
   }
 

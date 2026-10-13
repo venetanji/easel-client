@@ -1,7 +1,10 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const path = require('node:path');
 const { Readable } = require('node:stream');
 const { generatedMediaName, isGenericGeneratedName } = require('./media-names');
+const { MAX_VIDEO_BYTES, frameOptions, decodeVideoFrame, validateDecodedFrame } = require('./video-frame-reference');
+const { abortError, awaitAbortable, throwIfAborted } = require('./turn-abort');
 
 const MAX_DECODE_MS = 15_000;
 const MAX_THUMBNAIL_CHARACTERS = 65_536;
@@ -22,7 +25,7 @@ async function localMediaResponse(request, source) {
   }
   headers['Content-Length'] = String(end - start + 1);
   if (request.method === 'HEAD') return new Response(null, { status: range ? 206 : 200, headers });
-  return new Response(Readable.toWeb(fs.createReadStream(source.filename, { start, end })), { status: range ? 206 : 200, headers });
+  return new Response(source.buffer ? source.buffer.subarray(start, end + 1) : Readable.toWeb(fs.createReadStream(source.filename, { start, end })), { status: range ? 206 : 200, headers });
 }
 
 async function decodeVideoPoster(url) {
@@ -70,7 +73,7 @@ function compactAsset(asset, metadata) {
   return { ...asset, ...Object.fromEntries(['name', 'width', 'height', 'duration'].filter((key) => metadata[key] !== undefined).map((key) => [key, metadata[key]])) };
 }
 
-function createVideoMetadataService({ BrowserWindow, sessionFactory, mediaStore, onChanged, timeoutMs = MAX_DECODE_MS }) {
+function createVideoMetadataService({ BrowserWindow, sessionFactory, mediaStore, imageStore, readVideoSource = reference => mediaStore.getPlaybackSource(reference.assetId), onChanged, timeoutMs = MAX_DECODE_MS }) {
   let work = Promise.resolve();
   let environment;
   let activeWindow;
@@ -88,15 +91,17 @@ function createVideoMetadataService({ BrowserWindow, sessionFactory, mediaStore,
     environment.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
     environment.session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => callback({ cancel: ![pageUrl, mediaUrl].includes(details.url) }));
     await environment.session.protocol.handle('easel-canvas', (request) => {
-      if (request.url === pageUrl) return new Response('<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; media-src \'self\'"></head><body></body></html>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      if (request.url === pageUrl) return new Response('<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; media-src \'self\'; connect-src \'self\'"></head><body></body></html>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
       if (request.url === mediaUrl && source) return localMediaResponse(request, source);
       return new Response('Not found', { status: 404 });
     });
     return environment;
   }
 
-  async function decode(saved) {
+  async function decode(saved, options, signal) {
+    throwIfAborted(signal);
     const isolated = await ensureEnvironment();
+    throwIfAborted(signal);
     if (closed) throw new Error('Video metadata service is closed.');
     source = saved;
     const token = crypto.randomUUID();
@@ -111,18 +116,29 @@ function createVideoMetadataService({ BrowserWindow, sessionFactory, mediaStore,
     const denyNavigation = (event, url) => { if (url !== pageUrl) event.preventDefault(); };
     for (const event of ['will-navigate', 'will-redirect', 'will-frame-navigate']) window.webContents.on(event, denyNavigation);
     let timer;
+    const stop = () => abortActive?.(abortError(signal));
     try {
+      signal?.addEventListener('abort', stop, { once: true });
       const result = await Promise.race([
-        (async () => { await window.loadURL(pageUrl); return window.webContents.executeJavaScript(`(${decodeVideoPoster.toString()})(${JSON.stringify(mediaUrl)})`); })(),
+        (async () => {
+          await window.loadURL(pageUrl);
+          throwIfAborted(signal);
+          const script = options
+            ? fs.readFileSync(path.join(__dirname, '../canvas-kits/mediabunny.js'), 'utf8') + `\n;globalThis.EaselMediabunny = EaselMediabunny; (${decodeVideoFrame.toString()})(${JSON.stringify(mediaUrl)},${JSON.stringify(options)})`
+            : `(${decodeVideoPoster.toString()})(${JSON.stringify(mediaUrl)})`;
+          return window.webContents.executeJavaScript(script);
+        })(),
         new Promise((_resolve, reject) => {
-          abortActive = () => reject(new Error('Video metadata service is closing.'));
-          timer = setTimeout(() => reject(new Error('Video poster decoding timed out.')), Math.min(MAX_DECODE_MS, timeoutMs));
+          abortActive = (error) => reject(error || new Error('Video metadata service is closing.'));
+          timer = setTimeout(() => reject(new Error(`Video ${options ? 'frame' : 'poster'} decoding timed out.`)), Math.min(MAX_DECODE_MS, timeoutMs));
         }),
       ]);
+      if (options) return result;
       if (!result || typeof result.thumbnail !== 'string' || result.thumbnail.length > MAX_THUMBNAIL_CHARACTERS) throw new Error('The video decoder returned an invalid poster.');
       return result;
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', stop);
       abortActive = undefined;
       if (!window.isDestroyed()) window.destroy();
       if (activeWindow === window) activeWindow = undefined;
@@ -160,6 +176,30 @@ function createVideoMetadataService({ BrowserWindow, sessionFactory, mediaStore,
     work = operation;
     return operation;
   }
+  function extractFrame(input, { signal } = {}) {
+    const previous = work.catch(() => {});
+    const operation = previous.then(async () => {
+      throwIfAborted(signal);
+      const options = frameOptions(input);
+      if (!imageStore) throw new Error('Saved image references are unavailable.');
+      if (closed) throw new Error('Video metadata service is closed.');
+      const saved = await readVideoSource({ assetId: options.assetId, ...(options.projectId !== undefined ? { projectId: options.projectId } : {}) });
+      throwIfAborted(signal);
+      if (!['video/mp4', 'video/webm'].includes(saved?.mimeType)) throw new Error('Choose a saved MP4 or WebM video.');
+      if (!Number.isSafeInteger(saved.bytes) || saved.bytes < 1 || saved.bytes > MAX_VIDEO_BYTES) throw new Error('Saved video exceeds its 32 MiB limit.');
+      const decoded = await decode(saved, options, signal);
+      const bytes = validateDecodedFrame(decoded, options, signal);
+      const basename = String(saved.name || 'Video').replace(/\.[a-z0-9]{1,8}$/i, '').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 125);
+      const name = `${basename || 'Video'} frame ${decoded.timestampSeconds.toFixed(3)}s.jpg`;
+      const assetId = await imageStore.save({ data: decoded.data, mimeType: 'image/jpeg', name });
+      return { assetId, name, mimeType: 'image/jpeg', bytes, data: decoded.data, width: decoded.width, height: decoded.height,
+        sourceAssetId: options.assetId, sourceWidth: decoded.sourceWidth, sourceHeight: decoded.sourceHeight,
+        timestampSeconds: decoded.timestampSeconds, ...(options.position ? { position: options.position } : { requestedTimestampSeconds: options.timestampSeconds }) };
+    });
+    work = operation.catch(() => {});
+    // Stop can cancel queue waiting immediately; a started local save still settles.
+    return awaitAbortable(previous, signal).then(() => operation);
+  }
   async function backfill({ jobs = [] } = {}) {
     const known = new Map(jobs.flatMap((job) => (job.assets || []).map((asset) => [asset.assetId, job])));
     const assets = await mediaStore.list();
@@ -177,7 +217,7 @@ function createVideoMetadataService({ BrowserWindow, sessionFactory, mediaStore,
     environment = undefined;
     closed = false;
   }
-  return { enrichAssets, backfill, close };
+  return { enrichAssets, extractFrame, backfill, close };
 }
 
 module.exports = { MAX_DECODE_MS, createVideoMetadataService, decodeVideoPoster, localMediaResponse };

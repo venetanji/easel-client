@@ -102,3 +102,36 @@ test('all in-app reference types share the 32 MiB bound and preserve aborts', as
   const controller = new AbortController(); controller.abort();
   await assert.rejects(resolveMediaToolArguments('generate_video', { guidingFrames: [{ assetId, frameIndex: 0 }] }, () => assert.fail('Aborted reads must not run'), controller.signal), { name: 'AbortError' });
 });
+
+test('desktop source audio exposes only saved IDs and preserves H3 frames and first image', async () => {
+  const schema = mediaToolSchema({name:'generate_video',inputSchema:{properties:{sourceAudio:{type:'object'}}}});
+  assert.equal(schema.properties.sourceAudio,undefined); assert.deepEqual(schema.properties.sourceAudioAssetId.type,['string','null']);
+  const id='c'.repeat(32),imageId='d'.repeat(32);
+  const wire=await resolveMediaToolArguments('generate_video',{model:'minimax-h3',prompt:'speaking',frames:124,sourceAudioAssetId:id,inputReferenceAssetId:imageId},async({assetId})=>({data:'YWJj',mimeType:assetId===id?'audio/wav':'image/png'}));
+  assert.equal(wire.sourceAudio.mimeType,'audio/wav');assert.equal(wire.inputReference.mimeType,'image/png');assert.equal(wire.frames,124);assert.equal(Object.hasOwn(wire,'seconds'),false);
+  for(const value of [undefined,null]) assert.deepEqual(await resolveMediaToolArguments('generate_video',{prompt:'x',sourceAudioAssetId:value},()=>assert.fail()),{prompt:'x'});
+});
+test('desktop rejects missing wrong-type oversized and raw source audio while preserving requested conditioning',async()=>{
+  for(const asset of [null,{data:'YWJj',mimeType:'image/png'},{data:'!bad!',mimeType:'audio/wav'},{data:'A'.repeat(Math.ceil(32*1024*1024/3)*4+4),mimeType:'audio/wav'}]) await assert.rejects(resolveMediaToolArguments('generate_video',{sourceAudioAssetId:'c'.repeat(32)},async()=>asset),error=>error.code==='INVALID_MEDIA_REFERENCE'&&error.requestSent===false);
+  await assert.rejects(resolveMediaToolArguments('generate_video',{sourceAudio:{data:'YWJj',mimeType:'audio/wav'}},()=>assert.fail()),/saved asset IDs/);
+});
+
+test('audio and first-image failures retain all supplied video conditioning in recovery guidance', async () => {
+  const audioId = 'c'.repeat(32), imageId = 'd'.repeat(32);
+  for (const failedAsset of ['audio', 'image']) {
+    await assert.rejects(resolveMediaToolArguments('generate_video', {
+      model: 'minimax-h3', prompt: 'speech', frames: 124,
+      sourceAudioAssetId: audioId, inputReferenceAssetId: imageId,
+    }, async ({ assetId }) => {
+      if ((failedAsset === 'audio' && assetId === audioId) || (failedAsset === 'image' && assetId === imageId)) throw new Error('not permitted');
+      return { data: 'YWJj', mimeType: assetId === audioId ? 'audio/wav' : 'image/png' };
+    }), error => {
+      assert.equal(error.requestSent, false);
+      assert.match(error.message, /sourceAudioAssetId/);
+      assert.match(error.message, /inputReferenceAssetId/);
+      assert.match(error.message, /keep|preserve/i);
+      assert.doesNotMatch(error.message, /text-only|omit inputReferenceAssetId|use null/);
+      return true;
+    });
+  }
+});

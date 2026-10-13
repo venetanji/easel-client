@@ -273,3 +273,20 @@ test('configured audio routes require an explicit ID for multiple backends and i
   assert.equal(routed.isError, undefined);
   assert.deepEqual(calls, ['https://backup.example/v1/audio/generations']);
 });
+
+test('standalone video guidance plans anchor aspect using canonical capabilities and fit guidance', async (t) => {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createMediaServer({ easel: { ...fakeEasel, generateVideo: async () => ({ id: 'video_aspect', status: 'queued' }) } });
+  const client = new Client({ name: 'aspect-guidance-test', version: '1.0.0' });
+  t.after(async () => { await client.close(); await server.close(); });
+  await server.connect(serverTransport); await client.connect(clientTransport);
+  const description = (await client.listTools()).tools.find(tool => tool.name === 'generate_video')!.description || '';
+  assert.match(description, /Before generating an anchor.*discover_video_capabilities.*requested.*default.*aspect/i);
+  assert.match(description, /Match new anchors.*aspect/i);
+  assert.match(description, /size_constraints\.aliases.*size_presets.*width\/height/i);
+  assert.match(description, /Inspect existing references.*geometry/i);
+  assert.match(description, /canonical.*fit guidance/i);
+  assert.match(description, /before submission.*mismatch.*known effect.*unknown.*geometry.*fit/i);
+  assert.match(description, /Omit size unless requested; never derive it from reference dimensions/);
+  assert.doesNotMatch(description, /H3 stretches|LTX center.crops/i);
+});
