@@ -162,6 +162,8 @@ calling it continuous. Report which continuity checks were actually possible.
 
 ## Video workflow
 
+Before generating an anchor, use discover_video_capabilities for the requested or default effective video aspect: resolve size_constraints.aliases and size_presets width/height, not nominal size labels. Match new anchors to that aspect. Inspect existing references for geometry; consult get_model_guide canonical fit guidance. Explain before submission any mismatch and known effect or unknown geometry/fit. If metadata is absent, inspect the image and acknowledge uncertain geometry; do not silently change framing or stretch references. In-app, use inspect_media_asset for an existing image. Never derive video size from reference dimensions. If capabilities or fit guidance are unavailable, state that uncertainty before submission rather than inventing a model-specific preparation rule.
+
 1. Select a video model using its exact `list_models` ID. In-app tools resolve credentials from that model's endpoint.
 2. For advanced controls, discover capabilities and LoRAs for that exact model first. Check support, runtime availability, installed assets and recipe requirements separately; discovery is GET-only and does not generate. Submit `generate_video` once. Optional `inputReferenceAssetId` identifies a saved PNG/JPEG/WebP image in the app; standalone MCP uses an `inputReference` upload object.
 3. In Easel client, accepted jobs are saved in the host monitor before the turn ends. Return a brief generating status; the host polls and downloads across app restarts without spending agent tool calls. `list_media_jobs` gives a status snapshot.
