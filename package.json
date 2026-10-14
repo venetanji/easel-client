@@ -1,6 +1,6 @@
 {
   "name": "easel-client",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Electron client for venetanji/easel",
   "main": "src/main.js",
   "workspaces": [
